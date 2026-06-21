@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -39,7 +40,7 @@ pub struct AppServerCommandExecService {
     workspace: Result<WorkspaceCapability, String>,
     runtime: Mutex<Option<Result<BlockingTokioRuntime, AppServerError>>>,
     completed: Arc<Mutex<HashMap<String, CompletedCommand>>>,
-    running: Arc<Mutex<HashMap<String, RunningCommand>>>,
+    running: Arc<Mutex<HashMap<String, RunningProcess>>>,
     output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
 }
 
@@ -51,6 +52,11 @@ struct CompletedCommand {
 struct RunningCommand {
     control_tx: mpsc::Sender<CommandControl>,
     tty: bool,
+}
+
+enum RunningProcess {
+    Reserved,
+    Active(RunningCommand),
 }
 
 enum CommandControl {
@@ -318,17 +324,21 @@ impl AppServerCommandExecService {
             )
         };
 
-        {
-            let running = self
-                .running
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            if running.contains_key(&process_id) {
+        let mut running = self
+            .running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match running.entry(process_id.clone()) {
+            Entry::Occupied(_) => {
                 return Err(command_unavailable(format!(
                     "command process is already running: {process_id}"
                 )));
             }
+            Entry::Vacant(entry) => {
+                entry.insert(RunningProcess::Reserved);
+            }
         }
+        drop(running);
 
         let process = dasclaw_pty::default_backend()
             .spawn_process(PtySpawnOptions {
@@ -343,7 +353,13 @@ impl AppServerCommandExecService {
                     pixel_height: 0,
                 },
             })
-            .map_err(|error| command_unavailable(error.to_string()))?;
+            .map_err(|error| {
+                self.running
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .remove(&process_id);
+                command_unavailable(error.to_string())
+            })?;
 
         let (control_tx, control_rx) = mpsc::channel();
         self.running
@@ -351,10 +367,10 @@ impl AppServerCommandExecService {
             .unwrap_or_else(|poison| poison.into_inner())
             .insert(
                 process_id.clone(),
-                RunningCommand {
+                RunningProcess::Active(RunningCommand {
                     control_tx,
                     tty: true,
-                },
+                }),
             );
 
         let reader_thread = spawn_pty_reader(
@@ -393,7 +409,10 @@ impl AppServerCommandExecService {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .get(process_id)
-            .map(|running| (running.control_tx.clone(), running.tty))
+            .and_then(|running| match running {
+                RunningProcess::Reserved => None,
+                RunningProcess::Active(running) => Some((running.control_tx.clone(), running.tty)),
+            })
     }
 }
 
@@ -403,7 +422,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} cwd_guard=root-contained sandbox=read-only/no-network read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
+                    "root={} cwd_guard=root-contained buffered_sandbox=read-only/no-network streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
                     self.root.display()
                 ));
                 health
@@ -964,6 +983,55 @@ mod tests {
         assert_eq!(response.exit_code, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_rejects_duplicate_active_process_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_duplicate_session";
+        let mut first = exec_params(vec![
+            "sh",
+            "-c",
+            "printf first-ready; IFS= read -r line; printf 'first-got:%s' \"$line\"",
+        ]);
+        first.process_id = Some(process_id.to_string());
+        first.tty = Some(true);
+        first.stream_stdin = Some(true);
+        first.stream_stdout_stderr = Some(true);
+        first.disable_timeout = Some(true);
+
+        let first_service = Arc::clone(&service);
+        let first_thread = std::thread::spawn(move || first_service.exec(first));
+
+        wait_for_output_delta(&service, process_id, "first-ready");
+
+        let mut duplicate = exec_params(vec!["sh", "-c", "printf duplicate"]);
+        duplicate.process_id = Some(process_id.to_string());
+        duplicate.tty = Some(true);
+        duplicate.stream_stdout_stderr = Some(true);
+        duplicate.disable_timeout = Some(true);
+
+        let error = service
+            .exec(duplicate)
+            .expect_err("duplicate active processId must fail safe");
+
+        assert!(error.to_string().contains("already running"));
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("hello\n")),
+                close_stdin: None,
+            })
+            .expect("write still reaches the original session");
+        wait_for_output_delta(&service, process_id, "first-got:hello");
+        let response = first_thread
+            .join()
+            .expect("first exec thread should not panic")
+            .expect("first streaming exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
+    }
+
     #[test]
     fn command_service_streaming_requires_client_process_id() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1049,6 +1117,8 @@ mod tests {
             .expect("ready service should describe limits");
 
         assert!(message.contains("cwd_guard=root-contained"));
+        assert!(message.contains("buffered_sandbox=read-only/no-network"));
+        assert!(message.contains("streaming_sandbox=none/unsandboxed"));
         assert!(message.contains("read_scope=host-read-only"));
         assert!(message.contains("not_workspace_read_limited"));
     }
