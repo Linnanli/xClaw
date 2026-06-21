@@ -357,27 +357,35 @@ impl AppServerCommandExecService {
                 },
             );
 
-        spawn_pty_reader(
+        let reader_thread = spawn_pty_reader(
             process_id.clone(),
             process.reader,
             Arc::clone(&self.output_delta_events),
             params.output_bytes_cap,
         );
-        spawn_pty_driver(
-            process_id,
-            process.writer,
-            process.control,
-            control_rx,
-            Arc::clone(&self.running),
-            Arc::clone(&self.completed),
-            timeout,
-        );
+        let exit_status = drive_pty_process(process.writer, process.control, control_rx, timeout);
+        let _ = reader_thread.join();
 
-        Ok(CommandExecResponse {
-            exit_code: 0,
+        let response = CommandExecResponse {
+            exit_code: exit_code_to_i32(exit_status),
             stdout: String::new(),
             stderr: String::new(),
-        })
+        };
+        self.running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&process_id);
+        self.completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                process_id,
+                CompletedCommand {
+                    response: response.clone(),
+                },
+            );
+
+        Ok(response)
     }
 
     fn running_command(&self, process_id: &str) -> Option<(mpsc::Sender<CommandControl>, bool)> {
@@ -549,7 +557,7 @@ fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
     output_bytes_cap: Option<usize>,
-) {
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buf = [0_u8; 8192];
         let mut emitted = 0_usize;
@@ -591,93 +599,80 @@ fn spawn_pty_reader(
                 .unwrap_or_else(|poison| poison.into_inner())
                 .push(event);
         }
-    });
+    })
 }
 
-fn spawn_pty_driver(
-    process_id: String,
+fn drive_pty_process(
     writer: Box<dyn Write + Send>,
     mut control: Box<dyn dasclaw_pty::PtyProcessControl>,
     control_rx: mpsc::Receiver<CommandControl>,
-    running: Arc<Mutex<HashMap<String, RunningCommand>>>,
-    completed: Arc<Mutex<HashMap<String, CompletedCommand>>>,
     timeout: Option<Duration>,
-) {
-    thread::spawn(move || {
-        let started = Instant::now();
-        let mut writer = Some(writer);
-        let exit_status = 'driver: loop {
-            while let Ok(command) = control_rx.try_recv() {
-                match command {
-                    CommandControl::Write(bytes) => {
-                        let Some(writer) = writer.as_mut() else {
-                            continue;
-                        };
-                        if writer.write_all(&bytes).is_err() {
-                            break 'driver control.try_wait().unwrap_or(PtyExitStatus::Signaled);
-                        }
-                    }
-                    CommandControl::CloseStdin => {
-                        if let Some(mut writer) = writer.take() {
-                            let _ = writer.flush();
-                        }
-                    }
-                    CommandControl::Terminate => {
-                        let _ = control.kill();
-                    }
-                    CommandControl::Resize(size) => {
-                        let _ = control.resize(PtySize {
-                            rows: size.rows,
-                            cols: size.cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        });
+) -> PtyExitStatus {
+    let started = Instant::now();
+    let mut writer = Some(writer);
+    'driver: loop {
+        while let Ok(command) = control_rx.try_recv() {
+            match command {
+                CommandControl::Write(bytes) => {
+                    let Some(writer) = writer.as_mut() else {
+                        continue;
+                    };
+                    if writer.write_all(&bytes).is_err() {
+                        break 'driver control.try_wait().unwrap_or(PtyExitStatus::Signaled);
                     }
                 }
-            }
-
-            match control.try_wait() {
-                Ok(status) if status.is_finished() => {
-                    break status;
+                CommandControl::CloseStdin => {
+                    if let Some(mut writer) = writer.take() {
+                        let _ = writer.flush();
+                    }
                 }
-                Ok(_) => {}
-                Err(_) => {
-                    break PtyExitStatus::Signaled;
+                CommandControl::Terminate => {
+                    let _ = control.kill();
+                    break 'driver wait_after_kill(&mut *control);
+                }
+                CommandControl::Resize(size) => {
+                    let _ = control.resize(PtySize {
+                        rows: size.rows,
+                        cols: size.cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
                 }
             }
+        }
 
-            if let Some(timeout) = timeout
-                && started.elapsed() >= timeout
-            {
-                let _ = control.kill();
-                break control.try_wait().unwrap_or(PtyExitStatus::Signaled);
+        match control.try_wait() {
+            Ok(status) if status.is_finished() => {
+                break status;
             }
+            Ok(_) => {}
+            Err(_) => {
+                break PtyExitStatus::Signaled;
+            }
+        }
 
-            thread::sleep(Duration::from_millis(25));
-        };
+        if let Some(timeout) = timeout
+            && started.elapsed() >= timeout
+        {
+            let _ = control.kill();
+            break wait_after_kill(&mut *control);
+        }
 
-        let exit_code = match exit_status {
-            PtyExitStatus::Exited(code) => code,
-            PtyExitStatus::Signaled | PtyExitStatus::Running => -1,
-        };
-        running
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&process_id);
-        completed
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .insert(
-                process_id,
-                CompletedCommand {
-                    response: CommandExecResponse {
-                        exit_code,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                    },
-                },
-            );
-    });
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_after_kill(control: &mut dyn dasclaw_pty::PtyProcessControl) -> PtyExitStatus {
+    control
+        .wait_for_exit(Some(Duration::from_secs(1)))
+        .unwrap_or(PtyExitStatus::Signaled)
+}
+
+fn exit_code_to_i32(exit_status: PtyExitStatus) -> i32 {
+    match exit_status {
+        PtyExitStatus::Exited(code) => code,
+        PtyExitStatus::Signaled | PtyExitStatus::Running => -1,
+    }
 }
 
 fn shell_quote(arg: &str) -> String {
@@ -752,6 +747,8 @@ fn command_unavailable(message: impl Into<String>) -> AppServerError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::sync::Arc;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
@@ -845,15 +842,23 @@ mod tests {
     #[test]
     fn command_service_streaming_pty_emits_output_delta_and_accepts_write() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
         let process_id = "pty_echo_session";
-        let mut params = exec_params(vec!["cat"]);
+        let mut params = exec_params(vec![
+            "sh",
+            "-c",
+            "printf ready; IFS= read -r line; printf 'got:%s' \"$line\"",
+        ]);
         params.process_id = Some(process_id.to_string());
         params.tty = Some(true);
         params.stream_stdin = Some(true);
         params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
 
-        service.exec(params).expect("streaming exec starts");
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        let ready = wait_for_output_delta(&service, process_id, "ready");
         service
             .write(CommandExecWriteParams {
                 process_id: process_id.to_string(),
@@ -862,21 +867,30 @@ mod tests {
             })
             .expect("write succeeds");
 
-        let event = wait_for_output_delta(&service, process_id, "hello from stdin");
+        let got = wait_for_output_delta(&service, process_id, "got:hello from stdin");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec succeeds");
+        let availability = service.availability();
 
-        assert_eq!(event.stream, CommandExecOutputStream::Stdout);
-        service
-            .terminate(CommandExecTerminateParams {
-                process_id: process_id.to_string(),
-            })
-            .expect("terminate succeeds");
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, "");
+        assert_eq!(response.stderr, "");
+        assert_eq!(ready.stream, CommandExecOutputStream::Stdout);
+        assert_eq!(got.stream, CommandExecOutputStream::Stdout);
+        assert!(availability.exec);
+        assert!(availability.output_delta_events);
+        assert!(availability.write);
+        assert!(availability.terminate);
+        assert!(availability.resize);
     }
 
     #[cfg(unix)]
     #[test]
     fn command_service_streaming_pty_terminate_stops_running_process() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
         let process_id = "pty_sleep_session";
         let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
         params.process_id = Some(process_id.to_string());
@@ -884,7 +898,9 @@ mod tests {
         params.stream_stdout_stderr = Some(true);
         params.disable_timeout = Some(true);
 
-        service.exec(params).expect("streaming exec starts");
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
         wait_for_output_delta(&service, process_id, "ready");
 
         service
@@ -892,35 +908,36 @@ mod tests {
                 process_id: process_id.to_string(),
             })
             .expect("terminate active process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec returns terminated result");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match service.terminate(CommandExecTerminateParams {
+        assert_ne!(response.exit_code, 0);
+        service
+            .terminate(CommandExecTerminateParams {
                 process_id: process_id.to_string(),
-            }) {
-                Ok(_) => {}
-                Err(error) if error.to_string().contains("process already exited") => break,
-                Err(error) => panic!("unexpected terminate error: {error}"),
-            }
-            assert!(Instant::now() < deadline, "process did not stop");
-            std::thread::sleep(Duration::from_millis(25));
-        }
+            })
+            .expect_err("completed process cannot be terminated again");
     }
 
     #[cfg(unix)]
     #[test]
     fn command_service_streaming_pty_resize_accepts_active_session() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
         let process_id = "pty_resize_session";
-        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; IFS= read -r line"]);
         params.process_id = Some(process_id.to_string());
         params.tty = Some(true);
+        params.stream_stdin = Some(true);
         params.stream_stdout_stderr = Some(true);
         params.size = Some(CommandExecTerminalSize { cols: 80, rows: 24 });
         params.disable_timeout = Some(true);
 
-        service.exec(params).expect("streaming exec starts");
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
         wait_for_output_delta(&service, process_id, "ready");
 
         service
@@ -933,10 +950,18 @@ mod tests {
             })
             .expect("resize active pty session");
         service
-            .terminate(CommandExecTerminateParams {
+            .write(CommandExecWriteParams {
                 process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("\n")),
+                close_stdin: None,
             })
-            .expect("terminate succeeds");
+            .expect("write newline to finish process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
     }
 
     #[test]
