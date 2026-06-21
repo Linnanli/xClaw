@@ -1317,11 +1317,13 @@ impl AppServer {
                 Ok(result) => json_rpc_ok(id.clone(), result),
                 Err(error) => app_error_response(id.clone(), error),
             };
-            if !is_notification {
-                let _ = response_sender.send(DetachedResponse {
+            let _ = if is_notification {
+                response_sender.send(DetachedResponse::Completed)
+            } else {
+                response_sender.send(DetachedResponse::Response {
                     json: serialize_response(&response),
-                });
-            }
+                })
+            };
         });
         DetachedCommandExecDispatch::Spawned { process_id }
     }
@@ -2365,8 +2367,9 @@ where
     Ok(())
 }
 
-struct DetachedResponse {
-    json: String,
+enum DetachedResponse {
+    Response { json: String },
+    Completed,
 }
 
 enum DetachedCommandExecDispatch {
@@ -2409,7 +2412,11 @@ where
 {
     let mut wrote = 0_usize;
     while let Ok(response) = receiver.try_recv() {
-        writeln!(writer, "{}", response.json)?;
+        let DetachedResponse::Response { json } = response else {
+            wrote += 1;
+            continue;
+        };
+        writeln!(writer, "{json}")?;
         wrote += 1;
     }
     Ok(wrote)
@@ -9042,6 +9049,62 @@ mod tests {
                     && value["result"]["stdout"] == ""
             }),
             "expected final successful command response in stdio output: {text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_streaming_command_exec_notification_eof_does_not_wait_forever() {
+        let temp = TestDir::new("stdio_streaming_command_exec_notification_eof");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec_notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "printf note-done"],
+                "processId": "stdio_notification_proc",
+                "tty": true,
+                "streamStdoutStderr": true,
+                "timeoutMs": 1_000
+            }
+        });
+
+        let input = format!("{initialize}\n{exec_notification}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete after notification EOF");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            values.iter().any(|value| {
+                value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA
+                    && value["params"]["processId"] == "stdio_notification_proc"
+            }),
+            "expected outputDelta notification in stdio output: {text}"
+        );
+        assert!(
+            !values
+                .iter()
+                .any(|value| value.get("id").is_some_and(|id| id == "cmd")),
+            "command/exec notification must not emit a response: {text}"
         );
     }
 
