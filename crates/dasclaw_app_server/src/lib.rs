@@ -3966,8 +3966,9 @@ mod tests {
 
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
-        FsChangedKind, FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope,
-        SkillsListEntry, TransportKind, WorkspaceInfo, WorkspaceTrust, event,
+        CommandExecTerminalSize, FsChangedKind, FsChangedNotification, ServiceStatus,
+        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, WorkspaceInfo, WorkspaceTrust,
+        event,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -4799,6 +4800,128 @@ mod tests {
                 .any(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
         );
         assert!(server.drain_notifications().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_real_p5_streaming_command_exec_route_terminate_completes_process() {
+        let temp = TestDir::new("app_server_real_p5_streaming_terminate");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let service = Arc::clone(&services.command);
+        let params = CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf ready; sleep 30".to_string(),
+            ],
+            cwd: None,
+            timeout_ms: Some(10_000),
+            disable_timeout: None,
+            output_bytes_cap: None,
+            disable_output_cap: None,
+            env: Default::default(),
+            process_id: Some("route_stream_terminate".to_string()),
+            sandbox_policy: None,
+            size: Some(CommandExecTerminalSize { cols: 80, rows: 24 }),
+            stream_stdin: Some(false),
+            stream_stdout_stderr: Some(true),
+            tty: Some(true),
+        };
+        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+        thread::sleep(Duration::from_millis(100));
+
+        let terminate = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"terminate","method":"command/exec/terminate","params":{"processId":"route_stream_terminate"}}"#,
+            )
+            .expect("terminate should return response");
+        let response = exec_thread.join().expect("exec thread");
+        let value: Value = serde_json::from_str(&terminate).expect("terminate JSON");
+
+        assert!(value["result"].is_object());
+        assert_ne!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_real_p5_streaming_command_exec_route_resize_succeeds_for_pty() {
+        use base64::Engine as _;
+
+        let temp = TestDir::new("app_server_real_p5_streaming_resize");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let service = Arc::clone(&services.command);
+        let params = CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf ready; IFS= read -r line".to_string(),
+            ],
+            cwd: None,
+            timeout_ms: Some(10_000),
+            disable_timeout: None,
+            output_bytes_cap: None,
+            disable_output_cap: None,
+            env: Default::default(),
+            process_id: Some("route_stream_resize".to_string()),
+            sandbox_policy: None,
+            size: Some(CommandExecTerminalSize { cols: 80, rows: 24 }),
+            stream_stdin: Some(true),
+            stream_stdout_stderr: Some(true),
+            tty: Some(true),
+        };
+        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+        thread::sleep(Duration::from_millis(100));
+
+        let resize = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"resize","method":"command/exec/resize","params":{"processId":"route_stream_resize","size":{"cols":120,"rows":40}}}"#,
+            )
+            .expect("resize should return response");
+        let write = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "write",
+                    "method": "command/exec/write",
+                    "params": {
+                        "processId": "route_stream_resize",
+                        "deltaBase64": base64::engine::general_purpose::STANDARD.encode("\n")
+                    }
+                })
+                .to_string(),
+            )
+            .expect("write should return response");
+        let response = exec_thread.join().expect("exec thread");
+        let resize_value: Value = serde_json::from_str(&resize).expect("resize JSON");
+        let write_value: Value = serde_json::from_str(&write).expect("write JSON");
+
+        assert!(resize_value["result"].is_object());
+        assert!(write_value["result"].is_object());
+        assert_eq!(response.exit_code, 0);
     }
 
     #[cfg(unix)]
