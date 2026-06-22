@@ -21,6 +21,7 @@ pub use sandbox_protocol::RuntimeSandboxContext;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -927,6 +928,7 @@ impl AppServer {
                 thread_id: params.thread_id.clone(),
                 turn_id: turn_id.clone(),
                 prompt,
+                cwd: turn_cwd.to_path_buf(),
                 model_provider,
                 reasoning_summary,
                 sandbox_context,
@@ -2957,6 +2959,7 @@ pub struct RuntimeTurnStartRequest {
     pub thread_id: String,
     pub turn_id: String,
     pub prompt: String,
+    pub cwd: PathBuf,
     pub model_provider: RuntimeModelProviderSnapshot,
     pub reasoning_summary: ReasoningSummary,
     pub sandbox_context: RuntimeSandboxContext,
@@ -3520,6 +3523,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         let runtime_cleanup_agent = Arc::clone(&agent);
         let stream_agent = Arc::clone(&agent);
         let prompt = request.prompt;
+        let cwd = request.cwd;
         let updates = request.updates;
         let event_updates = updates.clone();
         let event_thread_id = thread_id.clone();
@@ -3577,44 +3581,76 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                     let request_id = request_id.to_string();
                                     let tool_call_id = tool_call_id_from_arguments(&tool_arguments)
                                         .unwrap_or_else(|| tool_name.clone());
+                                    let command = command_from_arguments(&tool_arguments);
                                     if let Ok(mut pending_approvals) =
                                         event_bridge.pending_approvals.lock()
                                     {
                                         pending_approvals
                                             .insert(request_id.clone(), Arc::clone(&stream_agent));
                                     }
-                                    event_updates.approval_requested(
-                                        event_thread_id.clone(),
-                                        event_turn_id.clone(),
-                                        RuntimeApprovalRequest {
-                                            request_id: request_id.clone(),
-                                            tool_call_id,
-                                            tool_name,
-                                            command: command_from_arguments(&tool_arguments),
-                                            description,
-                                            display_parameters,
-                                            allow_always,
-                                        },
-                                    );
+                                    if let Some(command) = command {
+                                        event_updates.approval_requested(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimeApprovalRequest {
+                                                request_id: request_id.clone(),
+                                                tool_call_id,
+                                                tool_name,
+                                                command: Some(command),
+                                                description,
+                                                display_parameters,
+                                                allow_always,
+                                            },
+                                        );
+                                    } else {
+                                        event_updates.permissions_approval_requested(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimePermissionsApprovalRequest {
+                                                request_id,
+                                                item_id: runtime_tool_item_id(
+                                                    &event_turn_id,
+                                                    &tool_call_id,
+                                                ),
+                                                cwd: cwd.to_string_lossy().to_string(),
+                                                reason: Some(description),
+                                                permissions: display_parameters,
+                                            },
+                                        );
+                                    }
                                 }
                                 Ok(dasclaw_runtime::AgentEvent::ToolCallStart {
                                     name,
                                     arguments,
                                 }) => {
-                                    let item_key = tool_call_id_from_arguments(&arguments)
+                                    let call_id = tool_call_id_from_arguments(&arguments)
                                         .unwrap_or_else(|| name.clone());
-                                    tool_item_keys_by_name.insert(name.clone(), item_key.clone());
-                                    event_updates.command_output_delta(
-                                        event_thread_id.clone(),
-                                        event_turn_id.clone(),
-                                        RuntimeCommandOutputDeltaUpdate {
-                                            item_id: runtime_tool_item_id(
-                                                &event_turn_id,
-                                                &item_key,
-                                            ),
-                                            delta: tool_call_started_delta(&name),
-                                        },
-                                    );
+                                    tool_item_keys_by_name.insert(name.clone(), call_id.clone());
+                                    if is_client_dynamic_tool(&name) {
+                                        event_updates.dynamic_tool_call_requested(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimeDynamicToolCallRequest {
+                                                request_id: call_id.clone(),
+                                                call_id,
+                                                namespace: Some("client".to_string()),
+                                                tool: name,
+                                                arguments,
+                                            },
+                                        );
+                                    } else {
+                                        event_updates.command_output_delta(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimeCommandOutputDeltaUpdate {
+                                                item_id: runtime_tool_item_id(
+                                                    &event_turn_id,
+                                                    &call_id,
+                                                ),
+                                                delta: tool_call_started_delta(&name),
+                                            },
+                                        );
+                                    }
                                 }
                                 Ok(dasclaw_runtime::AgentEvent::ToolResult {
                                     name,
@@ -3706,6 +3742,31 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             .map_err(|error| RuntimeBridgeError::retryable(error.to_string()))
     }
 
+    fn resolve_server_request(
+        &self,
+        resolution: RuntimeServerRequestResolution,
+    ) -> Result<(), RuntimeBridgeError> {
+        match resolution.payload {
+            RuntimeServerRequestResponse::Approval(decision) => {
+                self.resolve_approval(RuntimeApprovalDecision {
+                    request_id: resolution.request_id,
+                    decision,
+                })
+            }
+            RuntimeServerRequestResponse::Permissions(_) => {
+                self.resolve_approval(RuntimeApprovalDecision {
+                    request_id: resolution.request_id,
+                    decision: dasclaw_runtime::ApprovalDecision::Approve,
+                })
+            }
+            RuntimeServerRequestResponse::DynamicTool(_) => Ok(()),
+            RuntimeServerRequestResponse::ToolUserInput(_)
+            | RuntimeServerRequestResponse::FileChange(_) => Err(RuntimeBridgeError::fatal(
+                "runtime bridge does not support this server request response kind",
+            )),
+        }
+    }
+
     fn shutdown(&self) {
         let tokens = self
             .in_flight
@@ -3743,6 +3804,10 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
 
 fn tool_call_id_from_arguments(arguments: &Value) -> Option<String> {
     string_field(arguments, "id").or_else(|| string_field(arguments, "tool_call_id"))
+}
+
+fn is_client_dynamic_tool(name: &str) -> bool {
+    name.strip_prefix("client.").is_some() || name == "open_url"
 }
 
 fn command_from_arguments(arguments: &Value) -> Option<String> {
@@ -7955,6 +8020,7 @@ mod tests {
             calls[0].sandbox_context.sandbox,
             Some(SandboxMode::WorkspaceWrite)
         );
+        assert_eq!(calls[0].cwd, PathBuf::from("/tmp"));
     }
 
     #[test]
@@ -8929,6 +8995,7 @@ mod tests {
                     thread_id: "thread_1".to_string(),
                     turn_id: turn_id.to_string(),
                     prompt: "hello".to_string(),
+                    cwd: PathBuf::from("."),
                     model_provider: test_runtime_model_snapshot(),
                     reasoning_summary: ReasoningSummary::None,
                     sandbox_context: RuntimeSandboxContext::empty(),
@@ -8959,6 +9026,7 @@ mod tests {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
                 model_provider: test_runtime_model_snapshot(),
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext {
@@ -9003,6 +9071,7 @@ mod tests {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
                 model_provider: test_runtime_model_snapshot(),
                 reasoning_summary: ReasoningSummary::Concise,
                 sandbox_context: RuntimeSandboxContext::empty(),
@@ -9077,6 +9146,7 @@ mod tests {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
                 model_provider: snapshot,
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
@@ -9130,6 +9200,7 @@ mod tests {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 prompt: "run tool".to_string(),
+                cwd: PathBuf::from("."),
                 model_provider: test_runtime_model_snapshot(),
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
@@ -9201,6 +9272,239 @@ mod tests {
     }
 
     #[test]
+    fn agent_runtime_bridge_maps_tool_events_to_r1_surface() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
+            move |token, _snapshot, _reasoning_summary| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(
+                        Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                    )
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+                dynamic_tool_call: true,
+                ..RuntimeBridgeFeatures::default()
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open the docs".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let drained = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::ToolResult { .. }))
+        });
+        assert!(
+            drained.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { request }
+                        if request.tool == "open_url"
+                            && request.call_id == "call_1"
+                            && request.request_id == "call_1"
+                            && request.namespace.as_deref() == Some("client")
+                            && request.arguments["url"] == "https://example.test"
+                )
+            }),
+            "client tool start should be emitted as dynamic tool request: {drained:?}"
+        );
+        assert!(
+            !drained.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::CommandOutputDelta { update }
+                        if update.delta == "tool call started: open_url"
+                )
+            }),
+            "client tool start should not be emitted as command output delta: {drained:?}"
+        );
+        assert!(
+            drained.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content == "ran open_url"
+                            && !update.is_error
+                )
+            }),
+            "tool result should still be emitted: {drained:?}"
+        );
+        assert_eq!(executor.call_count_blocking(), 1);
+    }
+
+    #[test]
+    fn agent_runtime_bridge_dynamic_tool_response_does_not_fail_turn() {
+        let bridge = DasclawAgentRuntimeBridge::new(|_| {
+            Err(RuntimeBridgeError::fatal("factory should not be used"))
+        });
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: "call_1".to_string(),
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "ok".to_string(),
+                    }],
+                    success: true,
+                }),
+            })
+            .expect("dynamic tool response should not fail the runtime turn");
+    }
+
+    #[test]
+    fn request_user_input_is_not_treated_as_client_dynamic_tool() {
+        assert!(is_client_dynamic_tool("client.open_url"));
+        assert!(is_client_dynamic_tool("open_url"));
+        assert!(!is_client_dynamic_tool("request_user_input"));
+    }
+
+    #[test]
+    fn agent_runtime_bridge_maps_non_command_approval_to_permissions_request() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
+            move |token, _snapshot, _reasoning_summary| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(
+                        Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                    )
+                    .tools(vec![dummy_tool("open_url")])
+                    .approval_policy(Arc::new(AlwaysApprovePolicy))
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+                dynamic_tool_call: true,
+                permissions_approval: true,
+                ..RuntimeBridgeFeatures::default()
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open the docs".to_string(),
+                cwd: PathBuf::from("/turn/local"),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_approval = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::PermissionsApprovalRequested { .. }
+                )
+            })
+        });
+        let permissions_request = before_approval
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::PermissionsApprovalRequested { request } => {
+                    Some(request.clone())
+                }
+                _ => None,
+            })
+            .expect("permissions request should be emitted");
+        assert_eq!(permissions_request.item_id, "turn_1:tool:call_1");
+        assert_eq!(permissions_request.cwd, "/turn/local");
+        assert_eq!(
+            permissions_request.reason.as_deref(),
+            Some("approve call to open_url")
+        );
+        assert_eq!(
+            permissions_request.permissions["url"],
+            "https://example.test"
+        );
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: permissions_request.request_id,
+                payload: RuntimeServerRequestResponse::Permissions(
+                    PermissionsRequestApprovalResponse {
+                        permissions: serde_json::json!({"url": "https://example.test"}),
+                        scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
+                        strict_auto_review: None,
+                    },
+                ),
+            })
+            .expect("permissions response should approve and resume the runtime turn");
+
+        let after_approval = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+
+        assert!(
+            !before_approval.iter().any(|update| {
+                matches!(update.outcome, RuntimeTurnOutcome::ApprovalRequested { .. })
+            }),
+            "non-command approval should not use command approval surface: {before_approval:?}"
+        );
+        assert!(
+            after_approval.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content == "ran open_url"
+                            && !update.is_error
+                )
+            }),
+            "permissions approval should allow tool result: {after_approval:?}"
+        );
+        assert!(
+            after_approval.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Completed { output } if output == "done"
+                )
+            }),
+            "permissions approval should let the turn complete: {after_approval:?}"
+        );
+        assert_eq!(executor.call_count_blocking(), 1);
+    }
+
+    #[test]
     fn snapshot_runtime_bridge_rejects_unknown_api_format_without_leaking_key() {
         let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
         let mut snapshot = test_runtime_model_snapshot();
@@ -9212,6 +9516,7 @@ mod tests {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
                 model_provider: snapshot,
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
@@ -10989,6 +11294,26 @@ mod tests {
                         "path": "/tmp/x",
                         "tool_call_id": id,
                         "api_key": "secret-token",
+                    }),
+                    reasoning: None,
+                }],
+                content: None,
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn client_tool_call_output(name: &str, id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments: serde_json::json!({
+                        "tool_call_id": id,
+                        "url": "https://example.test",
                     }),
                     reasoning: None,
                 }],
