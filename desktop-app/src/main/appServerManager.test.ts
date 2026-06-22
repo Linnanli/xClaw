@@ -14,7 +14,11 @@ import type {
   JsonRpcServerRequest
 } from './appServerRpc'
 import type { AppServerModelProviderConfig } from './appServerManager'
-import type { AppServerApprovalRequest } from '../shared/appServerApi'
+import type {
+  AppServerApprovalRequest,
+  AppServerNotification,
+  AppServerServerRequestMethod
+} from '../shared/appServerApi'
 
 const TEST_MODEL_PROVIDER_CONFIG: AppServerModelProviderConfig = {
   models: [
@@ -403,10 +407,7 @@ describe('AppServerManager', () => {
     const manager = createManager(fake)
     const approvals: AppServerApprovalRequest[] = []
     manager.onNotification((notification) => {
-      if (
-        notification.method === 'item/commandExecution/requestApproval' &&
-        'requestId' in notification
-      ) {
+      if (isApprovalNotification(notification)) {
         approvals.push(notification)
       }
     })
@@ -456,6 +457,190 @@ describe('AppServerManager', () => {
       {
         id: 'approval_1',
         result: { decision: { kind: 'approve' } }
+      }
+    ])
+  })
+
+  it('starts the app-server before writing generic server request responses', async () => {
+    const fake = new FakeRpcClient()
+    const manager = createManager(fake)
+
+    await manager.respondServerRequest('approval_1', {
+      decision: { kind: 'approve' }
+    })
+
+    expect(fake.requests.map((request) => request.method)).toEqual(['initialize', 'health/check'])
+    expect(fake.responses).toEqual([
+      {
+        id: 'approval_1',
+        result: { decision: { kind: 'approve' } }
+      }
+    ])
+  })
+
+  it('forwards all supported r1 server request methods', async () => {
+    const fake = new FakeRpcClient()
+    const manager = createManager(fake)
+    const notifications: AppServerNotification[] = []
+    manager.onNotification((notification) => notifications.push(notification))
+
+    await manager.start()
+
+    const cases: Array<{
+      id: string
+      method: AppServerServerRequestMethod
+      params: Record<string, unknown>
+      expectedParams: Record<string, unknown>
+    }> = [
+      {
+        id: 'approval_1',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'turn_1:tool:bash',
+          toolCallId: 'call_1',
+          toolName: 'bash',
+          description: 'approve call to bash',
+          displayParameters: { cmd: 'echo hello' },
+          rawArguments: { apiKey: 'secret-token' },
+          allowAlways: true
+        },
+        expectedParams: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'turn_1:tool:bash',
+          toolCallId: 'call_1',
+          toolName: 'bash',
+          description: 'approve call to bash',
+          displayParameters: { cmd: 'echo hello' },
+          allowAlways: true
+        }
+      },
+      {
+        id: 'permissions_1',
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          permissions: ['net:fetch'],
+          rawArguments: { apiKey: 'secret-token' },
+          requestId: 'nested_request'
+        },
+        expectedParams: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          permissions: ['net:fetch']
+        }
+      },
+      {
+        id: 'file_change_1',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          path: 'src/app.ts',
+          action: 'modify'
+        },
+        expectedParams: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          path: 'src/app.ts',
+          action: 'modify'
+        }
+      },
+      {
+        id: 'user_input_1',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          questions: [{ id: 'name', prompt: 'Name?' }]
+        },
+        expectedParams: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          questions: [{ id: 'name', prompt: 'Name?' }]
+        }
+      },
+      {
+        id: 'tool_1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          callId: 'call_1',
+          namespace: 'client',
+          tool: 'open_url',
+          arguments: { url: 'https://example.test' }
+        },
+        expectedParams: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          callId: 'call_1',
+          namespace: 'client',
+          tool: 'open_url',
+          arguments: { url: 'https://example.test' }
+        }
+      }
+    ]
+
+    for (const item of cases) {
+      fake.emitServerRequest({
+        type: 'server-request',
+        id: item.id,
+        method: item.method,
+        params: item.params
+      })
+    }
+
+    expect(notifications).toEqual(
+      cases.map((item) => ({
+        hostId: 'local',
+        requestId: item.id,
+        method: item.method,
+        params: item.expectedParams
+      }))
+    )
+
+    await manager.respondServerRequest('tool_1', {
+      contentItems: [{ type: 'inputText', text: 'opened' }],
+      success: true
+    })
+
+    expect(fake.responses).toContainEqual({
+      id: 'tool_1',
+      result: {
+        contentItems: [{ type: 'inputText', text: 'opened' }],
+        success: true
+      }
+    })
+  })
+
+  it('fail-closes unsupported server request methods without notifying the renderer', async () => {
+    const fake = new FakeRpcClient()
+    const manager = createManager(fake)
+    const notifications: AppServerNotification[] = []
+    manager.onNotification((notification) => notifications.push(notification))
+
+    await manager.start()
+    fake.emitServerRequest({
+      type: 'server-request',
+      id: 'unsupported_1',
+      method: 'item/tool/unsupported',
+      params: { threadId: 'thread_1' }
+    })
+
+    expect(notifications).toEqual([])
+    expect(fake.responses).toEqual([
+      {
+        id: 'unsupported_1',
+        result: {
+          decision: {
+            kind: 'reject',
+            data: { reason: 'unsupported app-server request method: item/tool/unsupported' }
+          }
+        }
       }
     ])
   })
@@ -592,4 +777,14 @@ function adminModel(overrides: Partial<Record<string, unknown>> = {}): Record<st
     source: 'admin',
     ...overrides
   }
+}
+
+function isApprovalNotification(
+  notification: AppServerNotification
+): notification is AppServerApprovalRequest {
+  return (
+    'requestId' in notification &&
+    (notification.method === 'item/commandExecution/requestApproval' ||
+      notification.method === 'item/permissions/requestApproval')
+  )
 }

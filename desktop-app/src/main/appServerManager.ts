@@ -11,6 +11,8 @@ import type {
   AppServerNotification,
   AppServerRequestOptions,
   AppServerRunState,
+  AppServerServerRequestMethod,
+  AppServerServerRequestResponse,
   AppServerStatus,
   ModelProviderSelectForNextTurnResponse,
   RendererModelProviderConfig
@@ -170,12 +172,7 @@ export class AppServerManager {
       await this.client.request('initialize', {
         client: { name: 'desktop-app', version: '0.1.0', transport: 'stdio' },
         protocolVersion: { major: 0, minor: 1, patch: 0 },
-        requestedCapabilities: [
-          'protocol',
-          'lifecycle',
-          'health',
-          'session'
-        ],
+        requestedCapabilities: ['protocol', 'lifecycle', 'health', 'session'],
         modelProvider
       })
       const health = await this.client.request('health/check', { includeDetails: true })
@@ -234,6 +231,16 @@ export class AppServerManager {
     }
 
     return this.requireClient().request<T>(method, params)
+  }
+
+  async respondServerRequest(
+    requestId: string | number,
+    response: AppServerServerRequestResponse,
+    options: AppServerRequestOptions = {}
+  ): Promise<void> {
+    this.assertHostRegistered(options.hostId ?? this.hostId)
+    await this.ensureReady()
+    this.requireClient().respond(requestId, response)
   }
 
   async stop(): Promise<AppServerStatus> {
@@ -297,25 +304,17 @@ export class AppServerManager {
   }
 
   private handleServerRequest(request: JsonRpcServerRequest): void {
-    if (
-      request.method === 'item/commandExecution/requestApproval' ||
-      request.method === 'item/permissions/requestApproval'
-    ) {
+    if (isForwardedServerRequestMethod(request.method)) {
       this.emitNotification({
         hostId: this.hostId,
         requestId: request.id,
         method: request.method,
-        params: approvalRequestParams(request.params)
+        params: serverRequestParams(request.method, request.params)
       })
       return
     }
 
-    this.requireClient().respond(request.id, {
-      decision: {
-        kind: 'reject',
-        data: { reason: `unsupported app-server request method: ${request.method}` }
-      }
-    })
+    this.requireClient().respond(request.id, failClosedServerRequestResponse(request.method))
   }
 
   private requireClient(): AppServerRpcClient {
@@ -504,16 +503,64 @@ function normalizeCapabilities(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string')
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+function isForwardedServerRequestMethod(method: string): method is AppServerServerRequestMethod {
+  return (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/permissions/requestApproval' ||
+    method === 'item/fileChange/requestApproval' ||
+    method === 'item/tool/requestUserInput' ||
+    method === 'item/tool/call'
+  )
 }
 
-function approvalRequestParams(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) return {}
-  const safeParams = { ...value }
-  delete safeParams.rawArguments
-  delete safeParams.requestId
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function serverRequestParams(
+  method: AppServerServerRequestMethod,
+  params: unknown
+): Record<string, unknown> {
+  const safeParams = { ...asRecord(params) }
+  if (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/permissions/requestApproval'
+  ) {
+    delete safeParams.rawArguments
+    delete safeParams.requestId
+  }
   return safeParams
+}
+
+function failClosedServerRequestResponse(method: string): AppServerServerRequestResponse {
+  if (method === 'item/tool/call') {
+    return {
+      contentItems: [
+        {
+          type: 'inputText',
+          text: `unsupported app-server request method: ${method}`
+        }
+      ],
+      success: false
+    }
+  }
+  if (method === 'item/tool/requestUserInput') {
+    return { answers: {} }
+  }
+  if (method === 'item/fileChange/requestApproval') {
+    return { decision: 'decline' }
+  }
+  if (method === 'item/permissions/requestApproval') {
+    return { permissions: {}, scope: 'turn', strictAutoReview: true }
+  }
+  return {
+    decision: {
+      kind: 'reject',
+      data: { reason: `unsupported app-server request method: ${method}` }
+    }
+  }
 }
 
 function errorMessage(error: unknown): string {

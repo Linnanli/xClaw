@@ -16,8 +16,10 @@ import {
 } from '@assistant-ui/react'
 
 import type {
-  AppServerApprovalRequest,
   AppServerNotification,
+  AppServerServerRequest,
+  AppServerServerRequestMethod,
+  AppServerServerRequestResponse,
   AppServerStatus,
   ModelProviderSelectForNextTurnResponse,
   RendererModelProviderConfig
@@ -124,8 +126,8 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     void window.desktopAppServer.getStatus().then(setStatus)
     const removeStatusListener = window.desktopAppServer.onStatusChange(setStatus)
     const removeNotificationListener = window.desktopAppServer.onNotification((notification) => {
-      if (isApprovalRequest(notification)) {
-        rejectApprovalUntilUiExists(notification)
+      if (isServerRequest(notification)) {
+        rejectServerRequestUntilUiExists(notification)
         return
       }
       turnTracker.handleNotification(notification)
@@ -250,24 +252,43 @@ function modelProviderUnavailableOption(message: string): AssistantModelOption {
   }
 }
 
-function isApprovalRequest(
+function isServerRequest(
   notification: AppServerNotification
-): notification is AppServerApprovalRequest {
-  return (
-    (notification.method === 'item/commandExecution/requestApproval' ||
-      notification.method === 'item/permissions/requestApproval') &&
-    'requestId' in notification
+): notification is AppServerServerRequest {
+  return 'requestId' in notification && typeof notification.method === 'string'
+}
+
+function rejectServerRequestUntilUiExists(notification: AppServerServerRequest): void {
+  void window.desktopAppServer.respondServerRequest(
+    notification.requestId,
+    failClosedRendererServerRequestResponse(notification.method)
   )
 }
 
-function rejectApprovalUntilUiExists(notification: AppServerApprovalRequest): void {
-  void window.desktopAppServer.request('approval/respond', {
-    requestId: notification.requestId,
+function failClosedRendererServerRequestResponse(
+  method: AppServerServerRequestMethod
+): AppServerServerRequestResponse {
+  if (method === 'item/tool/call') {
+    return {
+      contentItems: [{ type: 'inputText', text: 'renderer tool UI is not implemented' }],
+      success: false
+    }
+  }
+  if (method === 'item/tool/requestUserInput') {
+    return { answers: {} }
+  }
+  if (method === 'item/fileChange/requestApproval') {
+    return { decision: 'decline' }
+  }
+  if (method === 'item/permissions/requestApproval') {
+    return { permissions: {}, scope: 'turn', strictAutoReview: true }
+  }
+  return {
     decision: {
       kind: 'reject',
       data: { reason: 'renderer approval UI is not implemented' }
     }
-  })
+  }
 }
 
 function requireTurnTracker(

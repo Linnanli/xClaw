@@ -4,7 +4,11 @@ import { act, createElement, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { AppendMessage, ModelContext, ThreadMessage } from '@assistant-ui/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AppServerNotification } from '../../../shared/appServerApi'
+import type {
+  AppServerNotification,
+  AppServerServerRequestMethod,
+  AppServerServerRequestResponse
+} from '../../../shared/appServerApi'
 import type { AppServerModelSelectorState } from '../hooks/useDasclawAssistantRuntime'
 
 type ModelContextRegistration = {
@@ -257,6 +261,7 @@ describe('useAppServerModelSelectorState', () => {
     })
     window.desktopAppServer = {
       request: requestMock as Window['desktopAppServer']['request'],
+      respondServerRequest: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
@@ -339,6 +344,7 @@ describe('useDasclawAssistantRuntime', () => {
   let removeNotificationListener: () => void
   let notificationListener: ((notification: AppServerNotification) => void) | undefined
   let requestMock: ReturnType<typeof vi.fn>
+  let respondServerRequestMock: ReturnType<typeof vi.fn>
 
   function RuntimeProbe(): null {
     useDasclawAssistantRuntime()
@@ -353,8 +359,8 @@ describe('useDasclawAssistantRuntime', () => {
     removeStatusListener = vi.fn()
     removeNotificationListener = vi.fn()
     notificationListener = undefined
+    respondServerRequestMock = vi.fn().mockResolvedValue(undefined)
     requestMock = vi.fn(async (method: string) => {
-      if (method === 'approval/respond') return { accepted: true }
       if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
         queueMicrotask(() => {
@@ -381,6 +387,8 @@ describe('useDasclawAssistantRuntime', () => {
     })
     window.desktopAppServer = {
       request: requestMock as Window['desktopAppServer']['request'],
+      respondServerRequest:
+        respondServerRequestMock as Window['desktopAppServer']['respondServerRequest'],
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
@@ -432,14 +440,18 @@ describe('useDasclawAssistantRuntime', () => {
     })
   })
 
-  it('fail-safe rejects approval requests until the renderer approval UI is implemented', async () => {
+  it('fail-safe rejects server requests until the renderer UI is implemented', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))
     })
 
-    await act(async () => {
-      notificationListener?.({
-        hostId: 'local',
+    const cases: Array<{
+      requestId: string
+      method: AppServerServerRequestMethod
+      params: Record<string, unknown>
+      response: AppServerServerRequestResponse
+    }> = [
+      {
         requestId: 'approval_1',
         method: 'item/commandExecution/requestApproval',
         params: {
@@ -451,18 +463,78 @@ describe('useDasclawAssistantRuntime', () => {
           description: 'approve call to bash',
           displayParameters: { cmd: 'echo hello' },
           allowAlways: true
+        },
+        response: {
+          decision: {
+            kind: 'reject',
+            data: { reason: 'renderer approval UI is not implemented' }
+          }
         }
-      })
-      await Promise.resolve()
-    })
-
-    expect(requestMock).toHaveBeenCalledWith('approval/respond', {
-      requestId: 'approval_1',
-      decision: {
-        kind: 'reject',
-        data: { reason: 'renderer approval UI is not implemented' }
+      },
+      {
+        requestId: 'dynamic_tool_1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          callId: 'call_1',
+          namespace: 'client',
+          tool: 'open_url',
+          arguments: { url: 'https://example.test' }
+        },
+        response: {
+          contentItems: [{ type: 'inputText', text: 'renderer tool UI is not implemented' }],
+          success: false
+        }
+      },
+      {
+        requestId: 'user_input_1',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          questions: [{ id: 'name', prompt: 'Name?' }]
+        },
+        response: { answers: {} }
+      },
+      {
+        requestId: 'file_change_1',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          path: 'src/app.ts',
+          action: 'modify'
+        },
+        response: { decision: 'decline' }
+      },
+      {
+        requestId: 'permissions_1',
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          permissions: ['net:fetch']
+        },
+        response: { permissions: {}, scope: 'turn', strictAutoReview: true }
       }
-    })
+    ]
+
+    for (const item of cases) {
+      await act(async () => {
+        notificationListener?.({
+          hostId: 'local',
+          requestId: item.requestId,
+          method: item.method,
+          params: item.params
+        })
+        await Promise.resolve()
+      })
+    }
+
+    expect(respondServerRequestMock.mock.calls).toEqual(
+      cases.map((item) => [item.requestId, item.response])
+    )
   })
 
   it('maps app-server reasoning and agent text notifications to assistant-ui parts', async () => {

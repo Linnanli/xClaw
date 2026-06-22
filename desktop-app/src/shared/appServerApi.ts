@@ -28,21 +28,22 @@ export type AppServerApprovalDecision =
   | { kind: 'approve_always' }
   | { kind: 'reject'; data?: { reason?: string } }
 
-export type AppServerApprovalRequest = {
+export type AppServerServerRequestMethod =
+  | 'item/commandExecution/requestApproval'
+  | 'item/permissions/requestApproval'
+  | 'item/fileChange/requestApproval'
+  | 'item/tool/requestUserInput'
+  | 'item/tool/call'
+
+export type AppServerServerRequest = {
   requestId: string | number
   hostId: string
+  method: AppServerServerRequestMethod
+  params: Record<string, unknown>
+}
+
+export type AppServerApprovalRequest = AppServerServerRequest & {
   method: 'item/commandExecution/requestApproval' | 'item/permissions/requestApproval'
-  params: {
-    threadId: string
-    turnId: string
-    itemId: string
-    toolCallId: string
-    toolName: string
-    command?: string
-    description: string
-    displayParameters: unknown
-    allowAlways: boolean
-  }
 }
 
 export type AppServerApprovalRespondParams = {
@@ -50,13 +51,25 @@ export type AppServerApprovalRespondParams = {
   decision: AppServerApprovalDecision
 }
 
+export type AppServerServerRequestResponse =
+  | { decision: AppServerApprovalDecision }
+  | { decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel' }
+  | {
+      contentItems: Array<
+        { type: 'inputText'; text: string } | { type: 'inputImage'; imageUrl: string }
+      >
+      success: boolean
+    }
+  | { answers: Record<string, { answers: string[] }> }
+  | { permissions: unknown; scope?: 'turn' | 'session'; strictAutoReview?: boolean }
+
 export type AppServerGenericNotification = {
   hostId: string
   method: string
   params?: unknown
 }
 
-export type AppServerNotification = AppServerGenericNotification | AppServerApprovalRequest
+export type AppServerNotification = AppServerGenericNotification | AppServerServerRequest
 
 export type RendererClientModelConfig = {
   modelId: string
@@ -87,6 +100,11 @@ export type DesktopAppServerApi = {
     params?: unknown,
     options?: AppServerRequestOptions
   ): Promise<T>
+  respondServerRequest(
+    requestId: string | number,
+    response: AppServerServerRequestResponse,
+    options?: AppServerRequestOptions
+  ): Promise<void>
   stop(): Promise<AppServerStatus>
   getStatus(): Promise<AppServerStatus>
   checkHealth(): Promise<AppServerStatus>

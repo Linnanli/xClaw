@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AppServerNotification,
   AppServerRequestOptions,
+  AppServerServerRequestResponse,
   AppServerStatus,
   DesktopAppServerApi
 } from '../shared/appServerApi'
@@ -15,6 +16,16 @@ const desktopAppServer: DesktopAppServerApi = {
       params,
       hostId: options.hostId
     }) as Promise<T>,
+  respondServerRequest: (
+    requestId: string | number,
+    response: AppServerServerRequestResponse,
+    options: AppServerRequestOptions = {}
+  ) =>
+    ipcRenderer.invoke('app-server:respond-server-request', {
+      requestId,
+      response,
+      hostId: options.hostId
+    }) as Promise<void>,
   stop: () => ipcRenderer.invoke('app-server:stop'),
   getStatus: () => ipcRenderer.invoke('app-server:get-status'),
   checkHealth: () => ipcRenderer.invoke('app-server:check-health'),

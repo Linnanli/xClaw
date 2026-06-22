@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { AppServerManager } from './appServerManager'
 import { installWindowContextMenu } from './contextMenu'
 import { createMainWindowOptions } from './windowOptions'
+import type { AppServerServerRequestResponse } from '../shared/appServerApi'
 
 const appServerManager = new AppServerManager()
 
@@ -80,6 +81,30 @@ app.whenReady().then(() => {
       throw new Error('app-server request hostId must be a string')
     }
     return appServerManager.request(request.method, request.params, { hostId: request.hostId })
+  })
+  ipcMain.handle('app-server:respond-server-request', (_, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('app-server response payload must be an object')
+    }
+    const responsePayload = payload as {
+      requestId?: unknown
+      response?: AppServerServerRequestResponse
+      hostId?: unknown
+    }
+    if (
+      typeof responsePayload.requestId !== 'string' &&
+      typeof responsePayload.requestId !== 'number'
+    ) {
+      throw new Error('app-server response requestId must be a string or number')
+    }
+    if (responsePayload.hostId !== undefined && typeof responsePayload.hostId !== 'string') {
+      throw new Error('app-server response hostId must be a string')
+    }
+    return appServerManager.respondServerRequest(
+      responsePayload.requestId,
+      responsePayload.response as AppServerServerRequestResponse,
+      { hostId: responsePayload.hostId }
+    )
   })
   ipcMain.handle('app-server:stop', () => appServerManager.stop())
   ipcMain.handle('app-server:get-status', () => appServerManager.getStatus())
