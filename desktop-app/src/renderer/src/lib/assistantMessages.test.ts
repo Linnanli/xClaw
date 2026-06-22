@@ -485,6 +485,48 @@ describe('useDasclawAssistantRuntime', () => {
     expect(latestRuntime?.serverRequests).toEqual([])
   })
 
+  it('accepts cancel responses for file change server requests', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = fileChangeApprovalRequest('file_change_1')
+    const response = {
+      decision: 'cancel'
+    } satisfies AppServerServerRequestResponse<'item/fileChange/requestApproval'>
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await act(async () => {
+      await latestRuntime?.respondToServerRequest(request, response)
+    })
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('file_change_1', response)
+    expect(latestRuntime?.serverRequests).toEqual([])
+  })
+
+  it('accepts permissions responses with only permissions', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = permissionsApprovalRequest('permissions_1')
+    const response = {
+      permissions: {}
+    } satisfies AppServerServerRequestResponse<'item/permissions/requestApproval'>
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await act(async () => {
+      await latestRuntime?.respondToServerRequest(request, response)
+    })
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('permissions_1', response)
+    expect(latestRuntime?.serverRequests).toEqual([])
+  })
+
   it('rejects mismatched wide server request responses without removing the queued request', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))
@@ -744,6 +786,23 @@ function fileChangeApprovalRequest(
       turnId: 'turn_1',
       itemId: 'file_1',
       reason: 'modify src/app.ts'
+    }
+  }
+}
+
+function permissionsApprovalRequest(
+  requestId: string
+): AppServerServerRequest<'item/permissions/requestApproval'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/permissions/requestApproval',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'permission_1',
+      cwd: '/workspace',
+      permissions: ['net:fetch']
     }
   }
 }

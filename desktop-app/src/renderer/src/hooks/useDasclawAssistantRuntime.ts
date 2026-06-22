@@ -325,11 +325,7 @@ function isServerRequestResponseForMethod(
     case 'item/tool/requestUserInput':
       return isRecord(record.answers)
     case 'item/permissions/requestApproval':
-      return (
-        isRecord(record.permissions) &&
-        (record.scope === 'turn' || record.scope === 'session') &&
-        typeof record.strictAutoReview === 'boolean'
-      )
+      return isPermissionsApprovalResponse(record)
     case 'item/commandExecution/requestApproval':
       return isRecord(record.decision) && typeof record.decision.kind === 'string'
   }
@@ -339,8 +335,25 @@ function isFileChangeApprovalResponse(response: Record<string, unknown>): boolea
   return (
     response.decision === 'accept' ||
     response.decision === 'acceptForSession' ||
-    response.decision === 'decline'
+    response.decision === 'decline' ||
+    response.decision === 'cancel'
   )
+}
+
+function isPermissionsApprovalResponse(response: Record<string, unknown>): boolean {
+  return (
+    isRecord(response.permissions) &&
+    isOptionalPermissionScope(response.scope) &&
+    isOptionalBoolean(response.strictAutoReview)
+  )
+}
+
+function isOptionalPermissionScope(value: unknown): boolean {
+  return value === undefined || value === 'turn' || value === 'session'
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
