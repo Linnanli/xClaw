@@ -2797,6 +2797,7 @@ dependencies = [
  "dasclaw_llm_provider",
  "dasclaw_mcp",
  "dasclaw_observability",
+ "dasclaw_protocol",
  "dasclaw_pty",
  "dasclaw_runtime",
  "dasclaw_shell_tools",

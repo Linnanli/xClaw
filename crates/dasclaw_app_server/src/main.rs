@@ -287,6 +287,8 @@ fn self_check_report_with_server(
     let pending_notifications = server.drain_notifications().len();
     let thread_start = server.thread_start(ThreadStartParams {
         cwd: Some("self-check".to_string()),
+        sandbox: None,
+        permission_profile: None,
     })?;
     let thread_id = thread_start.thread.id.clone();
     let thread_list = server.thread_list(ThreadListParams {
@@ -306,6 +308,8 @@ fn self_check_report_with_server(
         cwd: None,
         model: None,
         summary: None,
+        sandbox_policy: None,
+        permission_profile: None,
     })?;
     let turn_id = turn_start.turn.id.clone();
     let turn_interrupt = server.turn_interrupt(TurnInterruptParams {

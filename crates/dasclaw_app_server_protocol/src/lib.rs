@@ -35,6 +35,7 @@ pub mod method {
     pub const SKILLS_LIST: &str = "skills/list";
     pub const SKILLS_CONFIG_WRITE: &str = "skills/config/write";
     pub const MCP_SERVER_OAUTH_LOGIN: &str = "mcpServer/oauth/login";
+    pub const CONFIG_REQUIREMENTS_READ: &str = "configRequirements/read";
     pub const CONFIG_MCP_SERVER_RELOAD: &str = "config/mcpServer/reload";
     pub const MCP_SERVER_STATUS_LIST: &str = "mcpServerStatus/list";
     pub const MCP_SERVER_RESOURCE_READ: &str = "mcpServer/resource/read";
@@ -478,6 +479,17 @@ pub enum WorkspaceTrust {
     Trusted,
     Untrusted,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    #[serde(rename = "read-only")]
+    ReadOnly,
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1102,6 +1114,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             false,
         ),
         MethodSchema::new(
+            method::CONFIG_REQUIREMENTS_READ,
+            "sandbox",
+            None,
+            "ConfigRequirementsReadResponse",
+            true,
+        ),
+        MethodSchema::new(
             method::HEALTH_CHECK,
             "health",
             Some("HealthCheckParams"),
@@ -1544,10 +1563,20 @@ pub struct CapabilitiesListResponse {
     pub compatibility_profiles: Vec<CompatibilityProfile>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRequirementsReadResponse {
+    pub allowed_sandbox_modes: Vec<SandboxMode>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThreadStartParams {
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1602,6 +1631,10 @@ pub struct TurnStartParams {
     pub cwd: Option<String>,
     pub model: Option<String>,
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2086,6 +2119,8 @@ pub struct CommandExecParams {
     pub process_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_policy: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<CommandExecTerminalSize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4589,6 +4624,61 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_protocol_params_match_codex_wire_shape() {
+        let thread: ThreadStartParams = serde_json::from_value(serde_json::json!({
+            "cwd": "/repo",
+            "sandbox": "workspace-write",
+            "permissionProfile": {
+                "type": "managed",
+                "file_system": {
+                    "type": "restricted",
+                    "entries": []
+                },
+                "network": "restricted"
+            }
+        }))
+        .expect("thread/start should accept sandbox fields");
+
+        assert_eq!(thread.sandbox, Some(SandboxMode::WorkspaceWrite));
+        assert!(thread.permission_profile.is_some());
+
+        let turn: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "input": [{ "type": "text", "text": "hi" }],
+            "sandboxPolicy": { "type": "read-only", "network_access": false },
+            "permissionProfile": { "type": "disabled" }
+        }))
+        .expect("turn/start should accept sandbox fields");
+
+        assert_eq!(turn.sandbox_policy.as_ref().unwrap()["type"], "read-only");
+        assert_eq!(
+            turn.permission_profile.as_ref().unwrap()["type"],
+            "disabled"
+        );
+
+        let command: CommandExecParams = serde_json::from_value(serde_json::json!({
+            "command": ["sh", "-c", "printf hi"],
+            "sandboxPolicy": { "type": "workspace-write" },
+            "permissionProfile": { "type": "disabled" }
+        }))
+        .expect("command/exec should accept permissionProfile");
+
+        assert!(command.sandbox_policy.is_some());
+        assert!(command.permission_profile.is_some());
+    }
+
+    #[test]
+    fn config_requirements_read_is_advertised_in_schema() {
+        let schema = ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one());
+        let method = schema
+            .methods
+            .iter()
+            .find(|method| method.method == method::CONFIG_REQUIREMENTS_READ)
+            .expect("protocol/schema must include configRequirements/read");
+        assert_eq!(method.capability, "sandbox");
+    }
+
+    #[test]
     fn p5_protocol_serializes_fs_and_command_payloads() {
         let read_params = FsReadFileParams {
             path: "/tmp/example.txt".to_string(),
@@ -4640,6 +4730,7 @@ mod tests {
             env: Default::default(),
             process_id: Some("proc_1".to_string()),
             sandbox_policy: None,
+            permission_profile: None,
             size: None,
             stream_stdin: None,
             stream_stdout_stderr: Some(true),

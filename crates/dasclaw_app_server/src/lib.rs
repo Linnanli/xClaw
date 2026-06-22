@@ -15,6 +15,9 @@ pub mod mcp_service;
 pub mod skills_service;
 
 mod blocking_runtime;
+mod sandbox_protocol;
+
+pub use sandbox_protocol::RuntimeSandboxContext;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -30,7 +33,7 @@ use dasclaw_app_server_protocol::{
     CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
     CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
     CommandExecWriteResponse, CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
-    CommandExecutionTerminalInteractionEvent, CompatibilityProfile,
+    CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
     DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsChangedNotification,
     FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
     FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
@@ -48,14 +51,15 @@ use dasclaw_app_server_protocol::{
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
-    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-    ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
-    ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
-    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
-    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
+    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, SandboxMode,
+    ServerInfo, ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent,
+    ServiceHealth, ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse,
+    SkillsChangedNotification, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+    SkillsListParams, SkillsListResponse, ThreadListParams, ThreadListResponse, ThreadReadParams,
+    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
+    ThreadTurnsListParams, ThreadTurnsListResponse, TurnCompletedEvent, TurnInterruptParams,
+    TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
+    TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -687,6 +691,15 @@ impl AppServer {
         ProtocolSchemaResponse::phase_one(self.service_capability_snapshot())
     }
 
+    pub fn config_requirements_read(
+        &self,
+    ) -> Result<ConfigRequirementsReadResponse, AppServerError> {
+        self.require_initialized("sandbox")?;
+        Ok(ConfigRequirementsReadResponse {
+            allowed_sandbox_modes: vec![SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite],
+        })
+    }
+
     fn create_thread_record(
         &mut self,
         params: ThreadStartParams,
@@ -696,7 +709,7 @@ impl AppServer {
         }
         self.require_initialized("session")?;
 
-        let thread_id = self.threads.create(params);
+        let thread_id = self.threads.create(params)?;
         self.emit_codex_thread_started(thread_id.clone())?;
 
         Ok(thread_id)
@@ -707,7 +720,11 @@ impl AppServer {
         &mut self,
         params: TestThreadParams,
     ) -> Result<TestThreadHandle, AppServerError> {
-        let thread_id = self.create_thread_record(ThreadStartParams { cwd: params.cwd })?;
+        let thread_id = self.create_thread_record(ThreadStartParams {
+            cwd: params.cwd,
+            sandbox: None,
+            permission_profile: None,
+        })?;
         Ok(TestThreadHandle {
             thread_id,
             lifecycle: self.lifecycle.clone(),
@@ -765,7 +782,10 @@ impl AppServer {
         params: TurnStartParams,
     ) -> Result<TurnStartResponse, AppServerError> {
         self.require_initialized("session")?;
-        self.require_thread_exists(&params.thread_id)?;
+        let thread_summary = self
+            .threads
+            .summary(&params.thread_id)
+            .ok_or_else(|| AppServerError::invalid_request("session", "thread not found"))?;
         let model_provider = self.model_provider.selected_snapshot()?;
         let prompt = params.prompt_text();
         if prompt.trim().is_empty() {
@@ -776,6 +796,19 @@ impl AppServer {
         }
         let reasoning_summary =
             parse_reasoning_summary(params.summary.as_deref(), &model_provider.model_id)?;
+        let turn_cwd = params
+            .cwd
+            .as_deref()
+            .or(thread_summary.workspace_root.as_deref())
+            .map(std::path::Path::new)
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let sandbox_context = crate::sandbox_protocol::resolve_turn_context(
+            params.sandbox_policy,
+            params.permission_profile,
+            thread_summary.sandbox_context,
+            turn_cwd,
+            "turn/start",
+        )?;
         let turn_id = self.threads.next_turn_id();
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
@@ -784,6 +817,7 @@ impl AppServer {
                 prompt,
                 model_provider,
                 reasoning_summary,
+                sandbox_context,
                 updates: self.runtime_turn_updates.clone(),
             })
             .map_err(AppServerError::runtime_bridge)?;
@@ -1346,6 +1380,11 @@ impl AppServer {
             }
             method::PROTOCOL_SCHEMA => {
                 route_with_no_params(request.id, request.params, || self.protocol_schema())
+            }
+            method::CONFIG_REQUIREMENTS_READ => {
+                route_with_no_params_result(request.id, request.params, || {
+                    self.config_requirements_read()
+                })
             }
             method::HEALTH_CHECK => {
                 route_with_optional_params(request.id, request.params, |params| {
@@ -2482,6 +2521,7 @@ pub struct RuntimeTurnStartRequest {
     pub prompt: String,
     pub model_provider: RuntimeModelProviderSnapshot,
     pub reasoning_summary: ReasoningSummary,
+    pub sandbox_context: RuntimeSandboxContext,
     pub updates: RuntimeTurnUpdateSink,
 }
 
@@ -2812,6 +2852,11 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
     }
 
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+        if !request.sandbox_context.is_empty() {
+            return Err(RuntimeBridgeError::fatal(
+                "runtime bridge does not support sandbox context enforcement",
+            ));
+        }
         let token = CancellationToken::new();
         let agent = Arc::new((self.agent_factory)(
             token.clone(),
@@ -3135,15 +3180,27 @@ impl SessionThreadHost {
         }
     }
 
-    fn create(&mut self, params: ThreadStartParams) -> String {
+    fn create(&mut self, params: ThreadStartParams) -> Result<String, AppServerError> {
+        let cwd = params
+            .cwd
+            .as_deref()
+            .map(std::path::Path::new)
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let sandbox_context = crate::sandbox_protocol::resolve_thread_context(
+            params.sandbox,
+            params.permission_profile,
+            cwd,
+            "thread/start",
+        )?;
         let thread_id = format!("thread_{}", self.next_thread_id);
         self.next_thread_id += 1;
         self.threads.push(ThreadRecord {
             thread_id: thread_id.clone(),
             title: None,
             workspace_root: params.cwd,
+            sandbox_context,
         });
-        thread_id
+        Ok(thread_id)
     }
 
     fn list(&self) -> Vec<ThreadSummary> {
@@ -3280,6 +3337,7 @@ pub struct ThreadRecord {
     pub thread_id: String,
     pub title: Option<String>,
     pub workspace_root: Option<String>,
+    pub sandbox_context: RuntimeSandboxContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3287,6 +3345,7 @@ pub struct ThreadSummary {
     pub thread_id: String,
     pub title: Option<String>,
     pub workspace_root: Option<String>,
+    pub sandbox_context: RuntimeSandboxContext,
 }
 
 #[cfg(test)]
@@ -3308,6 +3367,7 @@ impl ThreadRecord {
             thread_id: self.thread_id.clone(),
             title: self.title.clone(),
             workspace_root: self.workspace_root.clone(),
+            sandbox_context: self.sandbox_context.clone(),
         }
     }
 }
@@ -3766,6 +3826,25 @@ where
     json_rpc_ok(id, handler())
 }
 
+fn route_with_no_params_result<R, F>(
+    id: Option<Value>,
+    params: Option<Value>,
+    handler: F,
+) -> JsonRpcResponse
+where
+    R: Serialize,
+    F: FnOnce() -> Result<R, AppServerError>,
+{
+    if has_non_empty_params(params) {
+        return invalid_params_response(id, "method does not accept params".to_string());
+    }
+
+    match handler() {
+        Ok(result) => json_rpc_ok(id, result),
+        Err(error) => app_error_response(id, error),
+    }
+}
+
 fn has_non_empty_params(params: Option<Value>) -> bool {
     match params {
         None | Some(Value::Null) => false,
@@ -3895,6 +3974,7 @@ pub fn supported_methods() -> &'static [&'static str] {
     &[
         method::INITIALIZE,
         method::PROTOCOL_SCHEMA,
+        method::CONFIG_REQUIREMENTS_READ,
         method::HEALTH_CHECK,
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
@@ -3967,8 +4047,8 @@ mod tests {
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         CommandExecTerminalSize, FsChangedKind, FsChangedNotification, ServiceStatus,
-        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, WorkspaceInfo, WorkspaceTrust,
-        event,
+        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, UserInput, WorkspaceInfo,
+        WorkspaceTrust, event,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -4720,14 +4800,6 @@ mod tests {
                 }),
             ),
             (
-                "sandbox",
-                serde_json::json!({
-                    "command": ["echo", "nope"],
-                    "processId": "route_proc_sandbox",
-                    "sandboxPolicy": {"mode": "unrestricted"},
-                }),
-            ),
-            (
                 "timeout",
                 serde_json::json!({
                     "command": ["echo", "nope"],
@@ -4757,6 +4829,21 @@ mod tests {
                 )
                 .expect("unsupported command/exec option should return a structured error")
         });
+        let invalid_sandbox_policy = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "sandbox",
+                    "method": "command/exec",
+                    "params": {
+                        "command": ["echo", "nope"],
+                        "processId": "route_proc_sandbox",
+                        "sandboxPolicy": {"mode": "unrestricted"},
+                    },
+                })
+                .to_string(),
+            )
+            .expect("invalid sandboxPolicy should return a structured error");
         let cwd_outside = server
             .handle_json_rpc(
                 &serde_json::json!({
@@ -4778,6 +4865,8 @@ mod tests {
             serde_json::from_str::<Value>(&response)
                 .expect("unsupported command/exec response JSON")
         });
+        let invalid_sandbox_policy_value: Value =
+            serde_json::from_str(&invalid_sandbox_policy).expect("invalid sandboxPolicy JSON");
         let cwd_value: Value =
             serde_json::from_str(&cwd_outside).expect("outside cwd response JSON");
         assert_eq!(exec_value["result"]["exitCode"], 0);
@@ -4792,6 +4881,24 @@ mod tests {
             assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
             assert_eq!(value["error"]["data"]["capability"], "command_exec");
         }
+        assert_eq!(
+            invalid_sandbox_policy_value["error"]["data"]["code"],
+            "INVALID_PARAMS"
+        );
+        assert_eq!(
+            invalid_sandbox_policy_value["error"]["data"]["capability"],
+            "command_exec"
+        );
+        assert!(
+            invalid_sandbox_policy_value["error"]["data"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("invalid sandboxPolicy")
+                || invalid_sandbox_policy_value["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("invalid sandboxPolicy")
+        );
         assert_eq!(cwd_value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
         assert_eq!(cwd_value["error"]["data"]["capability"], "command_exec");
         assert!(
@@ -4861,6 +4968,7 @@ mod tests {
             env: Default::default(),
             process_id: Some("route_stream_terminate".to_string()),
             sandbox_policy: None,
+            permission_profile: None,
             size: Some(CommandExecTerminalSize { cols: 80, rows: 24 }),
             stream_stdin: Some(false),
             stream_stdout_stderr: Some(true),
@@ -4920,6 +5028,7 @@ mod tests {
             env: Default::default(),
             process_id: Some("route_stream_resize".to_string()),
             sandbox_policy: None,
+            permission_profile: None,
             size: Some(CommandExecTerminalSize { cols: 80, rows: 24 }),
             stream_stdin: Some(true),
             stream_stdout_stderr: Some(true),
@@ -5720,6 +5829,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -5853,6 +5964,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         assert_eq!(
@@ -5912,6 +6025,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -5963,6 +6078,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -6033,6 +6150,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -6104,6 +6223,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -6166,6 +6287,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -6229,6 +6352,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -6558,6 +6683,63 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_config_requirements_read_returns_allowed_sandbox_modes() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"cfg","method":"{}"}}"#,
+                method::CONFIG_REQUIREMENTS_READ
+            ))
+            .expect("route config requirements");
+        let value: Value = serde_json::from_str(&response).expect("json response");
+
+        assert_eq!(value["result"]["allowedSandboxModes"][0], "read-only");
+        assert_eq!(value["result"]["allowedSandboxModes"][1], "workspace-write");
+        assert_eq!(
+            value["result"]["allowedSandboxModes"]
+                .as_array()
+                .expect("modes")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn json_rpc_config_requirements_read_requires_initialize() {
+        let mut server = AppServer::new();
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"cfg","method":"{}"}}"#,
+                method::CONFIG_REQUIREMENTS_READ
+            ))
+            .expect("config requirements should return a structured error");
+        let value: Value = serde_json::from_str(&response).expect("json response");
+
+        assert_eq!(value["id"], "cfg");
+        assert_eq!(value["error"]["code"], -32003);
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "sandbox");
+        assert!(value.get("result").is_none());
+    }
+
+    #[test]
+    fn json_rpc_config_requirements_read_rejects_non_empty_params() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"cfg","method":"{}","params":{{"x":true}}}}"#,
+                method::CONFIG_REQUIREMENTS_READ
+            ))
+            .expect("config requirements should return a structured error");
+        let value: Value = serde_json::from_str(&response).expect("json response");
+
+        assert_eq!(value["id"], "cfg");
+        assert_eq!(value["error"]["code"], -32602);
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert!(value.get("result").is_none());
+    }
+
+    #[test]
     fn json_rpc_thread_create_is_not_a_public_method_before_initialize() {
         let mut server = AppServer::new();
         let response = server
@@ -6733,11 +6915,15 @@ mod tests {
         let first = server
             .thread_start(ThreadStartParams {
                 cwd: Some("/tmp/workspace".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("first thread should be created");
         let _second = server
             .thread_start(ThreadStartParams {
                 cwd: Some("/tmp/second".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("second thread should be created");
 
@@ -6814,6 +7000,8 @@ mod tests {
         let thread = server
             .thread_start(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread should be created");
         let _ = server.drain_notifications();
@@ -6869,6 +7057,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start through runtime bridge");
 
@@ -6914,12 +7104,148 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: Some("concise".to_string()),
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start through runtime bridge");
 
         let calls = bridge.calls.lock().expect("calls lock");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].reasoning_summary, ReasoningSummary::Concise);
+    }
+
+    #[test]
+    fn turn_start_passes_thread_sandbox_context_to_runtime_bridge() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp".to_string()),
+                sandbox: Some(SandboxMode::WorkspaceWrite),
+                permission_profile: None,
+            })
+            .expect("thread start");
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id,
+                input: vec![UserInput::Text {
+                    text: "hi".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn start");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].sandbox_context.sandbox,
+            Some(SandboxMode::WorkspaceWrite)
+        );
+    }
+
+    #[test]
+    fn turn_start_policy_overrides_thread_sandbox_context() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp".to_string()),
+                sandbox: Some(SandboxMode::WorkspaceWrite),
+                permission_profile: None,
+            })
+            .expect("thread start");
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id,
+                input: vec![UserInput::Text {
+                    text: "hi".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: Some(serde_json::json!({ "type": "read-only" })),
+                permission_profile: None,
+            })
+            .expect("turn start");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].sandbox_context.policy,
+            Some(dasclaw_workspace_cap::policy::SandboxPolicy::new_read_only_policy())
+        );
+    }
+
+    #[test]
+    fn thread_start_rejects_danger_full_access_sandbox_context() {
+        let mut server = initialized_server();
+
+        let error = server
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp".to_string()),
+                sandbox: Some(SandboxMode::DangerFullAccess),
+                permission_profile: None,
+            })
+            .expect_err("danger-full-access should be rejected for runtime context");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("thread/start"));
+                assert!(
+                    data.message.contains("danger-full-access"),
+                    "{}",
+                    data.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn turn_start_rejects_danger_full_access_sandbox_policy() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let error = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                input: vec![UserInput::Text {
+                    text: "hi".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: Some(serde_json::json!({ "type": "danger-full-access" })),
+                permission_profile: None,
+            })
+            .expect_err("danger-full-access should be rejected for runtime context");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("turn/start"));
+                assert!(
+                    data.message.contains("danger-full-access"),
+                    "{}",
+                    data.message
+                );
+            }
+        }
+        assert!(bridge.calls.lock().expect("calls lock").is_empty());
     }
 
     #[test]
@@ -6951,6 +7277,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect_err("missing model provider must fail safe before runtime");
 
@@ -6984,6 +7312,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("first turn should use initial model");
         let response = server
@@ -6998,6 +7328,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("second turn should use newly selected model");
 
@@ -7307,6 +7639,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -7360,6 +7694,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -7409,6 +7745,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("first turn should start");
         let second = server
@@ -7418,6 +7756,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("second turn should start");
         let _ = server.drain_notifications();
@@ -7483,6 +7823,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -7517,6 +7859,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -7561,6 +7905,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -7603,6 +7949,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -7649,6 +7997,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
 
@@ -7685,6 +8035,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -7719,6 +8071,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -7770,6 +8124,7 @@ mod tests {
                     prompt: "hello".to_string(),
                     model_provider: test_runtime_model_snapshot(),
                     reasoning_summary: ReasoningSummary::None,
+                    sandbox_context: RuntimeSandboxContext::empty(),
                     updates: RuntimeTurnUpdateSink::new(),
                 })
                 .expect_err("test factory should stop before spawning");
@@ -7781,6 +8136,39 @@ mod tests {
         tokens[0].cancel();
         assert!(tokens[0].is_cancelled());
         assert!(!tokens[1].is_cancelled());
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_rejects_unenforced_sandbox_context() {
+        let factory_called = Arc::new(Mutex::new(false));
+        let factory_called_clone = Arc::clone(&factory_called);
+        let bridge = DasclawAgentRuntimeBridge::new(move |_token| {
+            *factory_called_clone.lock().expect("factory called lock") = true;
+            Err(RuntimeBridgeError::fatal("factory should not be called"))
+        });
+
+        let error = bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::WorkspaceWrite),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::new_workspace_write_policy(),
+                    ),
+                },
+                updates: RuntimeTurnUpdateSink::new(),
+            })
+            .expect_err("real runtime bridge must reject unenforced sandbox context");
+
+        assert_eq!(
+            error.message,
+            "runtime bridge does not support sandbox context enforcement"
+        );
+        assert!(!*factory_called.lock().expect("factory called lock"));
     }
 
     #[test]
@@ -7810,6 +8198,7 @@ mod tests {
                 prompt: "hello".to_string(),
                 model_provider: test_runtime_model_snapshot(),
                 reasoning_summary: ReasoningSummary::Concise,
+                sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
             })
             .expect_err("test factory should stop before spawning");
@@ -7883,6 +8272,7 @@ mod tests {
                 prompt: "hello".to_string(),
                 model_provider: snapshot,
                 reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
             })
             .expect("turn should start");
@@ -7934,6 +8324,7 @@ mod tests {
                 prompt: "run tool".to_string(),
                 model_provider: test_runtime_model_snapshot(),
                 reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
             })
             .expect("turn should start");
@@ -8015,6 +8406,7 @@ mod tests {
                 prompt: "hello".to_string(),
                 model_provider: snapshot,
                 reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
             })
             .expect_err("unknown api format should be rejected before spawning");
@@ -8070,6 +8462,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
 
@@ -8136,6 +8530,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
 
@@ -8197,6 +8593,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start through runtime responder");
 
@@ -8248,6 +8646,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -8310,6 +8710,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -8357,6 +8759,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should be started");
         let _ = server.interrupt_turn_for_test(TestTurnInterruptParams {
@@ -8539,6 +8943,8 @@ mod tests {
         let thread = server
             .thread_start(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread should be created");
         let thread_notifications = server.drain_notifications();
@@ -8550,6 +8956,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -8817,7 +9225,11 @@ mod tests {
         ]));
         let mut server = initialized_codex_server_with_bridge(bridge);
         let thread = server
-            .thread_start(ThreadStartParams { cwd: None })
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
             .expect("thread/start should succeed");
         let _ = server.drain_notifications();
 
@@ -8828,6 +9240,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should succeed");
         let notifications = server.drain_notifications();
@@ -8855,7 +9269,11 @@ mod tests {
         }]));
         let mut server = initialized_codex_server_with_bridge(bridge);
         let thread = server
-            .thread_start(ThreadStartParams { cwd: None })
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
             .expect("thread/start should succeed");
         let _ = server.drain_notifications();
 
@@ -8866,6 +9284,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should succeed");
         let notifications = server.drain_notifications();
@@ -9345,6 +9765,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn should start");
         let methods = server

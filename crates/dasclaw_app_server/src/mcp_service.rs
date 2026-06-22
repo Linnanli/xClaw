@@ -229,7 +229,6 @@ impl McpService for AppServerMcpService {
             resource_read: true,
             tool_call_progress_events: true,
             startup_status_events: true,
-            ..McpServiceAvailability::default()
         }
     }
 }

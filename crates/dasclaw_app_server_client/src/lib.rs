@@ -7,17 +7,18 @@
 use std::io::{BufRead, Write};
 
 use dasclaw_app_server_protocol::{
-    AgentMessageDeltaEvent, CapabilitiesChangedEvent, CapabilitiesListResponse, ErrorCode,
-    ErrorEvent, HealthChangedEvent, HealthCheckParams, HealthCheckResponse, InitializeParams,
-    InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JSON_RPC_VERSION, JsonRpcError,
-    JsonRpcRequest, JsonRpcResponse, LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent,
-    ModelProviderInitializeConfig, NotificationsInitializedEvent, ProtocolSchemaResponse,
-    ReasoningSummaryPartAddedEvent, ReasoningSummaryTextDeltaEvent, ReasoningTextDeltaEvent,
-    ServerNotification, ShutdownParams, ShutdownResponse, ThreadListParams, ThreadListResponse,
-    ThreadReadParams, ThreadReadResponse, ThreadStartParams, ThreadStartResponse,
-    ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse, TurnCompletedEvent,
-    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, UserInput, WorkspaceInfo, event, method,
+    AgentMessageDeltaEvent, CapabilitiesChangedEvent, CapabilitiesListResponse,
+    ConfigRequirementsReadResponse, ErrorCode, ErrorEvent, HealthChangedEvent, HealthCheckParams,
+    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JSON_RPC_VERSION, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent, ModelProviderInitializeConfig,
+    NotificationsInitializedEvent, ProtocolSchemaResponse, ReasoningSummaryPartAddedEvent,
+    ReasoningSummaryTextDeltaEvent, ReasoningTextDeltaEvent, ServerNotification, ShutdownParams,
+    ShutdownResponse, ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse,
+    ThreadStartParams, ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams,
+    ThreadTurnsListResponse, TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse,
+    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
+    UserInput, WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -237,6 +238,22 @@ where
         &mut self,
     ) -> Result<AppServerClientRoundTrip<ProtocolSchemaResponse>, AppServerClientError> {
         self.request_with_notifications::<(), ProtocolSchemaResponse>(method::PROTOCOL_SCHEMA, None)
+    }
+
+    pub fn config_requirements_read(
+        &mut self,
+    ) -> Result<ConfigRequirementsReadResponse, AppServerClientError> {
+        self.request::<(), ConfigRequirementsReadResponse>(method::CONFIG_REQUIREMENTS_READ, None)
+    }
+
+    pub fn config_requirements_read_with_notifications(
+        &mut self,
+    ) -> Result<AppServerClientRoundTrip<ConfigRequirementsReadResponse>, AppServerClientError>
+    {
+        self.request_with_notifications::<(), ConfigRequirementsReadResponse>(
+            method::CONFIG_REQUIREMENTS_READ,
+            None,
+        )
     }
 
     pub fn shutdown(
@@ -884,7 +901,7 @@ mod tests {
     use std::cell::RefCell;
     use std::io::{Cursor, Read};
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -894,7 +911,7 @@ mod tests {
     };
     use dasclaw_app_server_protocol::{
         ClientInfo, ClientModelConfig, CompatibilityProfile, LifecycleState,
-        ModelProviderInitializeConfig, ProtocolVersion, ShutdownReason, TransportKind,
+        ModelProviderInitializeConfig, ProtocolVersion, SandboxMode, ShutdownReason, TransportKind,
     };
     use serde_json::json;
 
@@ -997,6 +1014,8 @@ mod tests {
         let response = client
             .thread_start(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should return a thread view");
         let list = client
@@ -1037,6 +1056,8 @@ mod tests {
         let thread = client
             .thread_start(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should return a thread view");
 
@@ -1047,6 +1068,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should create a pending in-memory turn");
         let interrupted = client
@@ -1085,6 +1108,111 @@ mod tests {
             read.turn.status,
             dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
         );
+    }
+
+    #[test]
+    fn client_reads_config_requirements_with_typed_helper() {
+        let mut server = AppServer::new();
+        let transport = InProcessTransport::new(|line: &str| server.handle_json_rpc(line));
+        let mut client = AppServerClient::new(transport);
+
+        client
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "sandbox-client-test".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should make sandbox requirements readable");
+
+        let requirements = client
+            .config_requirements_read()
+            .expect("configRequirements/read should decode through typed client helper");
+
+        assert_eq!(
+            requirements.allowed_sandbox_modes,
+            vec![SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite]
+        );
+    }
+
+    #[test]
+    fn client_sends_thread_and_turn_sandbox_fields_to_runtime_bridge() {
+        #[derive(Debug, Default)]
+        struct SandboxRecordingBridge {
+            calls: Mutex<Vec<RuntimeTurnStartRequest>>,
+        }
+
+        impl RuntimeBridge for SandboxRecordingBridge {
+            fn start_turn(
+                &self,
+                request: RuntimeTurnStartRequest,
+            ) -> Result<(), RuntimeBridgeError> {
+                self.calls.lock().expect("calls lock").push(request);
+                Ok(())
+            }
+
+            fn cancel_turn(
+                &self,
+                _request: RuntimeTurnCancelRequest,
+            ) -> Result<(), RuntimeBridgeError> {
+                Ok(())
+            }
+
+            fn shutdown(&self) {}
+        }
+
+        let bridge = Arc::new(SandboxRecordingBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone());
+        let transport = InProcessTransport::new(|line: &str| server.handle_json_rpc(line));
+        let mut client = AppServerClient::new(transport);
+
+        client
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "sandbox-client-test".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed before sandbox turn");
+        let thread = client
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp".to_string()),
+                sandbox: Some(SandboxMode::WorkspaceWrite),
+                permission_profile: None,
+            })
+            .expect("thread/start should send sandbox mode");
+
+        client
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id,
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: Some(json!({ "type": "read-only" })),
+                permission_profile: None,
+            })
+            .expect("turn/start should send sandbox override");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        let policy = calls[0]
+            .sandbox_context
+            .policy
+            .as_ref()
+            .expect("turn sandbox policy should be passed");
+        assert!(!policy.has_full_disk_write_access());
+        assert!(!policy.has_full_network_access());
     }
 
     #[test]
@@ -1131,6 +1259,8 @@ mod tests {
         let thread = client
             .thread_start_with_notifications(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should return a thread view");
         let started = client
@@ -1140,6 +1270,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should return a turn view");
 
@@ -1188,6 +1320,8 @@ mod tests {
         let thread = client
             .thread_start(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should return a thread view");
         let started = client
@@ -1313,6 +1447,8 @@ mod tests {
         let thread = client
             .thread_start_with_notifications(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should create a thread through the v2 helper");
         assert!(matches!(
@@ -1384,6 +1520,8 @@ mod tests {
         let thread = client
             .thread_start_with_notifications(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should create a thread");
         let turn = client
@@ -1393,6 +1531,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should return a pending turn before failure notifications");
 
@@ -1455,6 +1595,8 @@ mod tests {
         let thread = client
             .thread_start_with_notifications(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should create a thread");
         let turn = client
@@ -1464,6 +1606,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should create a pending turn");
         let interrupt = client
@@ -1783,6 +1927,8 @@ mod tests {
         let thread = client
             .thread_start_with_notifications(ThreadStartParams {
                 cwd: Some("Draft".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should return result and notification");
         let started = client
@@ -1792,6 +1938,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should return result and notification");
         let interrupted = client
@@ -2170,6 +2318,8 @@ mod tests {
         let thread = client
             .thread_start(ThreadStartParams {
                 cwd: Some("overflow".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should consume the real server response");
         let overflow = client
@@ -2179,6 +2329,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect_err("overflow from the real server transcript should force reconnect");
         let reuse = client
@@ -2271,6 +2423,8 @@ mod tests {
         let thread = client
             .thread_start(ThreadStartParams {
                 cwd: Some("health poll".to_string()),
+                sandbox: None,
+                permission_profile: None,
             })
             .expect("thread/start should decode");
         let turn = client
@@ -2280,6 +2434,8 @@ mod tests {
                 cwd: None,
                 model: None,
                 summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
             })
             .expect("turn/start should decode before terminal update");
         let health = client

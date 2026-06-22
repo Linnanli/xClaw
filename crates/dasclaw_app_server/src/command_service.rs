@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::AppServerError;
 use crate::app_services::CommandExecService;
 use crate::blocking_runtime::BlockingTokioRuntime;
+use crate::sandbox_protocol::resolve_policy_override;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_EXEC_CAPABILITY: &str = "command_exec";
@@ -284,11 +285,6 @@ impl AppServerCommandExecService {
         if params.size.is_some() {
             return Err(command_unavailable("size requires tty support"));
         }
-        if params.sandbox_policy.is_some() {
-            return Err(command_unavailable(
-                "sandboxPolicy is not supported by the buffered sandbox executor",
-            ));
-        }
         if params.disable_timeout.unwrap_or(false) {
             return Err(command_unavailable(
                 "disableTimeout is not supported by the buffered sandbox executor",
@@ -337,9 +333,9 @@ impl AppServerCommandExecService {
                 "non-tty command streaming requires a streaming pipe backend",
             ));
         }
-        if params.sandbox_policy.is_some() {
+        if params.sandbox_policy.is_some() || params.permission_profile.is_some() {
             return Err(command_unavailable(
-                "sandboxPolicy is not supported by PTY streaming command exec",
+                "sandboxPolicy/permissionProfile are not supported by PTY streaming command exec until sandboxed PTY is implemented",
             ));
         }
         if params.disable_output_cap.unwrap_or(false) {
@@ -478,7 +474,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} cwd_guard=root-contained buffered_sandbox=read-only/no-network streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
+                    "root={} cwd_guard=root-contained buffered_sandbox=policy-override/default-read-only streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
                     self.root.display()
                 ));
                 health
@@ -505,6 +501,13 @@ impl CommandExecService for AppServerCommandExecService {
         let process_id = Self::process_id(&params);
         let command = Self::command_line(&params.command)?;
         let output_bytes_cap = params.output_bytes_cap;
+        let policy = resolve_policy_override(
+            params.sandbox_policy,
+            params.permission_profile,
+            &cwd,
+            COMMAND_EXEC_CAPABILITY,
+        )?
+        .unwrap_or_else(SandboxPolicy::new_read_only_policy);
         let env = Self::env(params.env);
         let timeout = params
             .timeout_ms
@@ -514,7 +517,7 @@ impl CommandExecService for AppServerCommandExecService {
         let response = self.runtime()?.block_on("command/exec", async move {
             let executor = SandboxedShellExecutor::new(timeout, false, None);
             let output = executor
-                .execute(&command, &cwd, SandboxPolicy::new_read_only_policy(), env)
+                .execute(&command, &cwd, policy, env)
                 .await
                 .map_err(map_exec_error)?;
             Ok(CommandExecResponse {
@@ -880,6 +883,7 @@ mod tests {
             env: BTreeMap::new(),
             process_id: None,
             sandbox_policy: None,
+            permission_profile: None,
             size: None,
             stream_stdin: None,
             stream_stdout_stderr: None,
@@ -944,6 +948,29 @@ mod tests {
             .expect_err("non-tty streaming stdout/stderr unsupported");
 
         assert!(error.to_string().contains("streaming pipe backend"));
+        assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_rejects_streaming_permission_profile_override() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf ready"]);
+        params.process_id = Some("pty_permission_profile".to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.permission_profile = Some(serde_json::json!({"type": "disabled"}));
+
+        let error = service
+            .exec(params)
+            .expect_err("permissionProfile override unsupported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandboxPolicy/permissionProfile are not supported by PTY streaming")
+        );
         assert!(service.drain_output_delta_events().is_empty());
     }
 
@@ -1443,7 +1470,7 @@ mod tests {
             .expect("ready service should describe limits");
 
         assert!(message.contains("cwd_guard=root-contained"));
-        assert!(message.contains("buffered_sandbox=read-only/no-network"));
+        assert!(message.contains("buffered_sandbox=policy-override/default-read-only"));
         assert!(message.contains("streaming_sandbox=none/unsandboxed"));
         assert!(message.contains("read_scope=host-read-only"));
         assert!(message.contains("not_workspace_read_limited"));
@@ -1485,13 +1512,6 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
-        let mut sandbox_policy = exec_params(vec!["rustc", "--version"]);
-        sandbox_policy.sandbox_policy = Some(serde_json::json!({"mode": "unrestricted"}));
-        let error = service
-            .exec(sandbox_policy)
-            .expect_err("sandbox policy override unsupported");
-        assert!(error.to_string().contains("sandboxPolicy is not supported"));
-
         let mut disable_timeout = exec_params(vec!["rustc", "--version"]);
         disable_timeout.disable_timeout = Some(true);
         let error = service
@@ -1509,6 +1529,93 @@ mod tests {
             .exec(size_without_tty)
             .expect_err("terminal size requires tty");
         assert!(error.to_string().contains("size requires tty support"));
+    }
+
+    #[test]
+    fn command_service_accepts_buffered_read_only_sandbox_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut params = exec_params(vec!["echo", "hello"]);
+        params.sandbox_policy = Some(serde_json::json!({
+            "type": "read-only",
+            "network_access": false
+        }));
+
+        let response = service.exec(params).expect("read-only sandbox command");
+        assert_eq!(response.exit_code, 0);
+        assert!(response.stdout.contains("hello"));
+    }
+
+    #[test]
+    fn command_service_accepts_buffered_read_only_permission_profile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut params = exec_params(vec!["echo", "profile"]);
+        params.permission_profile = Some(serde_json::json!({}));
+
+        let response = service
+            .exec(params)
+            .expect("read-only permissionProfile command");
+        assert_eq!(response.exit_code, 0);
+        assert!(response.stdout.contains("profile"));
+    }
+
+    #[test]
+    fn command_service_rejects_ambiguous_sandbox_policy_and_permission_profile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut params = exec_params(vec!["rustc", "--version"]);
+        params.sandbox_policy = Some(serde_json::json!({ "type": "read-only" }));
+        params.permission_profile = Some(serde_json::json!({ "type": "disabled" }));
+
+        let error = service.exec(params).expect_err("ambiguous override");
+        assert!(
+            format!("{error:?}").contains("choose either sandboxPolicy or permissionProfile"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn command_service_keeps_danger_full_access_fail_closed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut params = exec_params(vec!["rustc", "--version"]);
+        params.sandbox_policy = Some(serde_json::json!({
+            "type": "danger-full-access"
+        }));
+
+        let error = service
+            .exec(params)
+            .expect_err("danger full access must be refused");
+        assert!(
+            format!("{error:?}").contains("FullAccess")
+                || format!("{error:?}").contains("full access"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_command_rejects_sandbox_override_until_pty_is_sandboxed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut params = exec_params(vec!["sh", "-c", "printf hi"]);
+        params.process_id = Some("proc_sandbox".to_string());
+        params.tty = Some(true);
+        params.sandbox_policy = Some(serde_json::json!({ "type": "read-only" }));
+
+        let error = service
+            .exec(params)
+            .expect_err("streaming sandbox unavailable");
+        assert!(
+            format!("{error:?}")
+                .contains("sandboxPolicy/permissionProfile are not supported by PTY streaming"),
+            "{error:?}"
+        );
     }
 
     #[cfg(unix)]
