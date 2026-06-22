@@ -28,7 +28,12 @@ export async function runClientToolRequest(
     return toolError(`Rejected unsafe URL: ${url}`)
   }
 
-  await runtime.openExternal(url)
+  try {
+    await runtime.openExternal(url)
+  } catch {
+    return toolError('Failed to open URL')
+  }
+
   return {
     contentItems: [{ type: 'inputText', text: `Opened URL: ${url}` }],
     success: true
