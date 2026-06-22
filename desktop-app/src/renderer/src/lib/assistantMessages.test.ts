@@ -9,7 +9,10 @@ import type {
   AppServerServerRequest,
   AppServerServerRequestResponse
 } from '../../../shared/appServerApi'
-import type { AppServerModelSelectorState } from '../hooks/useDasclawAssistantRuntime'
+import type {
+  AppServerModelSelectorState,
+  DasclawAssistantRuntime
+} from '../hooks/useDasclawAssistantRuntime'
 
 type ModelContextRegistration = {
   getModelContext: () => ModelContext
@@ -346,9 +349,11 @@ describe('useDasclawAssistantRuntime', () => {
   let notificationListener: ((notification: AppServerNotification) => void) | undefined
   let requestMock: ReturnType<typeof vi.fn>
   let respondServerRequestMock: ReturnType<typeof vi.fn>
+  let openExternalHttpUrlMock: ReturnType<typeof vi.fn>
+  let latestRuntime: DasclawAssistantRuntime | undefined
 
   function RuntimeProbe(): null {
-    useDasclawAssistantRuntime()
+    latestRuntime = useDasclawAssistantRuntime()
     return null
   }
 
@@ -361,6 +366,8 @@ describe('useDasclawAssistantRuntime', () => {
     removeNotificationListener = vi.fn()
     notificationListener = undefined
     respondServerRequestMock = vi.fn().mockResolvedValue(undefined)
+    openExternalHttpUrlMock = vi.fn().mockResolvedValue(undefined)
+    latestRuntime = undefined
     requestMock = vi.fn(async (method: string) => {
       if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
@@ -393,7 +400,8 @@ describe('useDasclawAssistantRuntime', () => {
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
-      openExternalHttpUrl: vi.fn().mockResolvedValue(undefined),
+      openExternalHttpUrl:
+        openExternalHttpUrlMock as Window['desktopAppServer']['openExternalHttpUrl'],
       onStatusChange: vi.fn(() => removeStatusListener),
       onNotification: vi.fn((callback) => {
         notificationListener = callback
@@ -442,103 +450,76 @@ describe('useDasclawAssistantRuntime', () => {
     })
   })
 
-  it('fail-safe rejects server requests until the renderer UI is implemented', async () => {
+  it('queues known R1 server requests without immediately responding', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))
     })
 
-    const cases: Array<
-      AppServerServerRequest & {
-        response: AppServerServerRequestResponse
-      }
-    > = [
-      {
-        hostId: 'local',
-        requestId: 'approval_1',
-        method: 'item/commandExecution/requestApproval',
-        params: {
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'turn_1:tool:bash',
-          toolCallId: 'call_1',
-          toolName: 'bash',
-          description: 'approve call to bash',
-          displayParameters: { cmd: 'echo hello' },
-          allowAlways: true
-        },
-        response: {
-          decision: {
-            kind: 'reject',
-            data: { reason: 'renderer approval UI is not implemented' }
-          }
-        }
-      },
-      {
-        hostId: 'local',
-        requestId: 'dynamic_tool_1',
-        method: 'item/tool/call',
-        params: {
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          callId: 'call_1',
-          namespace: 'client',
-          tool: 'open_url',
-          arguments: { url: 'https://example.test' }
-        },
-        response: {
-          contentItems: [{ type: 'inputText', text: 'renderer tool UI is not implemented' }],
-          success: false
-        }
-      },
-      {
-        hostId: 'local',
-        requestId: 'user_input_1',
-        method: 'item/tool/requestUserInput',
-        params: {
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'input_1',
-          questions: [{ id: 'name', header: 'Name', question: 'Name?' }]
-        },
-        response: { answers: {} }
-      },
-      {
-        hostId: 'local',
-        requestId: 'file_change_1',
-        method: 'item/fileChange/requestApproval',
-        params: {
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'file_1',
-          reason: 'modify src/app.ts'
-        },
-        response: { decision: 'decline' }
-      },
-      {
-        hostId: 'local',
-        requestId: 'permissions_1',
-        method: 'item/permissions/requestApproval',
-        params: {
-          threadId: 'thread_1',
-          turnId: 'turn_1',
-          itemId: 'permission_1',
-          cwd: '/workspace',
-          permissions: ['net:fetch']
-        },
-        response: { permissions: {}, scope: 'turn', strictAutoReview: true }
-      }
-    ]
+    const request = fileChangeApprovalRequest('file_change_1')
+    await act(async () => {
+      notificationListener?.(request)
+    })
 
-    for (const item of cases) {
-      await act(async () => {
-        notificationListener?.(item)
-        await Promise.resolve()
-      })
-    }
+    expect(latestRuntime?.serverRequests).toEqual([request])
+    expect(respondServerRequestMock).not.toHaveBeenCalled()
+  })
 
-    expect(respondServerRequestMock.mock.calls).toEqual(
-      cases.map((item) => [item.requestId, item.response])
-    )
+  it('responds to queued server requests and removes them from the queue', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = fileChangeApprovalRequest('file_change_1')
+    const response = {
+      decision: 'accept'
+    } satisfies AppServerServerRequestResponse<'item/fileChange/requestApproval'>
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await act(async () => {
+      await latestRuntime?.respondToServerRequest(request, response)
+    })
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('file_change_1', response)
+    expect(latestRuntime?.serverRequests).toEqual([])
+  })
+
+  it('rejects queued server requests with a fail-closed response and removes them from the queue', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = fileChangeApprovalRequest('file_change_1')
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await act(async () => {
+      await latestRuntime?.rejectServerRequest(request)
+    })
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('file_change_1', {
+      decision: 'decline'
+    })
+    expect(latestRuntime?.serverRequests).toEqual([])
+  })
+
+  it('queues dynamic tool calls without opening external URLs or responding in the background', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = toolCallRequest('dynamic_tool_1', {
+      url: 'https://example.test'
+    })
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    expect(latestRuntime?.serverRequests).toEqual([request])
+    expect(openExternalHttpUrlMock).not.toHaveBeenCalled()
+    expect(respondServerRequestMock).not.toHaveBeenCalled()
   })
 
   it('maps app-server reasoning and agent text notifications to assistant-ui parts', async () => {
@@ -684,5 +665,40 @@ function completedTurn(id: string, text = ''): Record<string, unknown> {
     startedAt: null,
     completedAt: null,
     durationMs: null
+  }
+}
+
+function fileChangeApprovalRequest(
+  requestId: string
+): AppServerServerRequest<'item/fileChange/requestApproval'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/fileChange/requestApproval',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'file_1',
+      reason: 'modify src/app.ts'
+    }
+  }
+}
+
+function toolCallRequest(
+  requestId: string,
+  args: unknown
+): AppServerServerRequest<'item/tool/call'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      namespace: 'client',
+      tool: 'open_url',
+      arguments: args
+    }
   }
 }

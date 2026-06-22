@@ -40,10 +40,21 @@ import type {
   AppServerAssistantContentPart,
   AppServerTurnTracker
 } from '../lib/appServerTurnTracker'
+import {
+  failClosedServerRequestResponse,
+  queueServerRequest,
+  removeServerRequest
+} from '../lib/serverRequests'
 
-type DasclawAssistantRuntime = {
+export type DasclawAssistantRuntime = {
   runtime: AssistantRuntime
   status: AppServerStatus | undefined
+  serverRequests: readonly AppServerServerRequest[]
+  respondToServerRequest: <Method extends AppServerServerRequestMethod>(
+    request: AppServerServerRequest<Method>,
+    response: AppServerServerRequestResponse<Method>
+  ) => Promise<void>
+  rejectServerRequest: (request: AppServerServerRequest) => Promise<void>
 }
 
 export type AppServerModelSelectorState = {
@@ -110,6 +121,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
   const [messages, setMessages] = useState<ThreadMessage[]>(initialAssistantMessages)
   const [isRunning, setIsRunning] = useState(false)
   const [status, setStatus] = useState<AppServerStatus>()
+  const [serverRequests, setServerRequests] = useState<AppServerServerRequest[]>([])
   const threadIdRef = useRef<string | undefined>(undefined)
   const pendingTurnMessageIdsRef = useRef(new Map<string, string>())
   const turnTrackerRef = useRef<AppServerTurnTracker | undefined>(undefined)
@@ -127,7 +139,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     const removeStatusListener = window.desktopAppServer.onStatusChange(setStatus)
     const removeNotificationListener = window.desktopAppServer.onNotification((notification) => {
       if (isServerRequest(notification)) {
-        rejectServerRequestUntilUiExists(notification)
+        setServerRequests((current) => queueServerRequest(current, notification))
         return
       }
       turnTracker.handleNotification(notification)
@@ -139,6 +151,25 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
       turnTracker.clear()
       turnTrackerRef.current = undefined
     }
+  }, [])
+
+  const respondToServerRequest = useCallback(
+    async <Method extends AppServerServerRequestMethod>(
+      request: AppServerServerRequest<Method>,
+      response: AppServerServerRequestResponse<Method>
+    ) => {
+      await window.desktopAppServer.respondServerRequest(request.requestId, response)
+      setServerRequests((current) => removeServerRequest(current, request))
+    },
+    []
+  )
+
+  const rejectServerRequest = useCallback(async (request: AppServerServerRequest) => {
+    await window.desktopAppServer.respondServerRequest(
+      request.requestId,
+      failClosedServerRequestResponse(request.method)
+    )
+    setServerRequests((current) => removeServerRequest(current, request))
   }, [])
 
   const runPromptTurn = useCallback(async (pendingId: string, prompt: string) => {
@@ -240,7 +271,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     )
   )
 
-  return { runtime, status }
+  return { runtime, status, serverRequests, respondToServerRequest, rejectServerRequest }
 }
 
 function modelProviderUnavailableOption(message: string): AssistantModelOption {
@@ -255,40 +286,17 @@ function modelProviderUnavailableOption(message: string): AssistantModelOption {
 function isServerRequest(
   notification: AppServerNotification
 ): notification is AppServerServerRequest {
-  return 'requestId' in notification && typeof notification.method === 'string'
+  return 'requestId' in notification && isServerRequestMethod(notification.method)
 }
 
-function rejectServerRequestUntilUiExists(notification: AppServerServerRequest): void {
-  void window.desktopAppServer.respondServerRequest(
-    notification.requestId,
-    failClosedRendererServerRequestResponse(notification.method)
+function isServerRequestMethod(method: string): method is AppServerServerRequestMethod {
+  return (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/permissions/requestApproval' ||
+    method === 'item/fileChange/requestApproval' ||
+    method === 'item/tool/requestUserInput' ||
+    method === 'item/tool/call'
   )
-}
-
-function failClosedRendererServerRequestResponse(
-  method: AppServerServerRequestMethod
-): AppServerServerRequestResponse {
-  if (method === 'item/tool/call') {
-    return {
-      contentItems: [{ type: 'inputText', text: 'renderer tool UI is not implemented' }],
-      success: false
-    }
-  }
-  if (method === 'item/tool/requestUserInput') {
-    return { answers: {} }
-  }
-  if (method === 'item/fileChange/requestApproval') {
-    return { decision: 'decline' }
-  }
-  if (method === 'item/permissions/requestApproval') {
-    return { permissions: {}, scope: 'turn', strictAutoReview: true }
-  }
-  return {
-    decision: {
-      kind: 'reject',
-      data: { reason: 'renderer approval UI is not implemented' }
-    }
-  }
 }
 
 function requireTurnTracker(
