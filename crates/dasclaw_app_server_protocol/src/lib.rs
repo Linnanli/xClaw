@@ -4,7 +4,7 @@
 //! does not define agent-loop internals or tool-execution traits; those stay
 //! in `dasclaw_runtime`.
 
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +89,8 @@ pub mod event {
     pub const ITEM_COMMAND_EXECUTION_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
     pub const ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION: &str =
         "item/commandExecution/terminalInteraction";
+    pub const ITEM_FILE_CHANGE_OUTPUT_DELTA: &str = "item/fileChange/outputDelta";
+    pub const ITEM_FILE_CHANGE_PATCH_UPDATED: &str = "item/fileChange/patchUpdated";
     pub const SKILLS_CHANGED: &str = "skills/changed";
     pub const ITEM_MCP_TOOL_CALL_PROGRESS: &str = "item/mcpToolCall/progress";
     pub const MCP_SERVER_OAUTH_LOGIN_COMPLETED: &str = "mcpServer/oauthLogin/completed";
@@ -1875,6 +1877,203 @@ pub struct PermissionsApprovalRequest {
     pub allow_always: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicToolCallParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicToolCallResponse {
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum DynamicToolCallOutputContentItem {
+    #[serde(rename_all = "camelCase")]
+    InputText { text: String },
+    #[serde(rename_all = "camelCase")]
+    InputImage { image_url: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<ToolRequestUserInputOption>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub questions: Vec<ToolRequestUserInputQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputAnswer {
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputResponse {
+    pub answers: HashMap<String, ToolRequestUserInputAnswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileChangeApprovalDecision {
+    Accept,
+    AcceptForSession,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeRequestApprovalResponse {
+    pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub permissions: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionGrantScope {
+    #[default]
+    Turn,
+    Session,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsRequestApprovalResponse {
+    pub permissions: serde_json::Value,
+    #[serde(default)]
+    pub scope: PermissionGrantScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_auto_review: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileUpdateKind {
+    Add,
+    Delete,
+    Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileUpdateChange {
+    pub path: String,
+    pub kind: FileUpdateKind,
+    pub unified_diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeOutputDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangePatchUpdatedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub changes: Vec<FileUpdateChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianApprovalReview {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_authorization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoApprovalReviewStartedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub review_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_item_id: Option<String>,
+    pub review: GuardianApprovalReview,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoApprovalReviewCompletedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub review_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_item_id: Option<String>,
+    pub review: GuardianApprovalReview,
+    pub action: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum AppServerApprovalDecision {
@@ -2430,6 +2629,30 @@ impl ServerNotification {
         event: CommandExecutionTerminalInteractionEvent,
     ) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION, event)
+    }
+
+    pub fn file_change_output_delta(
+        event: FileChangeOutputDeltaEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_FILE_CHANGE_OUTPUT_DELTA, event)
+    }
+
+    pub fn file_change_patch_updated(
+        event: FileChangePatchUpdatedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_FILE_CHANGE_PATCH_UPDATED, event)
+    }
+
+    pub fn auto_approval_review_started(
+        event: AutoApprovalReviewStartedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_AUTO_APPROVAL_REVIEW_STARTED, event)
+    }
+
+    pub fn auto_approval_review_completed(
+        event: AutoApprovalReviewCompletedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED, event)
     }
 
     pub fn skills_changed(event: SkillsChangedNotification) -> Result<Self, serde_json::Error> {
@@ -4079,6 +4302,355 @@ mod tests {
             server_request::ITEM_TOOL_REQUEST_USER_INPUT
         );
         assert_eq!(user_input_params["prompt"], "continue?");
+    }
+
+    #[test]
+    fn r1_server_requests_serialize_codex_v2_shapes() {
+        let dynamic_tool = JsonRpcServerRequest::new(
+            "tool_1",
+            server_request::ITEM_TOOL_CALL,
+            DynamicToolCallParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                call_id: "call_1".to_string(),
+                namespace: Some("client".to_string()),
+                tool: "open_url".to_string(),
+                arguments: serde_json::json!({"url":"https://example.test"}),
+            },
+        )
+        .expect("dynamic tool server request should serialize");
+        let user_input = JsonRpcServerRequest::new(
+            "input_1",
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            ToolRequestUserInputParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:tool:ask".to_string(),
+                questions: vec![ToolRequestUserInputQuestion {
+                    id: "choice".to_string(),
+                    header: "Mode".to_string(),
+                    question: "Pick a mode".to_string(),
+                    is_other: false,
+                    is_secret: false,
+                    options: Some(vec![ToolRequestUserInputOption {
+                        label: "Safe".to_string(),
+                        description: "Continue with read-only work".to_string(),
+                    }]),
+                }],
+            },
+        )
+        .expect("tool user input server request should serialize");
+        let file_change = JsonRpcServerRequest::new(
+            "file_1",
+            server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+            FileChangeRequestApprovalParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:file:patch".to_string(),
+                reason: Some("apply generated patch".to_string()),
+                grant_root: Some("/workspace".to_string()),
+            },
+        )
+        .expect("file change approval server request should serialize");
+        let permissions = JsonRpcServerRequest::new(
+            "perm_1",
+            server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+            PermissionsRequestApprovalParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:permission:network".to_string(),
+                cwd: "/workspace".to_string(),
+                reason: Some("network access required".to_string()),
+                permissions: serde_json::json!({"network":{"allow":["example.test"]}}),
+            },
+        )
+        .expect("permissions approval server request should serialize");
+
+        let user_input_params = user_input
+            .params
+            .expect("tool user input server request should include params");
+        let file_change_params = file_change
+            .params
+            .expect("file change approval server request should include params");
+        let permissions_params = permissions
+            .params
+            .expect("permissions approval server request should include params");
+
+        assert_eq!(
+            serde_json::to_value(&dynamic_tool)
+                .expect("dynamic tool server request should serialize to JSON"),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "tool_1",
+                "method": "item/tool/call",
+                "params": {
+                    "threadId": "thread_1",
+                    "turnId": "turn_1",
+                    "callId": "call_1",
+                    "namespace": "client",
+                    "tool": "open_url",
+                    "arguments": {"url":"https://example.test"}
+                }
+            })
+        );
+
+        assert_eq!(
+            user_input_params,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:tool:ask",
+                "questions": [{
+                    "id": "choice",
+                    "header": "Mode",
+                    "question": "Pick a mode",
+                    "isOther": false,
+                    "isSecret": false,
+                    "options": [{
+                        "label": "Safe",
+                        "description": "Continue with read-only work"
+                    }]
+                }]
+            })
+        );
+
+        assert_eq!(
+            file_change_params,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:file:patch",
+                "reason": "apply generated patch",
+                "grantRoot": "/workspace"
+            })
+        );
+
+        assert_eq!(
+            permissions_params,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:permission:network",
+                "cwd": "/workspace",
+                "reason": "network access required",
+                "permissions": {"network":{"allow":["example.test"]}}
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(DynamicToolCallParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                call_id: "call_2".to_string(),
+                namespace: None,
+                tool: "fetch".to_string(),
+                arguments: serde_json::json!({}),
+            })
+            .expect("dynamic tool params without namespace should serialize"),
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "callId": "call_2",
+                "tool": "fetch",
+                "arguments": {}
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(FileChangeRequestApprovalParams {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:file:patch".to_string(),
+                reason: None,
+                grant_root: None,
+            })
+            .expect("file change params without optional fields should serialize"),
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:file:patch"
+            })
+        );
+    }
+
+    #[test]
+    fn r1_response_payloads_deserialize_by_kind() {
+        let dynamic: DynamicToolCallResponse = serde_json::from_value(serde_json::json!({
+            "contentItems": [{"type": "inputText", "text": "opened"}],
+            "success": true
+        }))
+        .expect("dynamic tool response should deserialize");
+        let user_input: ToolRequestUserInputResponse = serde_json::from_value(serde_json::json!({
+            "answers": {
+                "choice": {"answers": ["Safe"]}
+            }
+        }))
+        .expect("tool user input response should deserialize");
+        let file_change: FileChangeRequestApprovalResponse =
+            serde_json::from_value(serde_json::json!({"decision": "acceptForSession"}))
+                .expect("file change response should deserialize");
+        let permissions: PermissionsRequestApprovalResponse =
+            serde_json::from_value(serde_json::json!({
+                "permissions": {"network":{"allow":["example.test"]}},
+                "scope": "session",
+                "strictAutoReview": true
+            }))
+            .expect("permissions response should deserialize");
+        let default_permissions: PermissionsRequestApprovalResponse =
+            serde_json::from_value(serde_json::json!({
+                "permissions": {}
+            }))
+            .expect("permissions response should default missing optional fields");
+
+        assert_eq!(
+            dynamic.content_items,
+            vec![DynamicToolCallOutputContentItem::InputText {
+                text: "opened".to_string(),
+            }]
+        );
+        assert_eq!(
+            user_input.answers["choice"].answers,
+            vec!["Safe".to_string()]
+        );
+        assert_eq!(
+            file_change.decision,
+            FileChangeApprovalDecision::AcceptForSession
+        );
+        assert_eq!(permissions.scope, PermissionGrantScope::Session);
+        assert_eq!(permissions.strict_auto_review, Some(true));
+        assert_eq!(default_permissions.scope, PermissionGrantScope::Turn);
+        assert_eq!(default_permissions.strict_auto_review, None);
+        assert_eq!(
+            serde_json::to_value(default_permissions)
+                .expect("default permissions response should serialize"),
+            serde_json::json!({
+                "permissions": {},
+                "scope": "turn"
+            })
+        );
+    }
+
+    #[test]
+    fn r1_file_change_and_auto_review_notifications_serialize() {
+        let output = ServerNotification::file_change_output_delta(FileChangeOutputDeltaEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: "turn_1".to_string(),
+            item_id: "turn_1:file:patch".to_string(),
+            delta: "patched src/lib.rs".to_string(),
+        })
+        .expect("file change output delta should serialize");
+        let patch = ServerNotification::file_change_patch_updated(FileChangePatchUpdatedEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: "turn_1".to_string(),
+            item_id: "turn_1:file:patch".to_string(),
+            changes: vec![FileUpdateChange {
+                path: "src/lib.rs".to_string(),
+                kind: FileUpdateKind::Update,
+                unified_diff: "@@ -1 +1 @@".to_string(),
+            }],
+        })
+        .expect("file change patch update should serialize");
+        let started =
+            ServerNotification::auto_approval_review_started(AutoApprovalReviewStartedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                review_id: "review_1".to_string(),
+                target_item_id: Some("turn_1:tool:shell".to_string()),
+                review: GuardianApprovalReview {
+                    status: "inProgress".to_string(),
+                    risk_level: Some("low".to_string()),
+                    user_authorization: None,
+                    rationale: Some("read-only command".to_string()),
+                },
+                action: "review".to_string(),
+            })
+            .expect("auto approval review started should serialize");
+        let completed =
+            ServerNotification::auto_approval_review_completed(AutoApprovalReviewCompletedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                review_id: "review_1".to_string(),
+                target_item_id: Some("turn_1:tool:shell".to_string()),
+                review: GuardianApprovalReview {
+                    status: "approved".to_string(),
+                    risk_level: Some("low".to_string()),
+                    user_authorization: Some("allowed".to_string()),
+                    rationale: Some("command is read-only".to_string()),
+                },
+                action: "review".to_string(),
+            })
+            .expect("auto approval review completed should serialize");
+
+        assert_eq!(
+            serde_json::to_value(output).expect("file change output delta should serialize"),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "item/fileChange/outputDelta",
+                "params": {
+                    "threadId": "thread_1",
+                    "turnId": "turn_1",
+                    "itemId": "turn_1:file:patch",
+                    "delta": "patched src/lib.rs"
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(patch).expect("file change patch update should serialize"),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "item/fileChange/patchUpdated",
+                "params": {
+                    "threadId": "thread_1",
+                    "turnId": "turn_1",
+                    "itemId": "turn_1:file:patch",
+                    "changes": [{
+                        "path": "src/lib.rs",
+                        "kind": "update",
+                        "unifiedDiff": "@@ -1 +1 @@"
+                    }]
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(started).expect("auto approval review started should serialize"),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "item/autoApprovalReview/started",
+                "params": {
+                    "threadId": "thread_1",
+                    "turnId": "turn_1",
+                    "reviewId": "review_1",
+                    "targetItemId": "turn_1:tool:shell",
+                    "review": {
+                        "status": "inProgress",
+                        "riskLevel": "low",
+                        "rationale": "read-only command"
+                    },
+                    "action": "review"
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(completed)
+                .expect("auto approval review completed should serialize"),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "item/autoApprovalReview/completed",
+                "params": {
+                    "threadId": "thread_1",
+                    "turnId": "turn_1",
+                    "reviewId": "review_1",
+                    "targetItemId": "turn_1:tool:shell",
+                    "review": {
+                        "status": "approved",
+                        "riskLevel": "low",
+                        "userAuthorization": "allowed",
+                        "rationale": "command is read-only"
+                    },
+                    "action": "review"
+                }
+            })
+        );
     }
 
     #[test]
