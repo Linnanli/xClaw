@@ -29,6 +29,8 @@ const desktopAppServer: DesktopAppServerApi = {
   stop: () => ipcRenderer.invoke('app-server:stop'),
   getStatus: () => ipcRenderer.invoke('app-server:get-status'),
   checkHealth: () => ipcRenderer.invoke('app-server:check-health'),
+  openExternalHttpUrl: (url: string) =>
+    ipcRenderer.invoke('app-server:open-external-http-url', { url }) as Promise<void>,
   onStatusChange: (callback: (status: AppServerStatus) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: AppServerStatus): void => {
       callback(status)

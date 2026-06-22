@@ -205,6 +205,7 @@ export type DesktopAppServerApi = {
   stop(): Promise<AppServerStatus>
   getStatus(): Promise<AppServerStatus>
   checkHealth(): Promise<AppServerStatus>
+  openExternalHttpUrl(url: string): Promise<void>
   onStatusChange(callback: (status: AppServerStatus) => void): () => void
   onNotification(callback: (notification: AppServerNotification) => void): () => void
 }

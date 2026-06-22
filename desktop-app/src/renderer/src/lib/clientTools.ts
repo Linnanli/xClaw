@@ -10,9 +10,7 @@ type ClientToolRuntime = {
 export async function runClientToolRequest(
   request: AppServerServerRequest<'item/tool/call'>,
   runtime: ClientToolRuntime = {
-    openExternal: (url) => {
-      window.open(url, '_blank', 'noopener')
-    }
+    openExternal: (url) => window.desktopAppServer.openExternalHttpUrl(url)
   }
 ): Promise<AppServerDynamicToolCallResponse> {
   const tool = request.params.tool
@@ -25,7 +23,7 @@ export async function runClientToolRequest(
     return toolError('open_url requires a string url argument')
   }
   if (!isSafeExternalUrl(url)) {
-    return toolError(`Rejected unsafe URL: ${url}`)
+    return toolError('Rejected unsafe URL')
   }
 
   try {
@@ -35,7 +33,7 @@ export async function runClientToolRequest(
   }
 
   return {
-    contentItems: [{ type: 'inputText', text: `Opened URL: ${url}` }],
+    contentItems: [{ type: 'inputText', text: 'Opened URL' }],
     success: true
   }
 }

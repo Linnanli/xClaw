@@ -265,6 +265,7 @@ describe('useAppServerModelSelectorState', () => {
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
+      openExternalHttpUrl: vi.fn().mockResolvedValue(undefined),
       onStatusChange: vi.fn(() => vi.fn()),
       onNotification: vi.fn(() => vi.fn())
     }
@@ -392,6 +393,7 @@ describe('useDasclawAssistantRuntime', () => {
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
+      openExternalHttpUrl: vi.fn().mockResolvedValue(undefined),
       onStatusChange: vi.fn(() => removeStatusListener),
       onNotification: vi.fn((callback) => {
         notificationListener = callback

@@ -9,6 +9,27 @@ import type { AppServerServerRequestResponse } from '../shared/appServerApi'
 
 const appServerManager = new AppServerManager()
 
+function isExternalHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+async function openExternalHttpUrl(url: string): Promise<void> {
+  if (!isExternalHttpUrl(url)) {
+    throw new Error('external URL must be http(s)')
+  }
+
+  try {
+    await shell.openExternal(url)
+  } catch {
+    throw new Error('failed to open external URL')
+  }
+}
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow(
@@ -23,7 +44,11 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (isExternalHttpUrl(details.url)) {
+      void shell.openExternal(details.url).catch(() => {
+        console.error('failed to open external URL')
+      })
+    }
     return { action: 'deny' }
   })
   installWindowContextMenu(mainWindow, Menu)
@@ -109,6 +134,16 @@ app.whenReady().then(() => {
   ipcMain.handle('app-server:stop', () => appServerManager.stop())
   ipcMain.handle('app-server:get-status', () => appServerManager.getStatus())
   ipcMain.handle('app-server:check-health', () => appServerManager.checkHealth())
+  ipcMain.handle('app-server:open-external-http-url', (_, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('external URL payload must be an object')
+    }
+    const request = payload as { url?: unknown }
+    if (typeof request.url !== 'string') {
+      throw new Error('external URL must be a string')
+    }
+    return openExternalHttpUrl(request.url)
+  })
 
   createWindow()
   void appServerManager.preconnect()
