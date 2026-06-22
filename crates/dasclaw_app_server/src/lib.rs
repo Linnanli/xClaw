@@ -36,9 +36,9 @@ use dasclaw_app_server_protocol::{
     CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallParams, DynamicToolCallResponse, ErrorCode,
-    ErrorData, ErrorEvent, FileChangeApprovalDecision, FileChangeOutputDeltaEvent,
-    FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent, FileChangeApprovalDecision,
+    FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
     FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
     FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
     FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
@@ -81,6 +81,7 @@ use dasclaw_runtime::LlmProviderResponder;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 pub const SERVER_NAME: &str = "dasclaw_app_server";
@@ -405,6 +406,38 @@ fn approval_decision_to_runtime(
     }
 }
 
+fn failed_runtime_server_request_response(
+    kind: PendingServerRequestKind,
+    reason: &str,
+) -> RuntimeServerRequestResponse {
+    match kind {
+        PendingServerRequestKind::CommandApproval => {
+            RuntimeServerRequestResponse::Approval(dasclaw_runtime::ApprovalDecision::Reject {
+                reason: Some(reason.to_string()),
+            })
+        }
+        PendingServerRequestKind::DynamicToolCall => {
+            RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: reason.to_string(),
+                }],
+                success: false,
+            })
+        }
+        PendingServerRequestKind::ToolUserInput => {
+            RuntimeServerRequestResponse::ToolUserInput(ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            })
+        }
+        PendingServerRequestKind::FileChangeApproval => {
+            RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Cancel)
+        }
+        PendingServerRequestKind::PermissionsApproval => {
+            RuntimeServerRequestResponse::Permissions(denied_permissions_response())
+        }
+    }
+}
+
 fn server_request_resolution_outcome(
     payload: &RuntimeServerRequestResponse,
 ) -> (ServerRequestResolutionOutcome, Option<String>) {
@@ -425,9 +458,18 @@ fn server_request_resolution_outcome(
                 )
             }
         }
-        RuntimeServerRequestResponse::ToolUserInput(_)
-        | RuntimeServerRequestResponse::Permissions(_) => {
+        RuntimeServerRequestResponse::ToolUserInput(_) => {
             (ServerRequestResolutionOutcome::Approved, None)
+        }
+        RuntimeServerRequestResponse::Permissions(response) => {
+            if response.permissions.is_null() {
+                (
+                    ServerRequestResolutionOutcome::Rejected,
+                    Some("permissions request denied".to_string()),
+                )
+            } else {
+                (ServerRequestResolutionOutcome::Approved, None)
+            }
         }
         RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Accept)
         | RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::AcceptForSession) => {
@@ -1804,16 +1846,7 @@ impl AppServer {
 
     fn fail_pending_server_request(&mut self, pending: PendingServerRequest, reason: String) {
         let runtime_reason = format!("server request response failed: {reason}");
-        if pending.kind == PendingServerRequestKind::CommandApproval {
-            let _ = self
-                .runtime_bridge
-                .resolve_approval(RuntimeApprovalDecision {
-                    request_id: pending.runtime_request_id.clone(),
-                    decision: dasclaw_runtime::ApprovalDecision::Reject {
-                        reason: Some(format!("approval response failed: {reason}")),
-                    },
-                });
-        }
+        self.resolve_failed_runtime_server_request(&pending, &reason);
         self.notifications
             .emit_server_request_resolved(ServerRequestResolvedEvent {
                 request_id: pending.request_id,
@@ -1823,6 +1856,28 @@ impl AppServer {
                 reason: Some(reason),
             });
         self.fail_pending_turn(pending.thread_id, pending.turn_id, runtime_reason);
+    }
+
+    fn resolve_failed_runtime_server_request(&self, pending: &PendingServerRequest, reason: &str) {
+        if pending.kind == PendingServerRequestKind::CommandApproval {
+            let _ = self
+                .runtime_bridge
+                .resolve_approval(RuntimeApprovalDecision {
+                    request_id: pending.runtime_request_id.clone(),
+                    decision: dasclaw_runtime::ApprovalDecision::Reject {
+                        reason: Some(format!("approval response failed: {reason}")),
+                    },
+                });
+            return;
+        }
+
+        let payload = failed_runtime_server_request_response(pending.kind, reason);
+        let _ = self
+            .runtime_bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: pending.runtime_request_id.clone(),
+                payload,
+            });
     }
 
     fn fail_pending_turn(&mut self, thread_id: String, turn_id: String, error: String) {
@@ -1947,7 +2002,7 @@ impl AppServer {
             return;
         }
 
-        let request_id = format!("tool_{}", request.request_id);
+        let request_id = request.request_id.clone();
         let runtime_request_id = request.request_id.clone();
         let server_request = match JsonRpcServerRequest::new(
             request_id.clone(),
@@ -1991,7 +2046,7 @@ impl AppServer {
             return;
         }
 
-        let request_id = format!("tool_input_{}", request.request_id);
+        let request_id = request.request_id.clone();
         let runtime_request_id = request.request_id.clone();
         let server_request = match JsonRpcServerRequest::new(
             request_id.clone(),
@@ -2033,7 +2088,7 @@ impl AppServer {
             return;
         }
 
-        let request_id = format!("file_change_{}", request.request_id);
+        let request_id = request.request_id.clone();
         let runtime_request_id = request.request_id.clone();
         let server_request = match JsonRpcServerRequest::new(
             request_id.clone(),
@@ -2076,7 +2131,7 @@ impl AppServer {
             return;
         }
 
-        let request_id = format!("permissions_{}", request.request_id);
+        let request_id = request.request_id.clone();
         let runtime_request_id = request.request_id.clone();
         let server_request = match JsonRpcServerRequest::new(
             request_id.clone(),
@@ -2124,6 +2179,8 @@ impl AppServer {
                             reason: Some("approval request timed out".to_string()),
                         },
                     });
+            } else {
+                self.resolve_failed_runtime_server_request(&pending, "server request timed out");
             }
             self.notifications
                 .emit_server_request_resolved(ServerRequestResolvedEvent {
@@ -3057,6 +3114,441 @@ pub enum RuntimeServerRequestResponse {
     Permissions(PermissionsRequestApprovalResponse),
 }
 
+#[derive(Debug)]
+enum PendingRuntimeClientRequest {
+    DynamicTool {
+        turn_id: String,
+        sender: oneshot::Sender<DynamicToolCallResponse>,
+    },
+    ToolUserInput {
+        turn_id: String,
+        sender: oneshot::Sender<ToolRequestUserInputResponse>,
+    },
+    FileChange {
+        turn_id: String,
+        sender: oneshot::Sender<FileChangeApprovalDecision>,
+    },
+    Permissions {
+        turn_id: String,
+        sender: oneshot::Sender<PermissionsRequestApprovalResponse>,
+    },
+}
+
+impl PendingRuntimeClientRequest {
+    fn turn_id(&self) -> &str {
+        match self {
+            Self::DynamicTool { turn_id, .. }
+            | Self::ToolUserInput { turn_id, .. }
+            | Self::FileChange { turn_id, .. }
+            | Self::Permissions { turn_id, .. } => turn_id,
+        }
+    }
+
+    fn fail(self) {
+        match self {
+            Self::DynamicTool { sender, .. } => {
+                let _ = sender.send(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "runtime request was cancelled".to_string(),
+                    }],
+                    success: false,
+                });
+            }
+            Self::ToolUserInput { sender, .. } => {
+                let _ = sender.send(ToolRequestUserInputResponse {
+                    answers: HashMap::new(),
+                });
+            }
+            Self::FileChange { sender, .. } => {
+                let _ = sender.send(FileChangeApprovalDecision::Cancel);
+            }
+            Self::Permissions { sender, .. } => {
+                let _ = sender.send(PermissionsRequestApprovalResponse {
+                    permissions: Value::Null,
+                    scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
+                    strict_auto_review: None,
+                });
+            }
+        }
+    }
+}
+
+type PendingRuntimeClientRequests = Arc<Mutex<HashMap<String, PendingRuntimeClientRequest>>>;
+
+#[derive(Clone)]
+pub struct RuntimeClientRequestContext {
+    thread_id: String,
+    turn_id: String,
+    cwd: PathBuf,
+    updates: RuntimeTurnUpdateSink,
+    pending_requests: PendingRuntimeClientRequests,
+}
+
+impl RuntimeClientRequestContext {
+    pub async fn request_dynamic_tool(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+        namespace: Option<String>,
+        tool: String,
+    ) -> DynamicToolCallResponse {
+        let (sender, receiver) = oneshot::channel();
+        let request_id = call.id.clone();
+        if self
+            .insert_pending_request(
+                request_id.clone(),
+                PendingRuntimeClientRequest::DynamicTool {
+                    turn_id: self.turn_id.clone(),
+                    sender,
+                },
+            )
+            .is_err()
+        {
+            return failed_dynamic_tool_response("runtime request registry lock poisoned");
+        }
+
+        self.updates.dynamic_tool_call_requested(
+            self.thread_id.clone(),
+            self.turn_id.clone(),
+            RuntimeDynamicToolCallRequest {
+                request_id,
+                call_id: call.id.clone(),
+                namespace,
+                tool,
+                arguments: call.arguments.clone(),
+            },
+        );
+
+        receiver.await.unwrap_or_else(|_| {
+            failed_dynamic_tool_response("dynamic tool request was cancelled before response")
+        })
+    }
+
+    pub async fn request_user_input(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+        questions: Vec<ToolRequestUserInputQuestion>,
+    ) -> ToolRequestUserInputResponse {
+        let (sender, receiver) = oneshot::channel();
+        let request_id = call.id.clone();
+        if self
+            .insert_pending_request(
+                request_id.clone(),
+                PendingRuntimeClientRequest::ToolUserInput {
+                    turn_id: self.turn_id.clone(),
+                    sender,
+                },
+            )
+            .is_err()
+        {
+            return ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+        }
+
+        self.updates.tool_user_input_requested(
+            self.thread_id.clone(),
+            self.turn_id.clone(),
+            RuntimeToolUserInputRequest {
+                request_id,
+                item_id: runtime_tool_item_id(&self.turn_id, &call.id),
+                questions,
+            },
+        );
+
+        receiver.await.unwrap_or(ToolRequestUserInputResponse {
+            answers: HashMap::new(),
+        })
+    }
+
+    pub async fn request_permissions(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+        permissions: Value,
+        reason: Option<String>,
+    ) -> PermissionsRequestApprovalResponse {
+        let (sender, receiver) = oneshot::channel();
+        let request_id = call.id.clone();
+        if self
+            .insert_pending_request(
+                request_id.clone(),
+                PendingRuntimeClientRequest::Permissions {
+                    turn_id: self.turn_id.clone(),
+                    sender,
+                },
+            )
+            .is_err()
+        {
+            return denied_permissions_response();
+        }
+
+        self.updates.permissions_approval_requested(
+            self.thread_id.clone(),
+            self.turn_id.clone(),
+            RuntimePermissionsApprovalRequest {
+                request_id,
+                item_id: runtime_tool_item_id(&self.turn_id, &call.id),
+                cwd: self.cwd.to_string_lossy().to_string(),
+                reason,
+                permissions,
+            },
+        );
+
+        receiver
+            .await
+            .unwrap_or_else(|_| denied_permissions_response())
+    }
+
+    pub async fn request_file_change_approval(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> FileChangeApprovalDecision {
+        let (sender, receiver) = oneshot::channel();
+        let request_id = call.id.clone();
+        if self
+            .insert_pending_request(
+                request_id.clone(),
+                PendingRuntimeClientRequest::FileChange {
+                    turn_id: self.turn_id.clone(),
+                    sender,
+                },
+            )
+            .is_err()
+        {
+            return FileChangeApprovalDecision::Cancel;
+        }
+
+        self.updates.file_change_approval_requested(
+            self.thread_id.clone(),
+            self.turn_id.clone(),
+            RuntimeFileChangeApprovalRequest {
+                request_id,
+                item_id: runtime_tool_item_id(&self.turn_id, &call.id),
+                reason: string_field(&call.arguments, "reason")
+                    .or_else(|| Some(format!("file change requested by {}", call.name))),
+                grant_root: string_field(&call.arguments, "path"),
+            },
+        );
+
+        receiver.await.unwrap_or(FileChangeApprovalDecision::Cancel)
+    }
+
+    fn insert_pending_request(
+        &self,
+        request_id: String,
+        request: PendingRuntimeClientRequest,
+    ) -> Result<(), RuntimeBridgeError> {
+        let mut pending = self.pending_requests.lock().map_err(|_| {
+            RuntimeBridgeError::retryable("runtime client request registry lock poisoned")
+        })?;
+        if pending.contains_key(&request_id) {
+            return Err(RuntimeBridgeError::retryable(format!(
+                "runtime client request is already pending: {request_id}"
+            )));
+        }
+        pending.insert(request_id, request);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimeClientToolExecutor {
+    context: RuntimeClientRequestContext,
+    fallback: Option<Arc<dyn dasclaw_runtime::ToolExecutor>>,
+}
+
+impl RuntimeClientToolExecutor {
+    #[must_use]
+    pub fn new(
+        context: RuntimeClientRequestContext,
+        fallback: Option<Arc<dyn dasclaw_runtime::ToolExecutor>>,
+    ) -> Self {
+        Self { context, fallback }
+    }
+
+    async fn execute_dynamic_tool(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+        namespace: Option<String>,
+        tool: String,
+    ) -> dasclaw_core::messages::ToolResult {
+        let response = self
+            .context
+            .request_dynamic_tool(call, namespace, tool)
+            .await;
+        dynamic_tool_response_to_tool_result(call, response)
+    }
+
+    async fn execute_user_input(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> dasclaw_core::messages::ToolResult {
+        let questions = match serde_json::from_value::<Vec<ToolRequestUserInputQuestion>>(
+            call.arguments
+                .get("questions")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new())),
+        ) {
+            Ok(questions) if !questions.is_empty() => questions,
+            _ => {
+                return error_tool_result(
+                    call,
+                    "request_user_input requires a non-empty questions array",
+                );
+            }
+        };
+        let response = self.context.request_user_input(call, questions).await;
+        let is_error = response.answers.is_empty();
+        json_tool_result(call, &response, is_error)
+    }
+
+    async fn execute_permissions(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> dasclaw_core::messages::ToolResult {
+        let permissions = call
+            .arguments
+            .get("permissions")
+            .cloned()
+            .unwrap_or_else(|| call.arguments.clone());
+        let reason = string_field(&call.arguments, "reason");
+        let response = self
+            .context
+            .request_permissions(call, permissions, reason)
+            .await;
+        let is_error = response.permissions.is_null();
+        json_tool_result(call, &response, is_error)
+    }
+
+    async fn execute_file_change(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        let decision = self.context.request_file_change_approval(call).await;
+        match decision {
+            FileChangeApprovalDecision::Accept | FileChangeApprovalDecision::AcceptForSession => {
+                match &self.fallback {
+                    Some(fallback) => fallback.execute(call).await,
+                    None => Ok(error_tool_result(
+                        call,
+                        "file change accepted but no file-changing executor is configured",
+                    )),
+                }
+            }
+            FileChangeApprovalDecision::Decline => {
+                Ok(error_tool_result(call, "file change denied by user"))
+            }
+            FileChangeApprovalDecision::Cancel => {
+                Ok(error_tool_result(call, "file change cancelled by user"))
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl dasclaw_runtime::ToolExecutor for RuntimeClientToolExecutor {
+    async fn execute(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        match classify_runtime_client_tool(&call.name) {
+            RuntimeClientToolKind::DynamicTool { namespace, tool } => {
+                Ok(self.execute_dynamic_tool(call, namespace, tool).await)
+            }
+            RuntimeClientToolKind::UserInput => Ok(self.execute_user_input(call).await),
+            RuntimeClientToolKind::Permissions => Ok(self.execute_permissions(call).await),
+            RuntimeClientToolKind::FileChange => self.execute_file_change(call).await,
+            RuntimeClientToolKind::Fallback => match &self.fallback {
+                Some(fallback) => fallback.execute(call).await,
+                None => Ok(error_tool_result(
+                    call,
+                    &format!("unknown tool: {}", call.name),
+                )),
+            },
+        }
+    }
+}
+
+enum RuntimeClientToolKind {
+    DynamicTool {
+        namespace: Option<String>,
+        tool: String,
+    },
+    UserInput,
+    Permissions,
+    FileChange,
+    Fallback,
+}
+
+fn classify_runtime_client_tool(name: &str) -> RuntimeClientToolKind {
+    match name {
+        "request_user_input" => RuntimeClientToolKind::UserInput,
+        "request_permissions" => RuntimeClientToolKind::Permissions,
+        "apply_patch" | "write_file" => RuntimeClientToolKind::FileChange,
+        "open_url" => RuntimeClientToolKind::DynamicTool {
+            namespace: Some("client".to_string()),
+            tool: "open_url".to_string(),
+        },
+        _ => match name.strip_prefix("client.") {
+            Some(tool) => RuntimeClientToolKind::DynamicTool {
+                namespace: Some("client".to_string()),
+                tool: tool.to_string(),
+            },
+            None => RuntimeClientToolKind::Fallback,
+        },
+    }
+}
+
+fn failed_dynamic_tool_response(reason: &str) -> DynamicToolCallResponse {
+    DynamicToolCallResponse {
+        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+            text: reason.to_string(),
+        }],
+        success: false,
+    }
+}
+
+fn denied_permissions_response() -> PermissionsRequestApprovalResponse {
+    PermissionsRequestApprovalResponse {
+        permissions: Value::Null,
+        scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
+        strict_auto_review: None,
+    }
+}
+
+fn dynamic_tool_response_to_tool_result(
+    call: &dasclaw_core::messages::ToolCall,
+    response: DynamicToolCallResponse,
+) -> dasclaw_core::messages::ToolResult {
+    json_tool_result(call, &response, !response.success)
+}
+
+fn json_tool_result<T: Serialize>(
+    call: &dasclaw_core::messages::ToolCall,
+    payload: &T,
+    is_error: bool,
+) -> dasclaw_core::messages::ToolResult {
+    let content = serde_json::to_string(payload)
+        .unwrap_or_else(|error| format!("failed to serialize tool response: {error}"));
+    dasclaw_core::messages::ToolResult {
+        tool_call_id: call.id.clone(),
+        name: call.name.clone(),
+        content,
+        is_error,
+    }
+}
+
+fn error_tool_result(
+    call: &dasclaw_core::messages::ToolCall,
+    message: &str,
+) -> dasclaw_core::messages::ToolResult {
+    dasclaw_core::messages::ToolResult {
+        tool_call_id: call.id.clone(),
+        name: call.name.clone(),
+        content: message.to_string(),
+        is_error: true,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeToolResultUpdate {
     pub item_id: String,
@@ -3377,6 +3869,7 @@ pub struct DasclawAgentRuntimeBridge {
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
     active_agents: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
     pending_approvals: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
+    pending_client_requests: PendingRuntimeClientRequests,
     features: RuntimeBridgeFeatures,
 }
 
@@ -3384,6 +3877,7 @@ type AgentFactory = dyn Fn(
         CancellationToken,
         RuntimeModelProviderSnapshot,
         ReasoningSummary,
+        RuntimeClientRequestContext,
     ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
     + Send
     + Sync
@@ -3420,15 +3914,37 @@ impl DasclawAgentRuntimeBridge {
         + Sync
         + 'static,
     ) -> Self {
+        Self::new_with_runtime_context(move |token, snapshot, reasoning_summary, _context| {
+            agent_factory(token, snapshot, reasoning_summary)
+        })
+    }
+
+    #[must_use]
+    pub fn new_with_runtime_context(
+        agent_factory: impl Fn(
+            CancellationToken,
+            RuntimeModelProviderSnapshot,
+            ReasoningSummary,
+            RuntimeClientRequestContext,
+        ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self {
             agent_factory: Arc::new(agent_factory),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
             active_agents: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            pending_client_requests: Arc::new(Mutex::new(HashMap::new())),
             features: RuntimeBridgeFeatures {
                 approval: true,
                 tools: true,
                 sandbox: false,
+                dynamic_tool_call: true,
+                tool_user_input: true,
+                permissions_approval: true,
+                file_change_approval: true,
                 ..RuntimeBridgeFeatures::default()
             },
         }
@@ -3453,7 +3969,7 @@ impl DasclawAgentRuntimeBridge {
 
     #[must_use]
     pub fn from_model_provider_snapshot() -> Self {
-        Self::new_with_model_provider(agent_from_model_provider_snapshot)
+        Self::new_with_runtime_context(agent_from_model_provider_snapshot)
     }
 
     #[must_use]
@@ -3481,6 +3997,99 @@ impl DasclawAgentRuntimeBridge {
         if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
             pending_approvals.retain(|_, pending_agent| !Arc::ptr_eq(pending_agent, agent));
         }
+        self.fail_pending_client_requests_for_turn(turn_id);
+    }
+
+    fn fail_pending_client_requests_for_turn(&self, turn_id: &str) {
+        let pending = self
+            .pending_client_requests
+            .lock()
+            .map(|mut requests| {
+                let mut drained = Vec::new();
+                let mut retained = HashMap::new();
+                for (request_id, request) in requests.drain() {
+                    if request.turn_id() == turn_id {
+                        drained.push(request);
+                    } else {
+                        retained.insert(request_id, request);
+                    }
+                }
+                *requests = retained;
+                drained
+            })
+            .unwrap_or_default();
+        for request in pending {
+            request.fail();
+        }
+    }
+
+    fn fail_all_pending_client_requests(&self) {
+        let pending = self
+            .pending_client_requests
+            .lock()
+            .map(|mut requests| {
+                requests
+                    .drain()
+                    .map(|(_, request)| request)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for request in pending {
+            request.fail();
+        }
+    }
+
+    fn resolve_pending_client_request(
+        &self,
+        resolution: RuntimeServerRequestResolution,
+    ) -> Result<(), RuntimeBridgeError> {
+        let pending = self
+            .pending_client_requests
+            .lock()
+            .map_err(|_| {
+                RuntimeBridgeError::retryable("runtime client request registry lock poisoned")
+            })?
+            .remove(&resolution.request_id);
+
+        let Some(pending) = pending else {
+            return Err(RuntimeBridgeError::retryable(format!(
+                "runtime client request is not pending: {}",
+                resolution.request_id
+            )));
+        };
+
+        match (pending, resolution.payload) {
+            (
+                PendingRuntimeClientRequest::DynamicTool { sender, .. },
+                RuntimeServerRequestResponse::DynamicTool(response),
+            ) => sender
+                .send(response)
+                .map_err(|_| RuntimeBridgeError::retryable("runtime dynamic tool waiter closed")),
+            (
+                PendingRuntimeClientRequest::ToolUserInput { sender, .. },
+                RuntimeServerRequestResponse::ToolUserInput(response),
+            ) => sender
+                .send(response)
+                .map_err(|_| RuntimeBridgeError::retryable("runtime user input waiter closed")),
+            (
+                PendingRuntimeClientRequest::FileChange { sender, .. },
+                RuntimeServerRequestResponse::FileChange(response),
+            ) => sender
+                .send(response)
+                .map_err(|_| RuntimeBridgeError::retryable("runtime file change waiter closed")),
+            (
+                PendingRuntimeClientRequest::Permissions { sender, .. },
+                RuntimeServerRequestResponse::Permissions(response),
+            ) => sender
+                .send(response)
+                .map_err(|_| RuntimeBridgeError::retryable("runtime permissions waiter closed")),
+            (pending, _) => {
+                pending.fail();
+                Err(RuntimeBridgeError::fatal(
+                    "runtime client request response kind mismatch",
+                ))
+            }
+        }
     }
 }
 
@@ -3496,10 +4105,18 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             ));
         }
         let token = CancellationToken::new();
+        let client_request_context = RuntimeClientRequestContext {
+            thread_id: request.thread_id.clone(),
+            turn_id: request.turn_id.clone(),
+            cwd: request.cwd.clone(),
+            updates: request.updates.clone(),
+            pending_requests: Arc::clone(&self.pending_client_requests),
+        };
         let agent = Arc::new((self.agent_factory)(
             token.clone(),
             request.model_provider.clone(),
             request.reasoning_summary,
+            client_request_context,
         )?);
         let mut in_flight = self
             .in_flight
@@ -3626,31 +4243,14 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                     let call_id = tool_call_id_from_arguments(&arguments)
                                         .unwrap_or_else(|| name.clone());
                                     tool_item_keys_by_name.insert(name.clone(), call_id.clone());
-                                    if is_client_dynamic_tool(&name) {
-                                        event_updates.dynamic_tool_call_requested(
-                                            event_thread_id.clone(),
-                                            event_turn_id.clone(),
-                                            RuntimeDynamicToolCallRequest {
-                                                request_id: call_id.clone(),
-                                                call_id,
-                                                namespace: Some("client".to_string()),
-                                                tool: name,
-                                                arguments,
-                                            },
-                                        );
-                                    } else {
-                                        event_updates.command_output_delta(
-                                            event_thread_id.clone(),
-                                            event_turn_id.clone(),
-                                            RuntimeCommandOutputDeltaUpdate {
-                                                item_id: runtime_tool_item_id(
-                                                    &event_turn_id,
-                                                    &call_id,
-                                                ),
-                                                delta: tool_call_started_delta(&name),
-                                            },
-                                        );
-                                    }
+                                    event_updates.command_output_delta(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeCommandOutputDeltaUpdate {
+                                            item_id: runtime_tool_item_id(&event_turn_id, &call_id),
+                                            delta: tool_call_started_delta(&name),
+                                        },
+                                    );
                                 }
                                 Ok(dasclaw_runtime::AgentEvent::ToolResult {
                                     name,
@@ -3716,6 +4316,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             )));
         };
         token.cancel();
+        self.fail_pending_client_requests_for_turn(&request.turn_id);
         Ok(())
     }
 
@@ -3746,24 +4347,38 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         &self,
         resolution: RuntimeServerRequestResolution,
     ) -> Result<(), RuntimeBridgeError> {
-        match resolution.payload {
+        match &resolution.payload {
             RuntimeServerRequestResponse::Approval(decision) => {
+                self.resolve_approval(RuntimeApprovalDecision {
+                    request_id: resolution.request_id,
+                    decision: decision.clone(),
+                })
+            }
+            RuntimeServerRequestResponse::Permissions(response) => {
+                if self
+                    .resolve_pending_client_request(resolution.clone())
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+
+                let decision = if response.permissions.is_null() {
+                    dasclaw_runtime::ApprovalDecision::Reject {
+                        reason: Some("permissions request denied".to_string()),
+                    }
+                } else {
+                    dasclaw_runtime::ApprovalDecision::Approve
+                };
                 self.resolve_approval(RuntimeApprovalDecision {
                     request_id: resolution.request_id,
                     decision,
                 })
             }
-            RuntimeServerRequestResponse::Permissions(_) => {
-                self.resolve_approval(RuntimeApprovalDecision {
-                    request_id: resolution.request_id,
-                    decision: dasclaw_runtime::ApprovalDecision::Approve,
-                })
+            RuntimeServerRequestResponse::DynamicTool(_)
+            | RuntimeServerRequestResponse::ToolUserInput(_)
+            | RuntimeServerRequestResponse::FileChange(_) => {
+                self.resolve_pending_client_request(resolution)
             }
-            RuntimeServerRequestResponse::DynamicTool(_) => Ok(()),
-            RuntimeServerRequestResponse::ToolUserInput(_)
-            | RuntimeServerRequestResponse::FileChange(_) => Err(RuntimeBridgeError::fatal(
-                "runtime bridge does not support this server request response kind",
-            )),
         }
     }
 
@@ -3781,6 +4396,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         for token in tokens {
             token.cancel();
         }
+        self.fail_all_pending_client_requests();
         if let Ok(mut active_agents) = self.active_agents.lock() {
             active_agents.clear();
         }
@@ -3806,10 +4422,6 @@ fn tool_call_id_from_arguments(arguments: &Value) -> Option<String> {
     string_field(arguments, "id").or_else(|| string_field(arguments, "tool_call_id"))
 }
 
-fn is_client_dynamic_tool(name: &str) -> bool {
-    name.strip_prefix("client.").is_some() || name == "open_url"
-}
-
 fn command_from_arguments(arguments: &Value) -> Option<String> {
     string_field(arguments, "cmd").or_else(|| string_field(arguments, "command"))
 }
@@ -3818,6 +4430,7 @@ fn agent_from_model_provider_snapshot(
     token: CancellationToken,
     snapshot: RuntimeModelProviderSnapshot,
     reasoning_summary: ReasoningSummary,
+    context: RuntimeClientRequestContext,
 ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
     let config = registry_config_from_snapshot(&snapshot)?;
     let provider = ClawCodeLlmProvider::from_registry_config(&config).map_err(|error| {
@@ -3828,6 +4441,7 @@ fn agent_from_model_provider_snapshot(
 
     dasclaw_runtime::Agent::builder()
         .responder(responder)
+        .tool_executor(RuntimeClientToolExecutor::new(context, None))
         .cancellation_token(token)
         .build()
         .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
@@ -4857,6 +5471,32 @@ mod tests {
                 .events
                 .contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED.to_string())
         );
+    }
+
+    #[test]
+    fn default_runtime_bridge_advertises_r2_request_owner_capabilities() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::from_model_provider_snapshot());
+        let server = initialized_server_with_bridge(bridge);
+
+        assert_eq!(
+            server.capabilities.approval.status,
+            CapabilityStatus::Implemented
+        );
+        for event in [
+            server_request::ITEM_TOOL_CALL,
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+            server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+        ] {
+            assert!(
+                server
+                    .capabilities
+                    .approval
+                    .events
+                    .contains(&event.to_string()),
+                "default runtime bridge should advertise R2 request owner event {event}"
+            );
+        }
     }
 
     #[test]
@@ -6858,7 +7498,19 @@ mod tests {
             server.handle_json_rpc(r#"{"jsonrpc":"2.0","id":"tool_1","result":{"success":true}}"#);
 
         assert!(response.is_none());
-        assert!(bridge.resolutions().is_empty());
+        let resolutions = bridge.resolutions();
+        assert_eq!(resolutions.len(), 1);
+        assert_eq!(resolutions[0].request_id, "runtime_tool_1");
+        assert!(matches!(
+            &resolutions[0].payload,
+            RuntimeServerRequestResponse::DynamicTool(response)
+                if !response.success
+                    && response.content_items.iter().any(|item| matches!(
+                        item,
+                        DynamicToolCallOutputContentItem::InputText { text }
+                            if text.contains("missing field")
+                    ))
+        ));
         let notifications = server.drain_notifications();
         let resolved_notifications = notifications
             .iter()
@@ -9272,7 +9924,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_runtime_bridge_maps_tool_events_to_r1_surface() {
+    fn agent_runtime_bridge_does_not_emit_dynamic_request_from_tool_start() {
         let executor = Arc::new(CountingExecutor::new());
         let factory_executor = Arc::clone(&executor);
         let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
@@ -9319,28 +9971,23 @@ mod tests {
                 .any(|update| matches!(update.outcome, RuntimeTurnOutcome::ToolResult { .. }))
         });
         assert!(
-            drained.iter().any(|update| {
+            !drained.iter().any(|update| {
                 matches!(
                     &update.outcome,
-                    RuntimeTurnOutcome::DynamicToolCallRequested { request }
-                        if request.tool == "open_url"
-                            && request.call_id == "call_1"
-                            && request.request_id == "call_1"
-                            && request.namespace.as_deref() == Some("client")
-                            && request.arguments["url"] == "https://example.test"
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
                 )
             }),
-            "client tool start should be emitted as dynamic tool request: {drained:?}"
+            "tool start must not emit a duplicate dynamic tool request: {drained:?}"
         );
         assert!(
-            !drained.iter().any(|update| {
+            drained.iter().any(|update| {
                 matches!(
                     &update.outcome,
                     RuntimeTurnOutcome::CommandOutputDelta { update }
                         if update.delta == "tool call started: open_url"
                 )
             }),
-            "client tool start should not be emitted as command output delta: {drained:?}"
+            "plain tool start should remain an output delta: {drained:?}"
         );
         assert!(
             drained.iter().any(|update| {
@@ -9358,7 +10005,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_runtime_bridge_dynamic_tool_response_does_not_fail_turn() {
+    fn stale_runtime_request_response_is_rejected() {
         let bridge = DasclawAgentRuntimeBridge::new(|_| {
             Err(RuntimeBridgeError::fatal("factory should not be used"))
         });
@@ -9373,14 +10020,7 @@ mod tests {
                     success: true,
                 }),
             })
-            .expect("dynamic tool response should not fail the runtime turn");
-    }
-
-    #[test]
-    fn request_user_input_is_not_treated_as_client_dynamic_tool() {
-        assert!(is_client_dynamic_tool("client.open_url"));
-        assert!(is_client_dynamic_tool("open_url"));
-        assert!(!is_client_dynamic_tool("request_user_input"));
+            .expect_err("stale dynamic tool response should be rejected");
     }
 
     #[test]
@@ -9502,6 +10142,945 @@ mod tests {
             "permissions approval should let the turn complete: {after_approval:?}"
         );
         assert_eq!(executor.call_count_blocking(), 1);
+    }
+
+    #[test]
+    fn non_command_permissions_denial_rejects_legacy_approval_waiter() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
+            move |token, _snapshot, _reasoning_summary| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(
+                        Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                    )
+                    .tools(vec![dummy_tool("open_url")])
+                    .approval_policy(Arc::new(AlwaysApprovePolicy))
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+                dynamic_tool_call: true,
+                permissions_approval: true,
+                ..RuntimeBridgeFeatures::default()
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open the docs".to_string(),
+                cwd: PathBuf::from("/turn/local"),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_denial = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::PermissionsApprovalRequested { .. }
+                )
+            })
+        });
+        let permissions_request = before_denial
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::PermissionsApprovalRequested { request } => {
+                    Some(request.clone())
+                }
+                _ => None,
+            })
+            .expect("permissions request should be emitted");
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: permissions_request.request_id,
+                payload: RuntimeServerRequestResponse::Permissions(denied_permissions_response()),
+            })
+            .expect("permissions denial should be delivered as rejection");
+
+        let after_denial = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::Failed { .. } | RuntimeTurnOutcome::ToolResult { .. }
+                )
+            })
+        });
+        assert_eq!(
+            executor.call_count_blocking(),
+            0,
+            "permissions denial must not execute the gated tool"
+        );
+        assert!(
+            after_denial.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Failed { error } if error.contains("denied")
+                        || error.contains("reject")
+                )
+            }) || !after_denial
+                .iter()
+                .any(|update| { matches!(&update.outcome, RuntimeTurnOutcome::Completed { .. }) }),
+            "permissions denial must not be converted to approval: {after_denial:?}"
+        );
+        bridge.shutdown();
+    }
+
+    #[test]
+    fn dynamic_tool_request_waits_for_renderer_response_and_cleans_pending() {
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open docs".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_response = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+                )
+            })
+        });
+        let request = before_response
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::DynamicToolCallRequested { request } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("dynamic tool request should be emitted");
+        assert_eq!(request.request_id, "call_1");
+        assert_eq!(request.tool, "open_url");
+        assert!(
+            !before_response
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::ToolResult { .. })),
+            "tool result must wait for renderer response: {before_response:?}"
+        );
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: request.request_id,
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "opened".to_string(),
+                    }],
+                    success: true,
+                }),
+            })
+            .expect("dynamic tool response should resume tool execution");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content.contains("opened")
+                            && !update.is_error
+                )
+            }),
+            "renderer response should become tool result: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Completed { output } if output == "done"
+                )
+            }),
+            "turn should complete after renderer response: {after_response:?}"
+        );
+        bridge.shutdown();
+    }
+
+    #[test]
+    fn dynamic_tool_json_rpc_response_resumes_runtime_waiter_once() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"open docs","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        assert_eq!(
+            json_rpc_value(start)["result"]["turn"]["status"],
+            "inProgress"
+        );
+
+        let before_response = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_TOOL_CALL,
+            Duration::from_secs(2),
+        );
+        let tool_requests = before_response
+            .iter()
+            .filter(|value| value["method"] == server_request::ITEM_TOOL_CALL)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tool_requests.len(),
+            1,
+            "one runtime-owned dynamic tool request should be emitted: {before_response:?}"
+        );
+        let request_id = tool_requests[0]["id"]
+            .as_str()
+            .expect("server request id should be a string")
+            .to_string();
+        assert_eq!(request_id, "call_1");
+        assert_eq!(tool_requests[0]["params"]["tool"], "open_url");
+        assert_eq!(
+            tool_requests[0]["params"]["arguments"]["url"],
+            "https://example.test"
+        );
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"contentItems":[{{"type":"inputText","text":"opened"}}],"success":true}}}}"#
+        ));
+        assert!(response.is_none());
+
+        let after_response =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "approved"
+            }),
+            "renderer response should resolve the runtime-owned server request: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION
+                    && value["params"]["itemId"] == "turn_1:tool:call_1"
+                    && value["params"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("opened"))
+                    && value["params"]["isError"] == false
+            }),
+            "runtime waiter result should be emitted as tool output: {after_response:?}"
+        );
+
+        let duplicate = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"contentItems":[{{"type":"inputText","text":"duplicate"}}],"success":true}}}}"#
+        ));
+        assert!(duplicate.is_none());
+        let duplicate_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(
+            duplicate_notifications.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "failed"
+            }),
+            "duplicate response should be rejected after the waiter is consumed: {duplicate_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn shutdown_cancels_pending_dynamic_tool_json_rpc_request() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"open docs","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        let before_shutdown = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_TOOL_CALL,
+            Duration::from_secs(2),
+        );
+        let request_id = before_shutdown
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_TOOL_CALL)
+            .and_then(|value| value["id"].as_str())
+            .expect("dynamic tool request should be emitted")
+            .to_string();
+
+        let shutdown = server.shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::ClientExit),
+            timeout_ms: None,
+        });
+        assert_eq!(shutdown.lifecycle.state, LifecycleState::Stopped);
+
+        let shutdown_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(
+            shutdown_notifications.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "failed"
+                    && value["params"]["reason"] == "server shutdown"
+            }),
+            "shutdown should fail the pending runtime-owned request: {shutdown_notifications:?}"
+        );
+
+        let late = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"contentItems":[{{"type":"inputText","text":"late"}}],"success":true}}}}"#
+        ));
+        assert!(late.is_none());
+        let late_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(
+            late_notifications.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "failed"
+            }),
+            "late response should be unknown after shutdown cleanup: {late_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_dynamic_tool_json_rpc_response_unblocks_runtime_waiter_fail_safe() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"open docs","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        let before_response = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_TOOL_CALL,
+            Duration::from_secs(2),
+        );
+        let request_id = before_response
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_TOOL_CALL)
+            .and_then(|value| value["id"].as_str())
+            .expect("dynamic tool request should be emitted")
+            .to_string();
+
+        let malformed = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"success":true}}}}"#
+        ));
+        assert!(malformed.is_none());
+
+        let after_response =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "failed"
+            }),
+            "malformed response should fail the server request: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "turn/completed" && value["params"]["turn"]["status"] == "failed"
+            }),
+            "malformed response should fail the turn after unblocking runtime waiter: {after_response:?}"
+        );
+    }
+
+    #[test]
+    fn timed_out_dynamic_tool_json_rpc_request_unblocks_runtime_waiter_fail_safe() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        client_tool_call_output("open_url", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("open_url")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("open docs".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let before_timeout = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_TOOL_CALL,
+            Duration::from_secs(2),
+        );
+        let request_id = before_timeout
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_TOOL_CALL)
+            .and_then(|value| value["id"].as_str())
+            .expect("dynamic tool request should be emitted")
+            .to_string();
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+
+        let timeout_notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            timeout_notifications.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "timed_out"
+            }),
+            "timeout should resolve the server request as timed_out: {timeout_notifications:?}"
+        );
+        assert_turn_status_and_ready(
+            &mut server,
+            &thread.thread_id,
+            &started.turn.id,
+            TurnStatus::Failed,
+        );
+    }
+
+    #[test]
+    fn user_input_json_rpc_response_resumes_runtime_waiter() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        user_input_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("request_user_input")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"ask user","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        let before_response = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            Duration::from_secs(2),
+        );
+        let request_id = before_response
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_TOOL_REQUEST_USER_INPUT)
+            .and_then(|value| value["id"].as_str())
+            .expect("user-input request should be emitted")
+            .to_string();
+        assert_eq!(request_id, "call_1");
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"answers":{{"choice":{{"answers":["continue"]}}}}}}}}"#
+        ));
+        assert!(response.is_none());
+
+        let after_response =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "approved"
+            }),
+            "user-input JSON-RPC response should resolve the request: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION
+                    && value["params"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("continue"))
+                    && value["params"]["isError"] == false
+            }),
+            "user-input JSON-RPC response should become non-error tool output: {after_response:?}"
+        );
+    }
+
+    #[test]
+    fn permissions_json_rpc_denial_resumes_runtime_waiter_fail_safe() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        permissions_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("request_permissions")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"ask permissions","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        let before_response = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+            Duration::from_secs(2),
+        );
+        let request_id = before_response
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL)
+            .and_then(|value| value["id"].as_str())
+            .expect("permissions request should be emitted")
+            .to_string();
+        assert_eq!(request_id, "call_1");
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"permissions":null,"scope":"turn"}}}}"#
+        ));
+        assert!(response.is_none());
+
+        let after_response =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "rejected"
+            }),
+            "permissions denial should resolve the request as rejected: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION
+                    && value["params"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("null"))
+                    && value["params"]["isError"] == true
+            }),
+            "permissions JSON-RPC denial should become error tool output: {after_response:?}"
+        );
+    }
+
+    #[test]
+    fn file_change_json_rpc_denial_resumes_runtime_waiter_without_executor() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new_with_runtime_context(
+            move |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        file_change_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(
+                        context,
+                        Some(
+                            Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                        ),
+                    ))
+                    .tools(vec![dummy_tool("apply_patch")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _start = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"change file","text_elements":[]}}]}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a JSON-RPC response");
+        let before_response = drain_json_rpc_until_method(
+            &mut server,
+            server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+            Duration::from_secs(2),
+        );
+        let request_id = before_response
+            .iter()
+            .find(|value| value["method"] == server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL)
+            .and_then(|value| value["id"].as_str())
+            .expect("file-change request should be emitted")
+            .to_string();
+        assert_eq!(request_id, "call_1");
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":"decline"}}}}"#
+        ));
+        assert!(response.is_none());
+
+        let after_response =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == "serverRequest/resolved"
+                    && value["params"]["requestId"] == request_id
+                    && value["params"]["outcome"] == "rejected"
+            }),
+            "file-change denial should resolve the request as rejected: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|value| {
+                value["method"] == event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION
+                    && value["params"]["message"] == "file change denied by user"
+                    && value["params"]["isError"] == true
+            }),
+            "file-change JSON-RPC denial should become error tool output: {after_response:?}"
+        );
+        assert_eq!(executor.call_count_blocking(), 0);
+    }
+
+    #[test]
+    fn user_input_request_returns_renderer_answers() {
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        user_input_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("request_user_input")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "ask user".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_response = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::ToolUserInputRequested { .. }
+                )
+            })
+        });
+        let request = before_response
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::ToolUserInputRequested { request } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("user input request should be emitted");
+        assert_eq!(request.item_id, "turn_1:tool:call_1");
+        assert_eq!(request.questions[0].id, "choice");
+
+        let mut answers = HashMap::new();
+        answers.insert(
+            "choice".to_string(),
+            dasclaw_app_server_protocol::ToolRequestUserInputAnswer {
+                answers: vec!["continue".to_string()],
+            },
+        );
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: request.request_id,
+                payload: RuntimeServerRequestResponse::ToolUserInput(
+                    ToolRequestUserInputResponse { answers },
+                ),
+            })
+            .expect("user input response should resume tool execution");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content.contains("continue")
+                            && !update.is_error
+                )
+            }),
+            "renderer answers should become tool result: {after_response:?}"
+        );
+        bridge.shutdown();
+    }
+
+    #[test]
+    fn permissions_denial_is_fail_safe() {
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        permissions_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(context, None))
+                    .tools(vec![dummy_tool("request_permissions")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "ask permissions".to_string(),
+                cwd: PathBuf::from("/turn/local"),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_response = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::PermissionsApprovalRequested { .. }
+                )
+            })
+        });
+        let request = before_response
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::PermissionsApprovalRequested { request } => {
+                    Some(request.clone())
+                }
+                _ => None,
+            })
+            .expect("permissions request should be emitted");
+        assert_eq!(request.cwd, "/turn/local");
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: request.request_id,
+                payload: RuntimeServerRequestResponse::Permissions(denied_permissions_response()),
+            })
+            .expect("permissions denial should resume with fail-safe output");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.is_error
+                            && update.content.contains("null")
+                )
+            }),
+            "permissions denial should be surfaced as error tool result: {after_response:?}"
+        );
+        bridge.shutdown();
+    }
+
+    #[test]
+    fn file_change_denial_prevents_inner_executor() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            move |token, _snapshot, _reasoning_summary, context| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        file_change_tool_call_output("call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(RuntimeClientToolExecutor::new(
+                        context,
+                        Some(
+                            Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                        ),
+                    ))
+                    .tools(vec![dummy_tool("apply_patch")])
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "change file".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_response = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::FileChangeApprovalRequested { .. }
+                )
+            })
+        });
+        let request = before_response
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::FileChangeApprovalRequested { request } => {
+                    Some(request.clone())
+                }
+                _ => None,
+            })
+            .expect("file-change approval request should be emitted");
+        assert_eq!(request.item_id, "turn_1:tool:call_1");
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: request.request_id,
+                payload: RuntimeServerRequestResponse::FileChange(
+                    FileChangeApprovalDecision::Decline,
+                ),
+            })
+            .expect("file-change denial should resume with denied tool result");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.is_error
+                            && update.content == "file change denied by user"
+                )
+            }),
+            "denial should surface as error tool result: {after_response:?}"
+        );
+        assert_eq!(executor.call_count_blocking(), 0);
+        bridge.shutdown();
     }
 
     #[test]
@@ -11314,6 +12893,76 @@ mod tests {
                     arguments: serde_json::json!({
                         "tool_call_id": id,
                         "url": "https://example.test",
+                    }),
+                    reasoning: None,
+                }],
+                content: None,
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn user_input_tool_call_output(id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: "request_user_input".into(),
+                    arguments: serde_json::json!({
+                        "tool_call_id": id,
+                        "questions": [{
+                            "id": "choice",
+                            "header": "Choice",
+                            "question": "Continue?",
+                            "options": [{
+                                "label": "Continue",
+                                "description": "Proceed with the request"
+                            }]
+                        }]
+                    }),
+                    reasoning: None,
+                }],
+                content: None,
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn permissions_tool_call_output(id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: "request_permissions".into(),
+                    arguments: serde_json::json!({
+                        "tool_call_id": id,
+                        "reason": "need network",
+                        "permissions": { "network": true }
+                    }),
+                    reasoning: None,
+                }],
+                content: None,
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn file_change_tool_call_output(id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: "apply_patch".into(),
+                    arguments: serde_json::json!({
+                        "tool_call_id": id,
+                        "path": "/tmp/r2.txt",
+                        "reason": "apply patch"
                     }),
                     reasoning: None,
                 }],
