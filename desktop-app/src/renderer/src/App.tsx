@@ -61,6 +61,7 @@ import {
 } from 'react'
 
 import { ModelSelector } from './components/assistant-ui'
+import { ServerRequestPanel } from './components/assistant-ui/server-request-panel'
 import { cn } from './lib/utils'
 import { isPendingAssistantMessageContent } from './lib/assistantMessages'
 import {
@@ -176,7 +177,8 @@ function useNativeBackdrop(): boolean {
 }
 
 function App(): React.JSX.Element {
-  const { runtime } = useDasclawAssistantRuntime()
+  const { runtime, serverRequests, respondToServerRequest, rejectServerRequest } =
+    useDasclawAssistantRuntime()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const nativeBackdrop = useNativeBackdrop()
 
@@ -206,6 +208,11 @@ function App(): React.JSX.Element {
             <div className="min-h-0 flex-1 overflow-hidden">
               <ChatThread />
             </div>
+            <ServerRequestPanel
+              onReject={rejectServerRequest}
+              onRespond={respondToServerRequest}
+              requests={serverRequests}
+            />
           </div>
         </section>
       </main>
