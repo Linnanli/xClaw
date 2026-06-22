@@ -1,7 +1,7 @@
 # Dasclaw app-server 与 Codex app-server 协议缺口对照表
 
 > 日期：2026-06-18
-> 状态：能力补齐参考（删除线表示本轮 P0-P4 honest subset 已完成；未划掉项仍按后续计划处理）
+> 状态：能力补齐参考（删除线表示 P0-P4 honest subset、P5a filesystem / command exec 与 P5 sandbox protocol slice 中已完成的受测子集；未划掉项与 §9.1 剩余优先级仍按后续计划处理）
 > 运行态限定：P4 删除线表示 app-server 的 `AppServerServices::real()` 服务集合与默认 sidecar 入口已经接入 honest subset；显式 `DASCLAW_APP_SERVER_RUNTIME=noop` 仍保留禁用/declared 语义。
 > 目标：列出 `codex-cli-main` app-server 的协议面，和当前 `dasclaw-app-server` 做逐域对照，区分“只差协议 shape”、“agent 框架 `crates` 已有底座但 app-server 未接线”和“产品能力本身未定义”。
 
@@ -27,6 +27,8 @@
 已检查 `dasclaw-app-server / codex app-server protocol gap matrix` 是否已有，结论：已有 `docs/plans/dasclaw-app-server-protocol-v0.md`、`docs/plans/dasclaw-app-server-ownership-matrix.md`、`docs/plans/dasclaw-codex-app-server-ai-sdk-compat-plan.md`，但未发现“Codex 全量 ClientRequest / ServerNotification / ServerRequest / ClientNotification 与 Dasclaw 当前协议逐域缺口”的对照表；本文补齐该空白。
 
 子 agent 只读交叉检查结论与主线一致：`codex-cli-main/codex-rs/app-server-protocol/src/schema.rs` 在当前仓库不存在，实际应以 `src/protocol/v1.rs` 和 `schema/typescript/*.ts` 作为协议证据，其中 TypeScript 生成文件最适合逐项枚举。
+
+2026-06-22 剩余优先级复核：再次用 `semantic_search_nodes_tool` 查询 app-server remaining protocol gaps / thread lifecycle / approval tool call / MCP OAuth / sandbox PTY / config git fuzzy search 等语义；LSP `workspace_symbols` 查询 `thread_archive`、`turn_steer`、`ITEM_TOOL_CALL`、`ITEM_PERMISSIONS_REQUEST_APPROVAL`、`mcp_server_oauth_login`、`config_requirements_read`；最后用 `rg` 精确核验 router、producer、capability matrix 与文档。结论：`configRequirements/read` 已是 sandbox requirements 子集；MCP OAuth 有 fail-safe route 但真实 OAuth owner 未接；`ITEM_TOOL_CALL` 与 `ITEM_PERMISSIONS_REQUEST_APPROVAL` 仍只停在协议/客户端转发层，未发现 app-server service producer；thread archive/fork/resume 等扩展生命周期未发现 app-server owner。
 
 ## 1. 总结
 
@@ -285,6 +287,20 @@ Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主�
 | P4 | MCP / skills / logs / jobs | ~~MCP status/reload/resource/tool call/progress~~、MCP OAuth、~~skills registry~~、~~logs source~~、~~job host~~ | P4 honest subset 已通过 `AppServerServices::real()` 接入默认 sidecar，覆盖 logs/jobs/skills 与 MCP status/reload/tool/resource/progress 的 app-server owner；MCP OAuth 仍作为后续专项，不在 capability matrix 中冒充 implemented |
 | P5 | Filesystem / command exec | ~~Dasclaw-native `fs/*` subset~~、~~buffered `command/exec`~~、~~Dasclaw-native `fs/changed`~~、~~PTY-backed `command/exec/outputDelta`~~、~~PTY-backed `command/exec/write`~~、~~PTY-backed `command/exec/terminate`~~、~~PTY-backed `command/exec/resize`~~、~~buffered `command/exec.sandboxPolicy` read-only/workspace-write override~~、~~buffered `command/exec.permissionProfile` 建模~~；non-PTY split stdout/stderr streaming、buffered `danger-full-access` 执行、PTY sandbox/permission override、sandboxed PTY 仍未完成 | P5a 已在 P3 安全边界之后接入 app-server-owned filesystem、buffered command exec、buffered sandbox protocol slice 与 PTY-backed streaming command controls；Codex FS parity、非 PTY pipe streaming、sandboxed PTY、完整 sandbox manager/API 与安全审计仍不冒充完成 |
 | P6 | Product-specific Codex domains | account、plugin、marketplace、app list、feedback、external agent import、Windows sandbox、realtime audio | 只有当 Dasclaw 明确要兼容未改 Codex client 或复刻相关产品能力时再做 |
+
+### 9.1 当前剩余优先级（2026-06-22）
+
+下面按“安全/owner 依赖优先、协议 shape 其次、产品域最后”排序。P0-P5 已划掉的受测子集不再重复列入。
+
+| 剩余优先级 | 范围 | 仍未完成的协议/能力 | 为什么排这里 | 完成判定 |
+|---|---|---|---|---|
+| R1 | Runtime tool / approval owner | ~~`item/tool/call`~~、~~`item/tool/requestUserInput`~~、~~`item/permissions/requestApproval`~~、~~`item/fileChange/requestApproval`~~、~~`item/autoApprovalReview/started`~~、~~`item/autoApprovalReview/completed`~~、~~file-change output / patch events~~ | 已由 `docs/superpowers/plans/2026-06-22-dasclaw-app-server-runtime-tool-approval-owner.md` 接入 protocol types、runtime producer、pending server request routing、desktop fail-closed 转发和 owner-ready capability gating | `capabilities/list` 只在 runtime bridge 报告 R1 owner-ready 时广告；runtime producer 能发对应 ServerRequest / notification；`approval/respond` 或 JSON-RPC response 能回填执行路径；拒绝、超时、malformed response、shutdown 全部 fail-safe 且有测试 |
+| R2 | Sandbox enforcement / command safety follow-up | runtime sandbox context enforce、sandboxed PTY、PTY `sandboxPolicy` / `permissionProfile` override、non-PTY split stdout/stderr streaming、安全审计；buffered `danger-full-access` 仍保持双 opt-in fail-closed | P5 已把 sandbox 参数面接入协议/解析层，但真实 `DasclawAgentRuntimeBridge` 对非空 sandbox context fail-closed，PTY streaming 也明确拒绝 sandbox override；不能把“可表达”误写成“已执行沙箱” | 非空 thread/turn sandbox context 能被 runtime 实际 enforce；PTY / non-PTY streaming 有清晰沙箱语义；`danger-full-access` 仍只在显式双 opt-in 路径放行；敏感参数不进日志/事件 |
+| R3 | MCP OAuth owner | `mcpServer/oauth/login`、`mcpServer/oauthLogin/completed` 的真实成功路径、callback listener、state 校验、token storage / redaction | MCP status/reload/tool/resource/progress 已完成；OAuth 现在只有 fail-safe route 和失败 completion notification，不应在 capability matrix 中冒充 implemented | 成功路径能生成授权 URL、接收 callback、校验 state、落安全 token store，并只在 readiness 成立时广告 OAuth capability；失败路径不泄露 code/token/state |
+| R4 | Thread lifecycle / persistence owner | `thread/resume`、`thread/fork`、`thread/archive`、`thread/unarchive`、`thread/unsubscribe`、`thread/name/set`、`thread/metadata/update`、`thread/compact/start`、`thread/rollback`、`thread/loaded/list`、`thread/inject_items`；对应 `thread/status/changed` / archived / name / goal / token usage / compacted events | 当前 core chat-session view 已可用，但完整 Codex Thread history/lifecycle 需要持久化、订阅、命名、压缩、rollback、metadata owner；这些会影响 UI 状态模型和恢复语义 | app-server 有 thread store / subscription owner；方法和 events 在 router、schema、capability、tests 中一致；旧 smoke alias 不回流到 public native contract |
+| R5 | Turn steer / plan / diff / raw reasoning producer | `turn/steer`、`turn/plan/updated`、`turn/diff/updated`、`item/plan/delta`、`rawResponseItem/completed`、`item/reasoning/summaryPartAdded` producer、`item/reasoning/textDelta` producer | 这些增强流式可观测性和运行中控制；当前 raw reasoning / summary part 已有 schema、profile 和 client decode，但 app-server runtime producer 仍只稳定产出 summary text delta | runtime 能区分 summary/raw reasoning part、plan/diff snapshot 与 item-level delta；客户端 tracker 不靠测试 fake；turn steer 有可拒绝/可恢复的运行时语义 |
+| R6 | Config / repo tools / search owner | broad `config/read`、`config/value/write`、`config/batchWrite`；`gitDiffToRemote`；`fuzzyFileSearch` session；`getConversationSummary`；`review/start`；model reroute / verification；hooks warning channel | `configRequirements/read` 已完成 sandbox mode 子集，但 broad config、git/search/review/summary 仍是产品/服务 owner 问题；底层 git/search/config 类型不能自动等价 app-server surface | 明确定义 Dasclaw config policy、repo root、权限和审计边界；每个 method 有真实 owner、错误语义和契约测试 |
+| R7 | Codex product / platform domains | account/auth/rate limit、plugin marketplace、app list、device key、feedback、external agent import、realtime/audio、Windows sandbox setup、world-writable warning | 这些与 Codex/OpenAI 产品或平台体验强绑定；除非目标变成兼容未改 Codex client 或复刻相关产品能力，否则不应压过 Dasclaw native core | 先有产品决策和安全设计，再进入 protocol matrix；否则保持 explicit unsupported / opt-out |
 
 ## 10. 决策建议
 
