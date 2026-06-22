@@ -1780,6 +1780,9 @@ impl AppServer {
                 let thread_id = pending.thread_id.clone();
                 let turn_id = pending.turn_id.clone();
                 let message = error.message;
+                if pending.kind == PendingServerRequestKind::DynamicToolCall {
+                    self.cancel_pending_runtime_turn_for_server_request(&pending);
+                }
                 self.notifications
                     .emit_server_request_resolved(ServerRequestResolvedEvent {
                         request_id: pending.request_id,
@@ -1813,6 +1816,8 @@ impl AppServer {
                         reason: Some(format!("approval response failed: {reason}")),
                     },
                 });
+        } else if pending.kind == PendingServerRequestKind::DynamicToolCall {
+            self.cancel_pending_runtime_turn_for_server_request(&pending);
         }
         self.notifications
             .emit_server_request_resolved(ServerRequestResolvedEvent {
@@ -1823,6 +1828,13 @@ impl AppServer {
                 reason: Some(reason),
             });
         self.fail_pending_turn(pending.thread_id, pending.turn_id, runtime_reason);
+    }
+
+    fn cancel_pending_runtime_turn_for_server_request(&self, pending: &PendingServerRequest) {
+        let _ = self.runtime_bridge.cancel_turn(RuntimeTurnCancelRequest {
+            thread_id: pending.thread_id.clone(),
+            turn_id: pending.turn_id.clone(),
+        });
     }
 
     fn fail_pending_turn(&mut self, thread_id: String, turn_id: String, error: String) {
@@ -2124,6 +2136,8 @@ impl AppServer {
                             reason: Some("approval request timed out".to_string()),
                         },
                     });
+            } else if pending.kind == PendingServerRequestKind::DynamicToolCall {
+                self.cancel_pending_runtime_turn_for_server_request(&pending);
             }
             self.notifications
                 .emit_server_request_resolved(ServerRequestResolvedEvent {
@@ -3377,7 +3391,7 @@ pub struct DasclawAgentRuntimeBridge {
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
     active_agents: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
     pending_approvals: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
-    pending_dynamic_tools: Arc<Mutex<HashMap<String, PendingDynamicToolResponse>>>,
+    pending_dynamic_tools: Arc<Mutex<HashMap<PendingDynamicToolKey, PendingDynamicToolResponse>>>,
     features: RuntimeBridgeFeatures,
 }
 
@@ -3391,6 +3405,33 @@ pub struct RuntimeAgentFactoryContext {
 struct PendingDynamicToolResponse {
     turn_id: String,
     sender: mpsc::Sender<DynamicToolCallResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PendingDynamicToolKey {
+    turn_id: String,
+    call_id: String,
+}
+
+impl PendingDynamicToolKey {
+    fn new(turn_id: impl Into<String>, call_id: impl Into<String>) -> Self {
+        Self {
+            turn_id: turn_id.into(),
+            call_id: call_id.into(),
+        }
+    }
+
+    fn request_id(&self) -> String {
+        format!("{}:{}", self.turn_id, self.call_id)
+    }
+
+    fn parse(request_id: &str) -> Option<Self> {
+        let (turn_id, call_id) = request_id.split_once(':')?;
+        if turn_id.is_empty() || call_id.is_empty() {
+            return None;
+        }
+        Some(Self::new(turn_id, call_id))
+    }
 }
 
 type AgentFactory = dyn Fn(RuntimeAgentFactoryContext) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
@@ -3485,6 +3526,20 @@ impl DasclawAgentRuntimeBridge {
         }
         if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
             pending_approvals.retain(|_, pending_agent| !Arc::ptr_eq(pending_agent, agent));
+        }
+        if let Ok(mut pending_dynamic_tools) = self.pending_dynamic_tools.lock() {
+            pending_dynamic_tools.retain(|_, pending| pending.turn_id != turn_id);
+        }
+    }
+
+    fn cancel_pending_dynamic_tool_turn(&self, turn_id: &str) {
+        let token = self
+            .in_flight
+            .lock()
+            .ok()
+            .and_then(|in_flight| in_flight.get(turn_id).cloned());
+        if let Some(token) = token {
+            token.cancel();
         }
         if let Ok(mut pending_dynamic_tools) = self.pending_dynamic_tools.lock() {
             pending_dynamic_tools.retain(|_, pending| pending.turn_id != turn_id);
@@ -3709,17 +3764,20 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
     }
 
     fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError> {
-        let in_flight = self
+        let token = self
             .in_flight
             .lock()
-            .map_err(|_| RuntimeBridgeError::retryable("runtime turn registry lock poisoned"))?;
-        let Some(token) = in_flight.get(&request.turn_id).cloned() else {
+            .map_err(|_| RuntimeBridgeError::retryable("runtime turn registry lock poisoned"))?
+            .get(&request.turn_id)
+            .cloned();
+        let Some(token) = token else {
             return Err(RuntimeBridgeError::retryable(format!(
                 "runtime turn is not in flight: {}",
                 request.turn_id
             )));
         };
         token.cancel();
+        self.cancel_pending_dynamic_tool_turn(&request.turn_id);
         Ok(())
     }
 
@@ -3764,13 +3822,20 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                 })
             }
             RuntimeServerRequestResponse::DynamicTool(response) => {
+                let key =
+                    PendingDynamicToolKey::parse(&resolution.request_id).ok_or_else(|| {
+                        RuntimeBridgeError::retryable(format!(
+                            "invalid runtime dynamic tool request id: {}",
+                            resolution.request_id
+                        ))
+                    })?;
                 let pending = self
                     .pending_dynamic_tools
                     .lock()
                     .map_err(|_| {
                         RuntimeBridgeError::retryable("runtime dynamic tool registry lock poisoned")
                     })?
-                    .remove(&resolution.request_id)
+                    .remove(&key)
                     .ok_or_else(|| {
                         RuntimeBridgeError::retryable(format!(
                             "runtime dynamic tool request is not pending: {}",
@@ -3818,7 +3883,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
 }
 
 struct RuntimeClientDynamicToolExecutor {
-    pending_dynamic_tools: Arc<Mutex<HashMap<String, PendingDynamicToolResponse>>>,
+    pending_dynamic_tools: Arc<Mutex<HashMap<PendingDynamicToolKey, PendingDynamicToolResponse>>>,
     updates: RuntimeTurnUpdateSink,
     thread_id: String,
     turn_id: String,
@@ -3841,21 +3906,23 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientDynamicToolExecutor {
         }
 
         let (sender, receiver) = mpsc::channel();
+        let key = PendingDynamicToolKey::new(self.turn_id.clone(), call.id.clone());
+        let request_id = key.request_id();
         {
             let mut pending_dynamic_tools = self
                 .pending_dynamic_tools
                 .lock()
                 .map_err(|_| "runtime dynamic tool registry lock poisoned")?;
-            if pending_dynamic_tools.contains_key(&call.id) {
+            if pending_dynamic_tools.contains_key(&key) {
                 return Ok(dasclaw_core::messages::ToolResult {
                     tool_call_id: call.id.clone(),
                     name: call.name.clone(),
-                    content: format!("duplicate runtime dynamic tool request: {}", call.id),
+                    content: format!("duplicate runtime dynamic tool request: {request_id}"),
                     is_error: true,
                 });
             }
             pending_dynamic_tools.insert(
-                call.id.clone(),
+                key.clone(),
                 PendingDynamicToolResponse {
                     turn_id: self.turn_id.clone(),
                     sender,
@@ -3867,7 +3934,7 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientDynamicToolExecutor {
             self.thread_id.clone(),
             self.turn_id.clone(),
             RuntimeDynamicToolCallRequest {
-                request_id: call.id.clone(),
+                request_id: request_id.clone(),
                 call_id: call.id.clone(),
                 namespace: Some("client".to_string()),
                 tool: call.name.clone(),
@@ -3875,7 +3942,6 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientDynamicToolExecutor {
             },
         );
 
-        let request_id = call.id.clone();
         let pending_dynamic_tools = Arc::clone(&self.pending_dynamic_tools);
         let token = self.token.clone();
         let response =
@@ -3884,7 +3950,7 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientDynamicToolExecutor {
                 .map_err(|error| format!("runtime dynamic tool wait task failed: {error}"))?;
 
         if let Ok(mut pending_dynamic_tools) = pending_dynamic_tools.lock() {
-            pending_dynamic_tools.remove(&request_id);
+            pending_dynamic_tools.remove(&key);
         }
 
         let response = response?;
@@ -3919,7 +3985,12 @@ fn dynamic_tool_response_to_tool_result(
         .iter()
         .filter_map(|item| match item {
             DynamicToolCallOutputContentItem::InputText { text } if !text.trim().is_empty() => {
-                Some(text.as_str())
+                Some(text.clone())
+            }
+            DynamicToolCallOutputContentItem::InputImage { image_url }
+                if !image_url.trim().is_empty() =>
+            {
+                Some(format!("image: {image_url}"))
             }
             DynamicToolCallOutputContentItem::InputText { .. }
             | DynamicToolCallOutputContentItem::InputImage { .. } => None,
@@ -9533,7 +9604,7 @@ mod tests {
                 _ => None,
             })
             .expect("client dynamic tool request should be emitted");
-        assert_eq!(dynamic_request.request_id, "call_1");
+        assert_eq!(dynamic_request.request_id, "turn_1:call_1");
         assert_eq!(dynamic_request.call_id, "call_1");
         assert_eq!(dynamic_request.tool, "open_url");
         assert_eq!(dynamic_request.namespace.as_deref(), Some("client"));
@@ -9590,6 +9661,285 @@ mod tests {
     }
 
     #[test]
+    fn agent_runtime_bridge_dynamic_tool_image_response_preserves_content() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                client_tool_call_output("open_url", "call_1"),
+                text_output("done"),
+            ])));
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open the docs".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let dynamic_request = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+                )
+            })
+        })
+        .into_iter()
+        .find_map(|update| match update.outcome {
+            RuntimeTurnOutcome::DynamicToolCallRequested { request } => Some(request),
+            _ => None,
+        })
+        .expect("client dynamic tool request should be emitted");
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: dynamic_request.request_id,
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputImage {
+                        image_url: "https://example.test/opened.png".to_string(),
+                    }],
+                    success: true,
+                }),
+            })
+            .expect("dynamic tool image response should resume the runtime turn");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content == "image: https://example.test/opened.png"
+                            && !update.is_error
+                )
+            }),
+            "image-only dynamic tool response should produce non-empty tool result content: {after_response:?}"
+        );
+    }
+
+    #[test]
+    fn agent_runtime_bridge_cancels_waiting_dynamic_tool_on_malformed_response() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::from_responder(Arc::new(
+            ScriptedResponder::new(vec![
+                client_tool_call_output("open_url", "call_1"),
+                text_output("unexpected"),
+            ]),
+        )));
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("open the docs".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let mut request_id = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let values = json_rpc_values(server.drain_json_rpc_notifications());
+            request_id = values
+                .iter()
+                .find(|value| value["method"] == server_request::ITEM_TOOL_CALL)
+                .and_then(|value| value["id"].as_str())
+                .map(str::to_string);
+            if request_id.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let request_id = request_id.expect("dynamic tool server request should be emitted");
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"success":true}}}}"#
+        ));
+
+        assert!(response.is_none());
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "turn/completed"
+                    && notification.params["turn"]["id"] == turn.turn.id
+                    && notification.params["turn"]["status"] == "failed"
+            }),
+            "malformed dynamic tool response should fail the AppServer turn: {notifications:?}"
+        );
+
+        let after_cancel = collect_runtime_updates_until(&server.runtime_turn_updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Failed { .. }))
+        });
+        assert!(
+            after_cancel.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Failed { error }
+                        if error.contains("runtime dynamic tool request cancelled")
+                            || error.contains("runtime dynamic tool response channel closed")
+                )
+            }),
+            "real bridge runtime wait should exit after malformed server response: {after_cancel:?}"
+        );
+
+        let error = bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: "turn_1:call_1".to_string(),
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "late".to_string(),
+                    }],
+                    success: true,
+                }),
+            })
+            .expect_err("late dynamic tool response should be unmatched after cleanup");
+        assert!(error.retryable);
+        assert!(
+            error
+                .message
+                .contains("runtime dynamic tool request is not pending: turn_1:call_1")
+        );
+    }
+
+    #[test]
+    fn agent_runtime_bridge_scopes_dynamic_tool_pending_by_turn() {
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(|ctx| {
+            dasclaw_runtime::Agent::builder()
+                .responder(ScriptedResponder::new(vec![
+                    client_tool_call_output("open_url", "call_1"),
+                    text_output("done"),
+                ]))
+                .tool_executor_arc(ctx.dynamic_tool_executor)
+                .cancellation_token(ctx.token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        });
+        let updates_1 = RuntimeTurnUpdateSink::new();
+        let updates_2 = RuntimeTurnUpdateSink::new();
+
+        for (thread_id, turn_id, updates) in [
+            ("thread_1", "turn_1", updates_1.clone()),
+            ("thread_2", "turn_2", updates_2.clone()),
+        ] {
+            bridge
+                .start_turn(RuntimeTurnStartRequest {
+                    thread_id: thread_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    prompt: "open the docs".to_string(),
+                    cwd: PathBuf::from("."),
+                    model_provider: test_runtime_model_snapshot(),
+                    reasoning_summary: ReasoningSummary::None,
+                    sandbox_context: RuntimeSandboxContext::empty(),
+                    updates,
+                })
+                .expect("turn should start");
+        }
+
+        let request_1 = collect_runtime_updates_until(&updates_1, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+                )
+            })
+        })
+        .into_iter()
+        .find_map(|update| match update.outcome {
+            RuntimeTurnOutcome::DynamicToolCallRequested { request } => Some(request),
+            _ => None,
+        })
+        .expect("first dynamic request should be emitted");
+        let request_2 = collect_runtime_updates_until(&updates_2, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+                )
+            })
+        })
+        .into_iter()
+        .find_map(|update| match update.outcome {
+            RuntimeTurnOutcome::DynamicToolCallRequested { request } => Some(request),
+            _ => None,
+        })
+        .expect("second dynamic request should be emitted");
+
+        assert_eq!(request_1.call_id, "call_1");
+        assert_eq!(request_2.call_id, "call_1");
+        assert_ne!(request_1.request_id, request_2.request_id);
+        assert_eq!(request_1.request_id, "turn_1:call_1");
+        assert_eq!(request_2.request_id, "turn_2:call_1");
+
+        for (request, content) in [(request_1, "opened one"), (request_2, "opened two")] {
+            bridge
+                .resolve_server_request(RuntimeServerRequestResolution {
+                    request_id: request.request_id,
+                    payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: content.to_string(),
+                        }],
+                        success: true,
+                    }),
+                })
+                .expect("dynamic tool response should resolve matching turn");
+        }
+
+        let after_1 = collect_runtime_updates_until(&updates_1, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        let after_2 = collect_runtime_updates_until(&updates_2, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_1.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content == "opened one"
+                            && !update.is_error
+                )
+            }),
+            "first turn should receive its own dynamic tool result: {after_1:?}"
+        );
+        assert!(
+            after_2.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_2:tool:call_1"
+                            && update.content == "opened two"
+                            && !update.is_error
+                )
+            }),
+            "second turn should receive its own dynamic tool result: {after_2:?}"
+        );
+    }
+
+    #[test]
     fn unmatched_dynamic_tool_response_fails_retryably() {
         let bridge = DasclawAgentRuntimeBridge::new(|_| {
             Err(RuntimeBridgeError::fatal("factory should not be used"))
@@ -9597,7 +9947,7 @@ mod tests {
 
         let error = bridge
             .resolve_server_request(RuntimeServerRequestResolution {
-                request_id: "call_1".to_string(),
+                request_id: "turn_1:call_1".to_string(),
                 payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
                     content_items: vec![DynamicToolCallOutputContentItem::InputText {
                         text: "ok".to_string(),
@@ -9611,7 +9961,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("runtime dynamic tool request is not pending: call_1")
+                .contains("runtime dynamic tool request is not pending: turn_1:call_1")
         );
     }
 
