@@ -485,6 +485,52 @@ describe('useDasclawAssistantRuntime', () => {
     expect(latestRuntime?.serverRequests).toEqual([])
   })
 
+  it('rejects mismatched wide server request responses without removing the queued request', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = fileChangeApprovalRequest('file_change_1')
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await expect(
+      latestRuntime?.respondToServerRequest(
+        request as AppServerServerRequest,
+        {
+          contentItems: [],
+          success: true
+        } as AppServerServerRequestResponse
+      )
+    ).rejects.toThrow('server request response does not match request method')
+
+    expect(respondServerRequestMock).not.toHaveBeenCalled()
+    expect(latestRuntime?.serverRequests).toEqual([request])
+  })
+
+  it('keeps queued server requests when respondServerRequest rejects', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = fileChangeApprovalRequest('file_change_1')
+    const response = {
+      decision: 'accept'
+    } satisfies AppServerServerRequestResponse<'item/fileChange/requestApproval'>
+    respondServerRequestMock.mockRejectedValueOnce(new Error('bridge failed'))
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await expect(latestRuntime?.respondToServerRequest(request, response)).rejects.toThrow(
+      'bridge failed'
+    )
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('file_change_1', response)
+    expect(latestRuntime?.serverRequests).toEqual([request])
+  })
+
   it('rejects queued server requests with a fail-closed response and removes them from the queue', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))
@@ -519,6 +565,24 @@ describe('useDasclawAssistantRuntime', () => {
 
     expect(latestRuntime?.serverRequests).toEqual([request])
     expect(openExternalHttpUrlMock).not.toHaveBeenCalled()
+    expect(respondServerRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('ignores unknown future request methods without queueing or responding', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    await act(async () => {
+      notificationListener?.({
+        hostId: 'local',
+        requestId: 'future_1',
+        method: 'item/future/requestApproval',
+        params: {}
+      } as unknown as AppServerNotification)
+    })
+
+    expect(latestRuntime?.serverRequests).toEqual([])
     expect(respondServerRequestMock).not.toHaveBeenCalled()
   })
 

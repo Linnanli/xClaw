@@ -158,6 +158,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
       request: AppServerServerRequest<Method>,
       response: AppServerServerRequestResponse<Method>
     ) => {
+      assertServerRequestResponseMatchesMethod(request.method, response)
       await window.desktopAppServer.respondServerRequest(request.requestId, response)
       setServerRequests((current) => removeServerRequest(current, request))
     },
@@ -289,14 +290,61 @@ function isServerRequest(
   return 'requestId' in notification && isServerRequestMethod(notification.method)
 }
 
+const serverRequestMethods = {
+  'item/commandExecution/requestApproval': true,
+  'item/permissions/requestApproval': true,
+  'item/fileChange/requestApproval': true,
+  'item/tool/requestUserInput': true,
+  'item/tool/call': true
+} satisfies Record<AppServerServerRequestMethod, true>
+
 function isServerRequestMethod(method: string): method is AppServerServerRequestMethod {
+  return method in serverRequestMethods
+}
+
+function assertServerRequestResponseMatchesMethod(
+  method: AppServerServerRequestMethod,
+  response: AppServerServerRequestResponse
+): void {
+  if (isServerRequestResponseForMethod(method, response)) return
+  throw new Error('server request response does not match request method')
+}
+
+function isServerRequestResponseForMethod(
+  method: AppServerServerRequestMethod,
+  response: AppServerServerRequestResponse
+): boolean {
+  if (!isRecord(response)) return false
+  const record = response as Record<string, unknown>
+
+  switch (method) {
+    case 'item/fileChange/requestApproval':
+      return isFileChangeApprovalResponse(record)
+    case 'item/tool/call':
+      return typeof record.success === 'boolean' && Array.isArray(record.contentItems)
+    case 'item/tool/requestUserInput':
+      return isRecord(record.answers)
+    case 'item/permissions/requestApproval':
+      return (
+        isRecord(record.permissions) &&
+        (record.scope === 'turn' || record.scope === 'session') &&
+        typeof record.strictAutoReview === 'boolean'
+      )
+    case 'item/commandExecution/requestApproval':
+      return isRecord(record.decision) && typeof record.decision.kind === 'string'
+  }
+}
+
+function isFileChangeApprovalResponse(response: Record<string, unknown>): boolean {
   return (
-    method === 'item/commandExecution/requestApproval' ||
-    method === 'item/permissions/requestApproval' ||
-    method === 'item/fileChange/requestApproval' ||
-    method === 'item/tool/requestUserInput' ||
-    method === 'item/tool/call'
+    response.decision === 'accept' ||
+    response.decision === 'acceptForSession' ||
+    response.decision === 'decline'
   )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function requireTurnTracker(
