@@ -527,6 +527,29 @@ describe('useDasclawAssistantRuntime', () => {
     expect(latestRuntime?.serverRequests).toEqual([])
   })
 
+  it('accepts permissions responses with array permissions and review scope', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    const request = permissionsApprovalRequest('permissions_1')
+    const response = {
+      permissions: ['net:fetch'],
+      scope: 'turn',
+      strictAutoReview: true
+    } satisfies AppServerServerRequestResponse<'item/permissions/requestApproval'>
+    await act(async () => {
+      notificationListener?.(request)
+    })
+
+    await act(async () => {
+      await latestRuntime?.respondToServerRequest(request, response)
+    })
+
+    expect(respondServerRequestMock).toHaveBeenCalledWith('permissions_1', response)
+    expect(latestRuntime?.serverRequests).toEqual([])
+  })
+
   it('rejects mismatched wide server request responses without removing the queued request', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))

@@ -546,6 +546,28 @@ describe('App composer', () => {
     })
   })
 
+  it('responds to a permissions request when allowing once', async () => {
+    const request = permissionsApprovalRequest('permissions-request-1')
+    runtimeState.serverRequests = [request]
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const allow = buttonWithText('Allow once')
+    expect(allow).not.toBeUndefined()
+
+    await act(async () => {
+      allow?.click()
+    })
+
+    expect(runtimeState.respondToServerRequest).toHaveBeenCalledWith(request, {
+      permissions: ['net:fetch'],
+      scope: 'turn',
+      strictAutoReview: true
+    })
+  })
+
   it('runs a client tool request from the panel and responds with sanitized output', async () => {
     const request = toolCallRequest('tool-request-1', {
       url: 'https://example.test/page?token=secret#fragment'
@@ -604,6 +626,24 @@ function fileChangeApprovalRequest(
       itemId: 'file_1',
       reason: 'modify src/App.tsx',
       grantRoot: '/workspace'
+    }
+  }
+}
+
+function permissionsApprovalRequest(
+  requestId: string
+): AppServerServerRequest<'item/permissions/requestApproval'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/permissions/requestApproval',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'permission_1',
+      cwd: '/workspace',
+      reason: 'needs network',
+      permissions: ['net:fetch']
     }
   }
 }

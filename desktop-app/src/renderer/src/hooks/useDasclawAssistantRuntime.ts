@@ -342,7 +342,7 @@ function isFileChangeApprovalResponse(response: Record<string, unknown>): boolea
 
 function isPermissionsApprovalResponse(response: Record<string, unknown>): boolean {
   return (
-    isRecord(response.permissions) &&
+    isJsonContainer(response.permissions) &&
     isOptionalPermissionScope(response.scope) &&
     isOptionalBoolean(response.strictAutoReview)
   )
@@ -358,6 +358,10 @@ function isOptionalBoolean(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isJsonContainer(value: unknown): value is Record<string, unknown> | unknown[] {
+  return typeof value === 'object' && value !== null
 }
 
 function requireTurnTracker(
