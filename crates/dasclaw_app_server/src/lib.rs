@@ -34,7 +34,8 @@ use dasclaw_app_server_protocol::{
     CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
     CommandExecWriteResponse, CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsChangedNotification,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent,
+    FileChangeApprovalDecision, FileChangeRequestApprovalResponse, FsChangedNotification,
     FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
     FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
     FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
@@ -51,15 +52,16 @@ use dasclaw_app_server_protocol::{
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent,
-    RuntimeToolApprovalAvailability, SandboxMode, ServerInfo, ServerNotification,
-    ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth, ServiceName,
-    ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    PermissionsRequestApprovalResponse, ProtocolSchemaResponse, ProtocolVersion,
+    ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
+    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
     SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
     ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
     ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
-    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
-    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
+    ToolRequestUserInputResponse, TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse,
+    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
+    TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -251,10 +253,24 @@ impl ModelProviderState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingServerRequestKind {
+    CommandApproval,
+    #[allow(dead_code)]
+    DynamicToolCall,
+    #[allow(dead_code)]
+    ToolUserInput,
+    #[allow(dead_code)]
+    FileChangeApproval,
+    #[allow(dead_code)]
+    PermissionsApproval,
+}
+
 #[derive(Debug, Clone)]
 struct PendingServerRequest {
     request_id: String,
     runtime_request_id: String,
+    kind: PendingServerRequestKind,
     thread_id: String,
     turn_id: String,
     created_at: Instant,
@@ -333,6 +349,90 @@ fn json_rpc_id_to_request_id(id: &Value) -> String {
     id.as_str()
         .map(ToString::to_string)
         .unwrap_or_else(|| id.to_string())
+}
+
+fn decode_server_request_response(
+    kind: PendingServerRequestKind,
+    result: Value,
+) -> Result<RuntimeServerRequestResponse, String> {
+    match kind {
+        PendingServerRequestKind::CommandApproval => {
+            let payload = serde_json::from_value::<ApprovalResponsePayload>(result)
+                .map_err(|error| error.to_string())?;
+            Ok(RuntimeServerRequestResponse::Approval(
+                approval_decision_to_runtime(payload.decision),
+            ))
+        }
+        PendingServerRequestKind::DynamicToolCall => {
+            serde_json::from_value::<DynamicToolCallResponse>(result)
+                .map(RuntimeServerRequestResponse::DynamicTool)
+                .map_err(|error| error.to_string())
+        }
+        PendingServerRequestKind::ToolUserInput => {
+            serde_json::from_value::<ToolRequestUserInputResponse>(result)
+                .map(RuntimeServerRequestResponse::ToolUserInput)
+                .map_err(|error| error.to_string())
+        }
+        PendingServerRequestKind::FileChangeApproval => {
+            let payload = serde_json::from_value::<FileChangeRequestApprovalResponse>(result)
+                .map_err(|error| error.to_string())?;
+            Ok(RuntimeServerRequestResponse::FileChange(payload.decision))
+        }
+        PendingServerRequestKind::PermissionsApproval => {
+            serde_json::from_value::<PermissionsRequestApprovalResponse>(result)
+                .map(RuntimeServerRequestResponse::Permissions)
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+fn approval_decision_to_runtime(
+    decision: AppServerApprovalDecision,
+) -> dasclaw_runtime::ApprovalDecision {
+    match decision {
+        AppServerApprovalDecision::Approve => dasclaw_runtime::ApprovalDecision::Approve,
+        AppServerApprovalDecision::ApproveAlways => {
+            dasclaw_runtime::ApprovalDecision::ApproveAlways
+        }
+        AppServerApprovalDecision::Reject { reason } => {
+            dasclaw_runtime::ApprovalDecision::Reject { reason }
+        }
+    }
+}
+
+fn server_request_resolution_outcome(
+    payload: &RuntimeServerRequestResponse,
+) -> (ServerRequestResolutionOutcome, Option<String>) {
+    match payload {
+        RuntimeServerRequestResponse::Approval(dasclaw_runtime::ApprovalDecision::Reject {
+            reason,
+        }) => (ServerRequestResolutionOutcome::Rejected, reason.clone()),
+        RuntimeServerRequestResponse::Approval(_) => {
+            (ServerRequestResolutionOutcome::Approved, None)
+        }
+        RuntimeServerRequestResponse::DynamicTool(response) => {
+            if response.success {
+                (ServerRequestResolutionOutcome::Approved, None)
+            } else {
+                (
+                    ServerRequestResolutionOutcome::Failed,
+                    Some("dynamic tool call response reported failure".to_string()),
+                )
+            }
+        }
+        RuntimeServerRequestResponse::ToolUserInput(_)
+        | RuntimeServerRequestResponse::Permissions(_) => {
+            (ServerRequestResolutionOutcome::Approved, None)
+        }
+        RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Accept)
+        | RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::AcceptForSession) => {
+            (ServerRequestResolutionOutcome::Approved, None)
+        }
+        RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Decline)
+        | RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Cancel) => {
+            (ServerRequestResolutionOutcome::Rejected, None)
+        }
+    }
 }
 
 fn validate_client_model(model: &ClientModelConfig, field: &str) -> Result<(), AppServerError> {
@@ -1584,34 +1684,44 @@ impl AppServer {
 
     fn handle_client_response(&mut self, response: JsonRpcClientResponse) {
         if response.jsonrpc != JSON_RPC_VERSION {
-            self.fail_pending_approval_response(response.id, "jsonrpc must be \"2.0\"".to_string());
+            self.fail_pending_server_request_response(
+                response.id,
+                "jsonrpc must be \"2.0\"".to_string(),
+            );
             return;
         }
 
         if let Some(error) = response.error {
-            self.fail_pending_approval_response(response.id, error.message);
+            self.fail_pending_server_request_response(response.id, error.message);
             return;
         }
 
         let Some(result) = response.result else {
-            self.fail_pending_approval_response(response.id, "missing result".to_string());
+            self.fail_pending_server_request_response(response.id, "missing result".to_string());
             return;
         };
 
-        match serde_json::from_value::<ApprovalResponsePayload>(result) {
-            Ok(payload) => {
-                let _ = self.apply_approval_response_id(response.id, payload);
-            }
-            Err(error) => {
-                self.fail_pending_approval_response(response.id, error.to_string());
-            }
-        }
+        let _ = self.apply_server_request_response_id(response.id, result);
     }
 
     fn apply_approval_response_id(
         &mut self,
         response_id: Value,
         payload: ApprovalResponsePayload,
+    ) -> Result<(), AppServerError> {
+        let result = serde_json::to_value(payload).map_err(|error| {
+            AppServerError::invalid_request(
+                method::APPROVAL_RESPOND,
+                format!("failed to encode approval response: {error}"),
+            )
+        })?;
+        self.apply_server_request_response_id(response_id, result)
+    }
+
+    fn apply_server_request_response_id(
+        &mut self,
+        response_id: Value,
+        result: Value,
     ) -> Result<(), AppServerError> {
         let Some(pending) = self.pending_server_requests.remove(&response_id) else {
             self.emit_failed_server_request_resolution(
@@ -1621,41 +1731,25 @@ impl AppServer {
             return Ok(());
         };
 
-        self.apply_approval_decision(pending, payload.decision);
+        match decode_server_request_response(pending.kind, result) {
+            Ok(payload) => self.apply_server_request_resolution(pending, payload),
+            Err(reason) => self.fail_pending_server_request(pending, reason),
+        }
         Ok(())
     }
 
-    fn apply_approval_decision(
+    fn apply_server_request_resolution(
         &mut self,
         pending: PendingServerRequest,
-        decision: AppServerApprovalDecision,
+        payload: RuntimeServerRequestResponse,
     ) {
-        let (runtime_decision, success_outcome, resolution_reason) = match decision {
-            AppServerApprovalDecision::Approve => (
-                dasclaw_runtime::ApprovalDecision::Approve,
-                ServerRequestResolutionOutcome::Approved,
-                None,
-            ),
-            AppServerApprovalDecision::ApproveAlways => (
-                dasclaw_runtime::ApprovalDecision::ApproveAlways,
-                ServerRequestResolutionOutcome::Approved,
-                None,
-            ),
-            AppServerApprovalDecision::Reject { reason } => {
-                let resolution_reason = reason.clone();
-                (
-                    dasclaw_runtime::ApprovalDecision::Reject { reason },
-                    ServerRequestResolutionOutcome::Rejected,
-                    resolution_reason,
-                )
-            }
-        };
+        let (success_outcome, resolution_reason) = server_request_resolution_outcome(&payload);
 
         let result = self
             .runtime_bridge
-            .resolve_approval(RuntimeApprovalDecision {
+            .resolve_server_request(RuntimeServerRequestResolution {
                 request_id: pending.runtime_request_id.clone(),
-                decision: runtime_decision,
+                payload,
             });
 
         match result {
@@ -1693,21 +1787,27 @@ impl AppServer {
         }
     }
 
-    fn fail_pending_approval_response(&mut self, response_id: Value, reason: String) {
+    fn fail_pending_server_request_response(&mut self, response_id: Value, reason: String) {
         let Some(pending) = self.pending_server_requests.remove(&response_id) else {
             self.emit_failed_server_request_resolution(response_id, reason);
             return;
         };
 
-        let runtime_reason = format!("approval response failed: {reason}");
-        let _ = self
-            .runtime_bridge
-            .resolve_approval(RuntimeApprovalDecision {
-                request_id: pending.runtime_request_id.clone(),
-                decision: dasclaw_runtime::ApprovalDecision::Reject {
-                    reason: Some(runtime_reason.clone()),
-                },
-            });
+        self.fail_pending_server_request(pending, reason);
+    }
+
+    fn fail_pending_server_request(&mut self, pending: PendingServerRequest, reason: String) {
+        let runtime_reason = format!("server request response failed: {reason}");
+        if pending.kind == PendingServerRequestKind::CommandApproval {
+            let _ = self
+                .runtime_bridge
+                .resolve_approval(RuntimeApprovalDecision {
+                    request_id: pending.runtime_request_id.clone(),
+                    decision: dasclaw_runtime::ApprovalDecision::Reject {
+                        reason: Some(format!("approval response failed: {reason}")),
+                    },
+                });
+        }
         self.notifications
             .emit_server_request_resolved(ServerRequestResolvedEvent {
                 request_id: pending.request_id,
@@ -1818,6 +1918,7 @@ impl AppServer {
         self.pending_server_requests.insert(PendingServerRequest {
             request_id: request_id.clone(),
             runtime_request_id,
+            kind: PendingServerRequestKind::CommandApproval,
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             created_at: Instant::now(),
@@ -1835,14 +1936,16 @@ impl AppServer {
         for pending in expired {
             let thread_id = pending.thread_id.clone();
             let turn_id = pending.turn_id.clone();
-            let _ = self
-                .runtime_bridge
-                .resolve_approval(RuntimeApprovalDecision {
-                    request_id: pending.runtime_request_id.clone(),
-                    decision: dasclaw_runtime::ApprovalDecision::Reject {
-                        reason: Some("approval request timed out".to_string()),
-                    },
-                });
+            if pending.kind == PendingServerRequestKind::CommandApproval {
+                let _ = self
+                    .runtime_bridge
+                    .resolve_approval(RuntimeApprovalDecision {
+                        request_id: pending.runtime_request_id.clone(),
+                        decision: dasclaw_runtime::ApprovalDecision::Reject {
+                            reason: Some("approval request timed out".to_string()),
+                        },
+                    });
+            }
             self.notifications
                 .emit_server_request_resolved(ServerRequestResolvedEvent {
                     request_id: pending.request_id,
@@ -1859,6 +1962,25 @@ impl AppServer {
     fn expire_pending_server_requests_for_tests(&mut self, age: Duration) {
         self.pending_server_requests.age_all(age);
         self.expire_pending_server_requests();
+    }
+
+    #[cfg(test)]
+    fn insert_pending_server_request_for_test(
+        &mut self,
+        request_id: &str,
+        kind: PendingServerRequestKind,
+        runtime_request_id: &str,
+        thread_id: &str,
+        turn_id: &str,
+    ) {
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.to_string(),
+            runtime_request_id: runtime_request_id.to_string(),
+            kind,
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            created_at: Instant::now(),
+        });
     }
 
     fn service_health(&self) -> Vec<ServiceHealth> {
@@ -2512,6 +2634,25 @@ pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
             "runtime bridge does not support approval resolution",
         ))
     }
+    fn resolve_server_request(
+        &self,
+        resolution: RuntimeServerRequestResolution,
+    ) -> Result<(), RuntimeBridgeError> {
+        match resolution.payload {
+            RuntimeServerRequestResponse::Approval(decision) => {
+                self.resolve_approval(RuntimeApprovalDecision {
+                    request_id: resolution.request_id,
+                    decision,
+                })
+            }
+            RuntimeServerRequestResponse::DynamicTool(_)
+            | RuntimeServerRequestResponse::ToolUserInput(_)
+            | RuntimeServerRequestResponse::FileChange(_)
+            | RuntimeServerRequestResponse::Permissions(_) => Err(RuntimeBridgeError::fatal(
+                "runtime bridge does not support this server request response kind",
+            )),
+        }
+    }
     fn shutdown(&self);
 }
 
@@ -2574,6 +2715,21 @@ pub struct RuntimeApprovalRequest {
 pub struct RuntimeApprovalDecision {
     pub request_id: String,
     pub decision: dasclaw_runtime::ApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeServerRequestResolution {
+    pub request_id: String,
+    pub payload: RuntimeServerRequestResponse,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeServerRequestResponse {
+    Approval(dasclaw_runtime::ApprovalDecision),
+    DynamicTool(DynamicToolCallResponse),
+    ToolUserInput(ToolRequestUserInputResponse),
+    FileChange(FileChangeApprovalDecision),
+    Permissions(PermissionsRequestApprovalResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4075,9 +4231,9 @@ mod tests {
 
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
-        CommandExecTerminalSize, FsChangedKind, FsChangedNotification, ServiceStatus,
-        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, UserInput, WorkspaceInfo,
-        WorkspaceTrust, event, server_request,
+        CommandExecTerminalSize, DynamicToolCallOutputContentItem, FsChangedKind,
+        FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope, SkillsListEntry,
+        TransportKind, UserInput, WorkspaceInfo, WorkspaceTrust, event, server_request,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -4134,7 +4290,7 @@ mod tests {
 
     #[test]
     fn runtime_features_gate_r1_capability_advertising() {
-        let bridge = Arc::new(R1RuntimeBridge);
+        let bridge = Arc::new(R1RuntimeBridge::default());
         let server = initialized_server_with_bridge(bridge);
 
         assert_eq!(
@@ -6069,6 +6225,77 @@ mod tests {
             }),
             "approval response should emit approved serverRequest/resolved: {notifications:?}"
         );
+    }
+
+    #[test]
+    fn dynamic_tool_client_response_is_decoded_by_pending_kind() {
+        let bridge = Arc::new(R1RuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        server.insert_pending_server_request_for_test(
+            "tool_1",
+            PendingServerRequestKind::DynamicToolCall,
+            "runtime_tool_1",
+            "thread_1",
+            "turn_1",
+        );
+
+        let response = server.handle_json_rpc(
+            r#"{"jsonrpc":"2.0","id":"tool_1","result":{"contentItems":[{"type":"inputText","text":"ok"}],"success":true}}"#,
+        );
+
+        assert!(response.is_none());
+        assert_eq!(
+            bridge.resolutions(),
+            vec![RuntimeServerRequestResolution {
+                request_id: "runtime_tool_1".to_string(),
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "ok".to_string(),
+                    }],
+                    success: true,
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn malformed_dynamic_tool_response_fails_turn_and_clears_pending_request() {
+        let bridge = Arc::new(R1RuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        server.insert_pending_server_request_for_test(
+            "tool_1",
+            PendingServerRequestKind::DynamicToolCall,
+            "runtime_tool_1",
+            "thread_1",
+            "turn_1",
+        );
+
+        let response =
+            server.handle_json_rpc(r#"{"jsonrpc":"2.0","id":"tool_1","result":{"success":true}}"#);
+
+        assert!(response.is_none());
+        assert!(bridge.resolutions().is_empty());
+        let notifications = server.drain_notifications();
+        let resolved_notifications = notifications
+            .iter()
+            .filter(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == "tool_1"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resolved_notifications.len(),
+            1,
+            "malformed dynamic tool response should emit one failed serverRequest/resolved: {notifications:?}"
+        );
+        assert_eq!(resolved_notifications[0].params["outcome"], "failed");
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+        let later = server.drain_notifications();
+        assert!(!later.iter().any(|notification| {
+            notification.method == "serverRequest/resolved"
+                && notification.params["requestId"] == "tool_1"
+        }));
     }
 
     #[test]
@@ -10263,7 +10490,15 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
-    struct R1RuntimeBridge;
+    struct R1RuntimeBridge {
+        resolutions: Mutex<Vec<RuntimeServerRequestResolution>>,
+    }
+
+    impl R1RuntimeBridge {
+        fn resolutions(&self) -> Vec<RuntimeServerRequestResolution> {
+            self.resolutions.lock().expect("resolutions lock").clone()
+        }
+    }
 
     impl RuntimeBridge for R1RuntimeBridge {
         fn features(&self) -> RuntimeBridgeFeatures {
@@ -10288,6 +10523,17 @@ mod tests {
             &self,
             _request: RuntimeTurnCancelRequest,
         ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn resolve_server_request(
+            &self,
+            resolution: RuntimeServerRequestResolution,
+        ) -> Result<(), RuntimeBridgeError> {
+            self.resolutions
+                .lock()
+                .expect("resolutions lock")
+                .push(resolution);
             Ok(())
         }
 
