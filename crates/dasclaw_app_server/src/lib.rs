@@ -36,9 +36,9 @@ use dasclaw_app_server_protocol::{
     CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallParams, DynamicToolCallResponse, ErrorCode,
-    ErrorData, ErrorEvent, FileChangeApprovalDecision, FileChangeOutputDeltaEvent,
-    FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent, FileChangeApprovalDecision,
+    FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
     FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
     FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
     FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
@@ -3377,14 +3377,23 @@ pub struct DasclawAgentRuntimeBridge {
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
     active_agents: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
     pending_approvals: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
+    pending_dynamic_tools: Arc<Mutex<HashMap<String, PendingDynamicToolResponse>>>,
     features: RuntimeBridgeFeatures,
 }
 
-type AgentFactory = dyn Fn(
-        CancellationToken,
-        RuntimeModelProviderSnapshot,
-        ReasoningSummary,
-    ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+pub struct RuntimeAgentFactoryContext {
+    pub token: CancellationToken,
+    pub model_provider: RuntimeModelProviderSnapshot,
+    pub reasoning_summary: ReasoningSummary,
+    pub dynamic_tool_executor: Arc<dyn dasclaw_runtime::ToolExecutor>,
+}
+
+struct PendingDynamicToolResponse {
+    turn_id: String,
+    sender: mpsc::Sender<DynamicToolCallResponse>,
+}
+
+type AgentFactory = dyn Fn(RuntimeAgentFactoryContext) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
     + Send
     + Sync
     + 'static;
@@ -3404,17 +3413,13 @@ impl DasclawAgentRuntimeBridge {
         + Sync
         + 'static,
     ) -> Self {
-        Self::new_with_model_provider(move |token, _snapshot, _reasoning_summary| {
-            agent_factory(token)
-        })
+        Self::new_with_model_provider(move |ctx| agent_factory(ctx.token))
     }
 
     #[must_use]
     pub fn new_with_model_provider(
         agent_factory: impl Fn(
-            CancellationToken,
-            RuntimeModelProviderSnapshot,
-            ReasoningSummary,
+            RuntimeAgentFactoryContext,
         ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
         + Send
         + Sync
@@ -3425,6 +3430,7 @@ impl DasclawAgentRuntimeBridge {
             in_flight: Arc::new(Mutex::new(HashMap::new())),
             active_agents: Arc::new(Mutex::new(HashMap::new())),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            pending_dynamic_tools: Arc::new(Mutex::new(HashMap::new())),
             features: RuntimeBridgeFeatures {
                 approval: true,
                 tools: true,
@@ -3437,9 +3443,7 @@ impl DasclawAgentRuntimeBridge {
     #[must_use]
     pub fn new_with_model_provider_and_features(
         agent_factory: impl Fn(
-            CancellationToken,
-            RuntimeModelProviderSnapshot,
-            ReasoningSummary,
+            RuntimeAgentFactoryContext,
         ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
         + Send
         + Sync
@@ -3458,10 +3462,11 @@ impl DasclawAgentRuntimeBridge {
 
     #[must_use]
     pub fn from_responder(responder: Arc<dyn dasclaw_runtime::AgentResponder>) -> Self {
-        Self::new(move |token| {
+        Self::new_with_model_provider(move |ctx| {
             dasclaw_runtime::Agent::builder()
                 .responder_arc(Arc::clone(&responder))
-                .cancellation_token(token)
+                .tool_executor_arc(ctx.dynamic_tool_executor)
+                .cancellation_token(ctx.token)
                 .build()
                 .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
         })
@@ -3481,6 +3486,9 @@ impl DasclawAgentRuntimeBridge {
         if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
             pending_approvals.retain(|_, pending_agent| !Arc::ptr_eq(pending_agent, agent));
         }
+        if let Ok(mut pending_dynamic_tools) = self.pending_dynamic_tools.lock() {
+            pending_dynamic_tools.retain(|_, pending| pending.turn_id != turn_id);
+        }
     }
 }
 
@@ -3496,11 +3504,19 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             ));
         }
         let token = CancellationToken::new();
-        let agent = Arc::new((self.agent_factory)(
-            token.clone(),
-            request.model_provider.clone(),
-            request.reasoning_summary,
-        )?);
+        let dynamic_tool_executor = Arc::new(RuntimeClientDynamicToolExecutor {
+            pending_dynamic_tools: Arc::clone(&self.pending_dynamic_tools),
+            updates: request.updates.clone(),
+            thread_id: request.thread_id.clone(),
+            turn_id: request.turn_id.clone(),
+            token: token.clone(),
+        });
+        let agent = Arc::new((self.agent_factory)(RuntimeAgentFactoryContext {
+            token: token.clone(),
+            model_provider: request.model_provider.clone(),
+            reasoning_summary: request.reasoning_summary,
+            dynamic_tool_executor,
+        })?);
         let mut in_flight = self
             .in_flight
             .lock()
@@ -3626,19 +3642,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                     let call_id = tool_call_id_from_arguments(&arguments)
                                         .unwrap_or_else(|| name.clone());
                                     tool_item_keys_by_name.insert(name.clone(), call_id.clone());
-                                    if is_client_dynamic_tool(&name) {
-                                        event_updates.dynamic_tool_call_requested(
-                                            event_thread_id.clone(),
-                                            event_turn_id.clone(),
-                                            RuntimeDynamicToolCallRequest {
-                                                request_id: call_id.clone(),
-                                                call_id,
-                                                namespace: Some("client".to_string()),
-                                                tool: name,
-                                                arguments,
-                                            },
-                                        );
-                                    } else {
+                                    if !is_client_dynamic_tool(&name) {
                                         event_updates.command_output_delta(
                                             event_thread_id.clone(),
                                             event_turn_id.clone(),
@@ -3759,7 +3763,27 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     decision: dasclaw_runtime::ApprovalDecision::Approve,
                 })
             }
-            RuntimeServerRequestResponse::DynamicTool(_) => Ok(()),
+            RuntimeServerRequestResponse::DynamicTool(response) => {
+                let pending = self
+                    .pending_dynamic_tools
+                    .lock()
+                    .map_err(|_| {
+                        RuntimeBridgeError::retryable("runtime dynamic tool registry lock poisoned")
+                    })?
+                    .remove(&resolution.request_id)
+                    .ok_or_else(|| {
+                        RuntimeBridgeError::retryable(format!(
+                            "runtime dynamic tool request is not pending: {}",
+                            resolution.request_id
+                        ))
+                    })?;
+                pending.sender.send(response).map_err(|_| {
+                    RuntimeBridgeError::retryable(format!(
+                        "runtime dynamic tool request receiver is closed: {}",
+                        resolution.request_id
+                    ))
+                })
+            }
             RuntimeServerRequestResponse::ToolUserInput(_)
             | RuntimeServerRequestResponse::FileChange(_) => Err(RuntimeBridgeError::fatal(
                 "runtime bridge does not support this server request response kind",
@@ -3787,6 +3811,127 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
             pending_approvals.clear();
         }
+        if let Ok(mut pending_dynamic_tools) = self.pending_dynamic_tools.lock() {
+            pending_dynamic_tools.clear();
+        }
+    }
+}
+
+struct RuntimeClientDynamicToolExecutor {
+    pending_dynamic_tools: Arc<Mutex<HashMap<String, PendingDynamicToolResponse>>>,
+    updates: RuntimeTurnUpdateSink,
+    thread_id: String,
+    turn_id: String,
+    token: CancellationToken,
+}
+
+#[async_trait::async_trait]
+impl dasclaw_runtime::ToolExecutor for RuntimeClientDynamicToolExecutor {
+    async fn execute(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        if !is_client_dynamic_tool(&call.name) {
+            return Ok(dasclaw_core::messages::ToolResult {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                content: format!("unsupported runtime bridge tool: {}", call.name),
+                is_error: true,
+            });
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        {
+            let mut pending_dynamic_tools = self
+                .pending_dynamic_tools
+                .lock()
+                .map_err(|_| "runtime dynamic tool registry lock poisoned")?;
+            if pending_dynamic_tools.contains_key(&call.id) {
+                return Ok(dasclaw_core::messages::ToolResult {
+                    tool_call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content: format!("duplicate runtime dynamic tool request: {}", call.id),
+                    is_error: true,
+                });
+            }
+            pending_dynamic_tools.insert(
+                call.id.clone(),
+                PendingDynamicToolResponse {
+                    turn_id: self.turn_id.clone(),
+                    sender,
+                },
+            );
+        }
+
+        self.updates.dynamic_tool_call_requested(
+            self.thread_id.clone(),
+            self.turn_id.clone(),
+            RuntimeDynamicToolCallRequest {
+                request_id: call.id.clone(),
+                call_id: call.id.clone(),
+                namespace: Some("client".to_string()),
+                tool: call.name.clone(),
+                arguments: call.arguments.clone(),
+            },
+        );
+
+        let request_id = call.id.clone();
+        let pending_dynamic_tools = Arc::clone(&self.pending_dynamic_tools);
+        let token = self.token.clone();
+        let response =
+            tokio::task::spawn_blocking(move || wait_for_dynamic_tool_response(&receiver, &token))
+                .await
+                .map_err(|error| format!("runtime dynamic tool wait task failed: {error}"))?;
+
+        if let Ok(mut pending_dynamic_tools) = pending_dynamic_tools.lock() {
+            pending_dynamic_tools.remove(&request_id);
+        }
+
+        let response = response?;
+        Ok(dynamic_tool_response_to_tool_result(call, response))
+    }
+}
+
+fn wait_for_dynamic_tool_response(
+    receiver: &mpsc::Receiver<DynamicToolCallResponse>,
+    token: &CancellationToken,
+) -> Result<DynamicToolCallResponse, dasclaw_core::traits::HostError> {
+    loop {
+        if token.is_cancelled() {
+            return Err("runtime dynamic tool request cancelled".into());
+        }
+        match receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(response) => return Ok(response),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("runtime dynamic tool response channel closed".into());
+            }
+        }
+    }
+}
+
+fn dynamic_tool_response_to_tool_result(
+    call: &dasclaw_core::messages::ToolCall,
+    response: DynamicToolCallResponse,
+) -> dasclaw_core::messages::ToolResult {
+    let content = response
+        .content_items
+        .iter()
+        .filter_map(|item| match item {
+            DynamicToolCallOutputContentItem::InputText { text } if !text.trim().is_empty() => {
+                Some(text.as_str())
+            }
+            DynamicToolCallOutputContentItem::InputText { .. }
+            | DynamicToolCallOutputContentItem::InputImage { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    dasclaw_core::messages::ToolResult {
+        tool_call_id: call.id.clone(),
+        name: call.name.clone(),
+        content,
+        is_error: !response.success,
     }
 }
 
@@ -3815,20 +3960,20 @@ fn command_from_arguments(arguments: &Value) -> Option<String> {
 }
 
 fn agent_from_model_provider_snapshot(
-    token: CancellationToken,
-    snapshot: RuntimeModelProviderSnapshot,
-    reasoning_summary: ReasoningSummary,
+    ctx: RuntimeAgentFactoryContext,
 ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
+    let snapshot = ctx.model_provider;
     let config = registry_config_from_snapshot(&snapshot)?;
     let provider = ClawCodeLlmProvider::from_registry_config(&config).map_err(|error| {
         RuntimeBridgeError::fatal(redact_snapshot_secret(&error.to_string(), &snapshot))
     })?;
     let responder =
-        LlmProviderResponder::new(Arc::new(provider)).with_reasoning_summary(reasoning_summary);
+        LlmProviderResponder::new(Arc::new(provider)).with_reasoning_summary(ctx.reasoning_summary);
 
     dasclaw_runtime::Agent::builder()
         .responder(responder)
-        .cancellation_token(token)
+        .tool_executor_arc(ctx.dynamic_tool_executor)
+        .cancellation_token(ctx.token)
         .build()
         .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
 }
@@ -9052,19 +9197,17 @@ mod tests {
         let factory_snapshots = Arc::clone(&captured_snapshots);
         let captured_reasoning = Arc::new(Mutex::new(Vec::new()));
         let factory_reasoning = Arc::clone(&captured_reasoning);
-        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(
-            move |_token, snapshot, reasoning_summary| {
-                factory_snapshots
-                    .lock()
-                    .expect("factory snapshots lock")
-                    .push(snapshot);
-                factory_reasoning
-                    .lock()
-                    .expect("factory reasoning lock")
-                    .push(reasoning_summary);
-                Err(RuntimeBridgeError::fatal("test factory stops before run"))
-            },
-        );
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(move |ctx| {
+            factory_snapshots
+                .lock()
+                .expect("factory snapshots lock")
+                .push(ctx.model_provider);
+            factory_reasoning
+                .lock()
+                .expect("factory reasoning lock")
+                .push(ctx.reasoning_summary);
+            Err(RuntimeBridgeError::fatal("test factory stops before run"))
+        });
 
         let error = bridge
             .start_turn(RuntimeTurnStartRequest {
@@ -9171,7 +9314,7 @@ mod tests {
         let executor = Arc::new(CountingExecutor::new());
         let factory_executor = Arc::clone(&executor);
         let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
-            move |token, _snapshot, _reasoning_summary| {
+            move |ctx| {
                 dasclaw_runtime::Agent::builder()
                     .responder(ScriptedResponder::new(vec![
                         tool_call_output("bash", "call_1"),
@@ -9182,7 +9325,7 @@ mod tests {
                     )
                     .tools(vec![dummy_tool("bash")])
                     .approval_policy(Arc::new(AlwaysApprovePolicy))
-                    .cancellation_token(token)
+                    .cancellation_token(ctx.token)
                     .build()
                     .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
             },
@@ -9276,17 +9419,17 @@ mod tests {
         let executor = Arc::new(CountingExecutor::new());
         let factory_executor = Arc::clone(&executor);
         let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
-            move |token, _snapshot, _reasoning_summary| {
+            move |ctx| {
                 dasclaw_runtime::Agent::builder()
                     .responder(ScriptedResponder::new(vec![
-                        client_tool_call_output("open_url", "call_1"),
+                        tool_call_output("bash", "call_1"),
                         text_output("done"),
                     ]))
                     .tool_executor(
                         Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
                     )
-                    .tools(vec![dummy_tool("open_url")])
-                    .cancellation_token(token)
+                    .tools(vec![dummy_tool("bash")])
+                    .cancellation_token(ctx.token)
                     .build()
                     .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
             },
@@ -9316,31 +9459,27 @@ mod tests {
         let drained = collect_runtime_updates_until(&updates, |updates| {
             updates
                 .iter()
-                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::ToolResult { .. }))
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
         });
         assert!(
             drained.iter().any(|update| {
                 matches!(
                     &update.outcome,
-                    RuntimeTurnOutcome::DynamicToolCallRequested { request }
-                        if request.tool == "open_url"
-                            && request.call_id == "call_1"
-                            && request.request_id == "call_1"
-                            && request.namespace.as_deref() == Some("client")
-                            && request.arguments["url"] == "https://example.test"
+                    RuntimeTurnOutcome::CommandOutputDelta { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.delta == "tool call started: bash"
                 )
             }),
-            "client tool start should be emitted as dynamic tool request: {drained:?}"
+            "non-client tool start should be emitted as command output delta: {drained:?}"
         );
         assert!(
             !drained.iter().any(|update| {
                 matches!(
                     &update.outcome,
-                    RuntimeTurnOutcome::CommandOutputDelta { update }
-                        if update.delta == "tool call started: open_url"
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
                 )
             }),
-            "client tool start should not be emitted as command output delta: {drained:?}"
+            "non-client tool start should not be emitted as dynamic tool request: {drained:?}"
         );
         assert!(
             drained.iter().any(|update| {
@@ -9348,7 +9487,7 @@ mod tests {
                     &update.outcome,
                     RuntimeTurnOutcome::ToolResult { update }
                         if update.item_id == "turn_1:tool:call_1"
-                            && update.content == "ran open_url"
+                            && update.content == "ran bash"
                             && !update.is_error
                 )
             }),
@@ -9358,12 +9497,105 @@ mod tests {
     }
 
     #[test]
-    fn agent_runtime_bridge_dynamic_tool_response_does_not_fail_turn() {
+    fn agent_runtime_bridge_waits_for_client_dynamic_tool_response() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                client_tool_call_output("open_url", "call_1"),
+                text_output("done"),
+            ])));
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "open the docs".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_response = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(
+                    update.outcome,
+                    RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+                )
+            })
+        });
+        let dynamic_request = before_response
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::DynamicToolCallRequested { request } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("client dynamic tool request should be emitted");
+        assert_eq!(dynamic_request.request_id, "call_1");
+        assert_eq!(dynamic_request.call_id, "call_1");
+        assert_eq!(dynamic_request.tool, "open_url");
+        assert_eq!(dynamic_request.namespace.as_deref(), Some("client"));
+        assert_eq!(dynamic_request.arguments["url"], "https://example.test");
+        assert!(
+            !before_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::CommandOutputDelta { update }
+                        if update.delta == "tool call started: open_url"
+                )
+            }),
+            "client tool start should not also emit command output delta: {before_response:?}"
+        );
+
+        bridge
+            .resolve_server_request(RuntimeServerRequestResolution {
+                request_id: dynamic_request.request_id,
+                payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "opened".to_string(),
+                    }],
+                    success: true,
+                }),
+            })
+            .expect("dynamic tool response should resume the runtime turn");
+
+        let after_response = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::ToolResult { update }
+                        if update.item_id == "turn_1:tool:call_1"
+                            && update.content == "opened"
+                            && !update.is_error
+                )
+            }),
+            "dynamic tool response should produce a runtime tool result: {after_response:?}"
+        );
+        assert!(
+            after_response.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Completed { output } if output == "done"
+                )
+            }),
+            "runtime should complete after dynamic tool result: {after_response:?}"
+        );
+    }
+
+    #[test]
+    fn unmatched_dynamic_tool_response_fails_retryably() {
         let bridge = DasclawAgentRuntimeBridge::new(|_| {
             Err(RuntimeBridgeError::fatal("factory should not be used"))
         });
 
-        bridge
+        let error = bridge
             .resolve_server_request(RuntimeServerRequestResolution {
                 request_id: "call_1".to_string(),
                 payload: RuntimeServerRequestResponse::DynamicTool(DynamicToolCallResponse {
@@ -9373,7 +9605,14 @@ mod tests {
                     success: true,
                 }),
             })
-            .expect("dynamic tool response should not fail the runtime turn");
+            .expect_err("unmatched dynamic tool response must not be accepted as success");
+
+        assert!(error.retryable);
+        assert!(
+            error
+                .message
+                .contains("runtime dynamic tool request is not pending: call_1")
+        );
     }
 
     #[test]
@@ -9388,7 +9627,7 @@ mod tests {
         let executor = Arc::new(CountingExecutor::new());
         let factory_executor = Arc::clone(&executor);
         let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
-            move |token, _snapshot, _reasoning_summary| {
+            move |ctx| {
                 dasclaw_runtime::Agent::builder()
                     .responder(ScriptedResponder::new(vec![
                         client_tool_call_output("open_url", "call_1"),
@@ -9399,7 +9638,7 @@ mod tests {
                     )
                     .tools(vec![dummy_tool("open_url")])
                     .approval_policy(Arc::new(AlwaysApprovePolicy))
-                    .cancellation_token(token)
+                    .cancellation_token(ctx.token)
                     .build()
                     .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
             },
