@@ -1334,6 +1334,7 @@ mod tests {
                 approval: true,
                 tools: true,
                 sandbox: true,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 

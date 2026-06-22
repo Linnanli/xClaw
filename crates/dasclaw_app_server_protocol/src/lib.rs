@@ -709,14 +709,21 @@ impl CapabilityMatrix {
 
     #[must_use]
     pub fn with_p3_approval_tool_sandbox(mut self) -> Self {
-        self.approval = Capability::implemented(
-            "approval",
-            &[method::APPROVAL_RESPOND],
-            &[
-                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
-                event::SERVER_REQUEST_RESOLVED,
-            ],
-        );
+        self = self.with_runtime_tool_approval(RuntimeToolApprovalAvailability {
+            command_approval: true,
+            dynamic_tool_call: false,
+            tool_user_input: false,
+            permissions_approval: false,
+            file_change_approval: false,
+            file_change_events: false,
+            auto_approval_review: false,
+        });
+        self = self.with_runtime_command_tool_events_ready();
+        self.with_runtime_sandbox_ready()
+    }
+
+    #[must_use]
+    pub fn with_runtime_command_tool_events_ready(mut self) -> Self {
         self.tools = Capability::implemented(
             "tools",
             &[],
@@ -725,6 +732,56 @@ impl CapabilityMatrix {
                 event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
             ],
         );
+        self
+    }
+
+    #[must_use]
+    pub fn with_runtime_tool_approval(
+        mut self,
+        availability: RuntimeToolApprovalAvailability,
+    ) -> Self {
+        if availability.command_approval {
+            let mut approval_events = vec![
+                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+                event::SERVER_REQUEST_RESOLVED,
+            ];
+            if availability.dynamic_tool_call {
+                approval_events.push(server_request::ITEM_TOOL_CALL);
+            }
+            if availability.tool_user_input {
+                approval_events.push(server_request::ITEM_TOOL_REQUEST_USER_INPUT);
+            }
+            if availability.permissions_approval {
+                approval_events.push(server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL);
+            }
+            if availability.file_change_approval {
+                approval_events.push(server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL);
+            }
+            self.approval =
+                Capability::implemented("approval", &[method::APPROVAL_RESPOND], &approval_events);
+        }
+
+        if availability.file_change_events || availability.auto_approval_review {
+            let mut tool_events = vec![
+                event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA,
+                event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
+            ];
+            if availability.file_change_events {
+                tool_events.push(event::ITEM_FILE_CHANGE_OUTPUT_DELTA);
+                tool_events.push(event::ITEM_FILE_CHANGE_PATCH_UPDATED);
+            }
+            if availability.auto_approval_review {
+                tool_events.push(event::ITEM_AUTO_APPROVAL_REVIEW_STARTED);
+                tool_events.push(event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED);
+            }
+            self.tools = Capability::implemented("tools", &[], &tool_events);
+        }
+
+        self
+    }
+
+    #[must_use]
+    pub fn with_runtime_sandbox_ready(mut self) -> Self {
         self.sandbox = Capability::new(
             "sandbox",
             CapabilityStatus::Implemented,
@@ -799,6 +856,30 @@ pub struct AppServerServiceAvailability {
 pub struct AppServerP5Availability {
     pub filesystem: bool,
     pub command: CommandExecAvailability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeToolApprovalAvailability {
+    pub command_approval: bool,
+    pub dynamic_tool_call: bool,
+    pub tool_user_input: bool,
+    pub permissions_approval: bool,
+    pub file_change_approval: bool,
+    pub file_change_events: bool,
+    pub auto_approval_review: bool,
+}
+
+impl RuntimeToolApprovalAvailability {
+    #[must_use]
+    pub fn all_ready(self) -> bool {
+        self.command_approval
+            && self.dynamic_tool_call
+            && self.tool_user_input
+            && self.permissions_approval
+            && self.file_change_approval
+            && self.file_change_events
+            && self.auto_approval_review
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1427,6 +1508,26 @@ fn phase_one_events() -> Vec<EventSchema> {
             "ServerRequestResolvedEvent",
         ),
         EventSchema::new(
+            server_request::ITEM_TOOL_CALL,
+            "approval",
+            "DynamicToolCallParams",
+        ),
+        EventSchema::new(
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            "approval",
+            "ToolRequestUserInputParams",
+        ),
+        EventSchema::new(
+            server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+            "approval",
+            "PermissionsRequestApprovalParams",
+        ),
+        EventSchema::new(
+            server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+            "approval",
+            "FileChangeRequestApprovalParams",
+        ),
+        EventSchema::new(
             event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA,
             "tools",
             "CommandExecutionOutputDeltaEvent",
@@ -1435,6 +1536,26 @@ fn phase_one_events() -> Vec<EventSchema> {
             event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
             "tools",
             "CommandExecutionTerminalInteractionEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_FILE_CHANGE_OUTPUT_DELTA,
+            "tools",
+            "FileChangeOutputDeltaEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_FILE_CHANGE_PATCH_UPDATED,
+            "tools",
+            "FileChangePatchUpdatedEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_AUTO_APPROVAL_REVIEW_STARTED,
+            "tools",
+            "AutoApprovalReviewStartedEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED,
+            "tools",
+            "AutoApprovalReviewCompletedEvent",
         ),
         EventSchema::new(event::SKILLS_CHANGED, "skills", "SkillsChangedNotification"),
         EventSchema::new(
@@ -3206,6 +3327,156 @@ mod tests {
                 patch: 0,
             })
         );
+    }
+
+    #[test]
+    fn r1_capability_helper_advertises_runtime_tool_approval_surface_only_when_ready() {
+        let base = CapabilityMatrix::phase_one();
+        assert_eq!(base.approval.status, CapabilityStatus::Declared);
+        assert_eq!(base.tools.status, CapabilityStatus::Declared);
+
+        let ready = CapabilityMatrix::phase_one().with_runtime_tool_approval(
+            RuntimeToolApprovalAvailability {
+                command_approval: true,
+                dynamic_tool_call: true,
+                tool_user_input: true,
+                permissions_approval: true,
+                file_change_approval: true,
+                file_change_events: true,
+                auto_approval_review: true,
+            },
+        );
+
+        assert_eq!(ready.approval.status, CapabilityStatus::Implemented);
+        assert_eq!(ready.tools.status, CapabilityStatus::Implemented);
+        assert!(
+            ready
+                .approval
+                .methods
+                .contains(&method::APPROVAL_RESPOND.to_string())
+        );
+        assert!(
+            ready
+                .approval
+                .events
+                .contains(&server_request::ITEM_TOOL_CALL.to_string())
+        );
+        assert!(
+            ready
+                .approval
+                .events
+                .contains(&server_request::ITEM_TOOL_REQUEST_USER_INPUT.to_string())
+        );
+        assert!(
+            ready
+                .approval
+                .events
+                .contains(&server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL.to_string())
+        );
+        assert!(
+            ready
+                .approval
+                .events
+                .contains(&server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL.to_string())
+        );
+        assert!(
+            ready
+                .tools
+                .events
+                .contains(&event::ITEM_FILE_CHANGE_OUTPUT_DELTA.to_string())
+        );
+        assert!(
+            ready
+                .tools
+                .events
+                .contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED.to_string())
+        );
+        assert!(
+            ready
+                .tools
+                .events
+                .contains(&event::ITEM_AUTO_APPROVAL_REVIEW_STARTED.to_string())
+        );
+        assert!(
+            ready
+                .tools
+                .events
+                .contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED.to_string())
+        );
+
+        let partial = CapabilityMatrix::phase_one().with_runtime_tool_approval(
+            RuntimeToolApprovalAvailability {
+                command_approval: true,
+                dynamic_tool_call: false,
+                tool_user_input: false,
+                permissions_approval: false,
+                file_change_approval: false,
+                file_change_events: false,
+                auto_approval_review: false,
+            },
+        );
+
+        assert_eq!(partial.approval.status, CapabilityStatus::Implemented);
+        assert_eq!(partial.tools.status, CapabilityStatus::Declared);
+        assert!(
+            [
+                server_request::ITEM_TOOL_CALL,
+                server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+                server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+                server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+            ]
+            .into_iter()
+            .all(|event| partial
+                .approval
+                .events
+                .iter()
+                .all(|advertised| advertised != event))
+        );
+        assert!(
+            [
+                event::ITEM_FILE_CHANGE_OUTPUT_DELTA,
+                event::ITEM_FILE_CHANGE_PATCH_UPDATED,
+                event::ITEM_AUTO_APPROVAL_REVIEW_STARTED,
+                event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED,
+            ]
+            .into_iter()
+            .all(|event| partial
+                .tools
+                .events
+                .iter()
+                .all(|advertised| advertised != event))
+        );
+    }
+
+    #[test]
+    fn phase_one_schema_includes_r1_server_requests_and_events() {
+        let schema = ProtocolSchemaResponse::phase_one(
+            CapabilityMatrix::phase_one().with_runtime_tool_approval(
+                RuntimeToolApprovalAvailability {
+                    command_approval: true,
+                    dynamic_tool_call: true,
+                    tool_user_input: true,
+                    permissions_approval: true,
+                    file_change_approval: true,
+                    file_change_events: true,
+                    auto_approval_review: true,
+                },
+            ),
+        );
+        let event_names = schema
+            .events
+            .iter()
+            .map(|event| event.event.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(event_names.contains(&server_request::ITEM_TOOL_CALL));
+        assert!(event_names.contains(&server_request::ITEM_TOOL_REQUEST_USER_INPUT));
+        assert!(event_names.contains(&server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL));
+        assert!(event_names.contains(&server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL));
+        assert!(event_names.contains(&event::ITEM_FILE_CHANGE_OUTPUT_DELTA));
+        assert!(event_names.contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED));
+        assert!(event_names.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_STARTED));
+        assert!(event_names.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED));
     }
 
     fn codex_thread_fixture() -> CodexThread {

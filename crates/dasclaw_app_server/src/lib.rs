@@ -51,15 +51,15 @@ use dasclaw_app_server_protocol::{
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, SandboxMode,
-    ServerInfo, ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent,
-    ServiceHealth, ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse,
-    SkillsChangedNotification, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse, ThreadListParams, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
-    ThreadTurnsListParams, ThreadTurnsListResponse, TurnCompletedEvent, TurnInterruptParams,
-    TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
-    TurnStartedEvent, TurnStatus,
+    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent,
+    RuntimeToolApprovalAvailability, SandboxMode, ServerInfo, ServerNotification,
+    ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth, ServiceName,
+    ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
+    ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
+    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
+    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -552,8 +552,16 @@ impl AppServer {
     pub fn with_runtime_bridge(runtime_bridge: Arc<dyn RuntimeBridge>) -> Self {
         let mut server = Self::new();
         let features = runtime_bridge.features();
-        if features.approval && features.tools && features.sandbox {
-            server.capabilities = CapabilityMatrix::phase_one().with_p3_approval_tool_sandbox();
+        if features.tools {
+            server.capabilities = server.capabilities.with_runtime_command_tool_events_ready();
+        }
+        if features.approval || features.tools {
+            server.capabilities = server
+                .capabilities
+                .with_runtime_tool_approval(features.runtime_tool_approval_availability());
+        }
+        if features.sandbox {
+            server.capabilities = server.capabilities.with_runtime_sandbox_ready();
         }
         server.runtime_features = features;
         server.runtime_bridge = runtime_bridge;
@@ -2512,6 +2520,26 @@ pub struct RuntimeBridgeFeatures {
     pub approval: bool,
     pub tools: bool,
     pub sandbox: bool,
+    pub dynamic_tool_call: bool,
+    pub tool_user_input: bool,
+    pub permissions_approval: bool,
+    pub file_change_approval: bool,
+    pub file_change_events: bool,
+    pub auto_approval_review: bool,
+}
+
+impl RuntimeBridgeFeatures {
+    fn runtime_tool_approval_availability(self) -> RuntimeToolApprovalAvailability {
+        RuntimeToolApprovalAvailability {
+            command_approval: self.approval,
+            dynamic_tool_call: self.dynamic_tool_call,
+            tool_user_input: self.tool_user_input,
+            permissions_approval: self.permissions_approval,
+            file_change_approval: self.file_change_approval,
+            file_change_events: self.file_change_events,
+            auto_approval_review: self.auto_approval_review,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2792,6 +2820,7 @@ impl DasclawAgentRuntimeBridge {
                 approval: true,
                 tools: true,
                 sandbox: false,
+                ..RuntimeBridgeFeatures::default()
             },
         }
     }
@@ -4048,7 +4077,7 @@ mod tests {
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         CommandExecTerminalSize, FsChangedKind, FsChangedNotification, ServiceStatus,
         SkillMetadata, SkillScope, SkillsListEntry, TransportKind, UserInput, WorkspaceInfo,
-        WorkspaceTrust, event,
+        WorkspaceTrust, event, server_request,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -4101,6 +4130,38 @@ mod tests {
         assert!(health.services.iter().any(|service| {
             service.service == ServiceName::Mcp && service.status == ServiceStatus::Disabled
         }));
+    }
+
+    #[test]
+    fn runtime_features_gate_r1_capability_advertising() {
+        let bridge = Arc::new(R1RuntimeBridge);
+        let server = initialized_server_with_bridge(bridge);
+
+        assert_eq!(
+            server.capabilities.approval.status,
+            CapabilityStatus::Implemented
+        );
+        assert!(
+            server
+                .capabilities
+                .approval
+                .events
+                .contains(&server_request::ITEM_TOOL_CALL.to_string())
+        );
+        assert!(
+            server
+                .capabilities
+                .approval
+                .events
+                .contains(&server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL.to_string())
+        );
+        assert!(
+            server
+                .capabilities
+                .tools
+                .events
+                .contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED.to_string())
+        );
     }
 
     #[test]
@@ -8313,6 +8374,7 @@ mod tests {
                 approval: true,
                 tools: true,
                 sandbox: true,
+                ..RuntimeBridgeFeatures::default()
             },
         );
         let updates = RuntimeTurnUpdateSink::new();
@@ -10201,6 +10263,38 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
+    struct R1RuntimeBridge;
+
+    impl RuntimeBridge for R1RuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+                dynamic_tool_call: true,
+                tool_user_input: true,
+                permissions_approval: true,
+                file_change_approval: true,
+                file_change_events: true,
+                auto_approval_review: true,
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug, Default)]
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<RuntimeTurnStartRequest>>,
         cancel_calls: Mutex<Vec<RuntimeTurnCancelRequest>>,
@@ -10414,6 +10508,7 @@ mod tests {
                 approval: true,
                 tools: true,
                 sandbox: true,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 
