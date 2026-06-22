@@ -43,7 +43,7 @@ export type AppServerCommandApprovalParams = {
   toolName: string
   command?: string
   description: string
-  displayParameters?: unknown
+  displayParameters: unknown
   allowAlways: boolean
 }
 
