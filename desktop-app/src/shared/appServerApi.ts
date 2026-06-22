@@ -35,15 +35,94 @@ export type AppServerServerRequestMethod =
   | 'item/tool/requestUserInput'
   | 'item/tool/call'
 
-export type AppServerServerRequest = {
-  requestId: string | number
-  hostId: string
-  method: AppServerServerRequestMethod
-  params: Record<string, unknown>
+export type AppServerCommandApprovalParams = {
+  toolCallId?: string
+  toolName?: string
+  command?: string
+  description?: string
+  displayParameters?: unknown
+  allowAlways?: boolean
 }
 
-export type AppServerApprovalRequest = AppServerServerRequest & {
-  method: 'item/commandExecution/requestApproval' | 'item/permissions/requestApproval'
+export type AppServerPermissionsApprovalParams = {
+  threadId: string
+  turnId: string
+  itemId: string
+  cwd: string
+  reason?: string
+  permissions: unknown
+}
+
+export type AppServerFileChangeApprovalParams = {
+  threadId: string
+  turnId: string
+  itemId: string
+  reason?: string
+  grantRoot?: string
+}
+
+export type AppServerToolUserInputQuestionOption = {
+  label: string
+  description: string
+}
+
+export type AppServerToolUserInputQuestion = {
+  id: string
+  header: string
+  question: string
+  isOther?: boolean
+  isSecret?: boolean
+  options?: AppServerToolUserInputQuestionOption[]
+}
+
+export type AppServerToolUserInputParams = {
+  threadId: string
+  turnId: string
+  itemId: string
+  questions: AppServerToolUserInputQuestion[]
+}
+
+export type AppServerDynamicToolCallParams = {
+  threadId: string
+  turnId: string
+  callId: string
+  namespace?: string
+  tool: string
+  arguments: unknown
+}
+
+export type AppServerServerRequestParamsByMethod = {
+  'item/commandExecution/requestApproval': AppServerCommandApprovalParams
+  'item/permissions/requestApproval': AppServerPermissionsApprovalParams
+  'item/fileChange/requestApproval': AppServerFileChangeApprovalParams
+  'item/tool/requestUserInput': AppServerToolUserInputParams
+  'item/tool/call': AppServerDynamicToolCallParams
+}
+
+export type AppServerServerRequest<
+  Method extends AppServerServerRequestMethod = AppServerServerRequestMethod
+> = {
+  [M in Method]: {
+    requestId: string | number
+    hostId: string
+    method: M
+    params: AppServerServerRequestParamsByMethod[M]
+  }
+}[Method]
+
+export type AppServerApprovalRequest = AppServerServerRequest<
+  'item/commandExecution/requestApproval' | 'item/permissions/requestApproval'
+>
+
+export type AppServerToolUserInputResponse = {
+  answers: Record<string, { answers: string[] }>
+}
+
+export type AppServerDynamicToolCallResponse = {
+  contentItems: Array<
+    { type: 'inputText'; text: string } | { type: 'inputImage'; imageUrl: string }
+  >
+  success: boolean
 }
 
 export type AppServerApprovalRespondParams = {
@@ -54,13 +133,8 @@ export type AppServerApprovalRespondParams = {
 export type AppServerServerRequestResponse =
   | { decision: AppServerApprovalDecision }
   | { decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel' }
-  | {
-      contentItems: Array<
-        { type: 'inputText'; text: string } | { type: 'inputImage'; imageUrl: string }
-      >
-      success: boolean
-    }
-  | { answers: Record<string, { answers: string[] }> }
+  | AppServerDynamicToolCallResponse
+  | AppServerToolUserInputResponse
   | { permissions: unknown; scope?: 'turn' | 'session'; strictAutoReview?: boolean }
 
 export type AppServerGenericNotification = {
