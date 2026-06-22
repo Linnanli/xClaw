@@ -1,6 +1,7 @@
 import type {
   AppServerServerRequest,
   AppServerServerRequestMethod,
+  AppServerServerRequestResponseByMethod,
   AppServerServerRequestResponse
 } from '../../../shared/appServerApi'
 
@@ -25,27 +26,24 @@ export function removeServerRequest(
   )
 }
 
-export function failClosedServerRequestResponse(
-  method: AppServerServerRequestMethod
-): AppServerServerRequestResponse {
-  switch (method) {
-    case 'item/tool/call':
-      return {
-        contentItems: [{ type: 'inputText', text: 'client tool execution was not approved' }],
-        success: false
-      }
-    case 'item/tool/requestUserInput':
-      return { answers: {} }
-    case 'item/fileChange/requestApproval':
-      return { decision: 'decline' }
-    case 'item/permissions/requestApproval':
-      return { permissions: {}, scope: 'turn', strictAutoReview: true }
-    case 'item/commandExecution/requestApproval':
-      return {
-        decision: {
-          kind: 'reject',
-          data: { reason: 'approval request was not approved in the renderer' }
-        }
-      }
+const failClosedResponses: AppServerServerRequestResponseByMethod = {
+  'item/tool/call': {
+    contentItems: [{ type: 'inputText', text: 'client tool execution was not approved' }],
+    success: false
+  },
+  'item/tool/requestUserInput': { answers: {} },
+  'item/fileChange/requestApproval': { decision: 'decline' },
+  'item/permissions/requestApproval': { permissions: {}, scope: 'turn', strictAutoReview: true },
+  'item/commandExecution/requestApproval': {
+    decision: {
+      kind: 'reject',
+      data: { reason: 'approval request was not approved in the renderer' }
+    }
   }
+}
+
+export function failClosedServerRequestResponse<Method extends AppServerServerRequestMethod>(
+  method: Method
+): AppServerServerRequestResponse<Method> {
+  return failClosedResponses[method]
 }
