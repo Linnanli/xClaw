@@ -6,7 +6,7 @@ import type { AppendMessage, ModelContext, ThreadMessage } from '@assistant-ui/r
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AppServerNotification,
-  AppServerServerRequestMethod,
+  AppServerServerRequest,
   AppServerServerRequestResponse
 } from '../../../shared/appServerApi'
 import type { AppServerModelSelectorState } from '../hooks/useDasclawAssistantRuntime'
@@ -445,13 +445,13 @@ describe('useDasclawAssistantRuntime', () => {
       root.render(createElement(RuntimeProbe))
     })
 
-    const cases: Array<{
-      requestId: string
-      method: AppServerServerRequestMethod
-      params: Record<string, unknown>
-      response: AppServerServerRequestResponse
-    }> = [
+    const cases: Array<
+      AppServerServerRequest & {
+        response: AppServerServerRequestResponse
+      }
+    > = [
       {
+        hostId: 'local',
         requestId: 'approval_1',
         method: 'item/commandExecution/requestApproval',
         params: {
@@ -472,6 +472,7 @@ describe('useDasclawAssistantRuntime', () => {
         }
       },
       {
+        hostId: 'local',
         requestId: 'dynamic_tool_1',
         method: 'item/tool/call',
         params: {
@@ -488,32 +489,38 @@ describe('useDasclawAssistantRuntime', () => {
         }
       },
       {
+        hostId: 'local',
         requestId: 'user_input_1',
         method: 'item/tool/requestUserInput',
         params: {
           threadId: 'thread_1',
           turnId: 'turn_1',
-          questions: [{ id: 'name', prompt: 'Name?' }]
+          itemId: 'input_1',
+          questions: [{ id: 'name', header: 'Name', question: 'Name?' }]
         },
         response: { answers: {} }
       },
       {
+        hostId: 'local',
         requestId: 'file_change_1',
         method: 'item/fileChange/requestApproval',
         params: {
           threadId: 'thread_1',
           turnId: 'turn_1',
-          path: 'src/app.ts',
-          action: 'modify'
+          itemId: 'file_1',
+          reason: 'modify src/app.ts'
         },
         response: { decision: 'decline' }
       },
       {
+        hostId: 'local',
         requestId: 'permissions_1',
         method: 'item/permissions/requestApproval',
         params: {
           threadId: 'thread_1',
           turnId: 'turn_1',
+          itemId: 'permission_1',
+          cwd: '/workspace',
           permissions: ['net:fetch']
         },
         response: { permissions: {}, scope: 'turn', strictAutoReview: true }
@@ -522,12 +529,7 @@ describe('useDasclawAssistantRuntime', () => {
 
     for (const item of cases) {
       await act(async () => {
-        notificationListener?.({
-          hostId: 'local',
-          requestId: item.requestId,
-          method: item.method,
-          params: item.params
-        })
+        notificationListener?.(item)
         await Promise.resolve()
       })
     }

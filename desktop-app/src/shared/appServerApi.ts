@@ -36,12 +36,15 @@ export type AppServerServerRequestMethod =
   | 'item/tool/call'
 
 export type AppServerCommandApprovalParams = {
-  toolCallId?: string
-  toolName?: string
+  threadId: string
+  turnId: string
+  itemId: string
+  toolCallId: string
+  toolName: string
   command?: string
-  description?: string
+  description: string
   displayParameters?: unknown
-  allowAlways?: boolean
+  allowAlways: boolean
 }
 
 export type AppServerPermissionsApprovalParams = {
@@ -141,6 +144,7 @@ export type AppServerGenericNotification = {
   hostId: string
   method: string
   params?: unknown
+  requestId?: never
 }
 
 export type AppServerNotification = AppServerGenericNotification | AppServerServerRequest

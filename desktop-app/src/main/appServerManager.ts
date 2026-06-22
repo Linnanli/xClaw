@@ -11,7 +11,9 @@ import type {
   AppServerNotification,
   AppServerRequestOptions,
   AppServerRunState,
+  AppServerServerRequest,
   AppServerServerRequestMethod,
+  AppServerServerRequestParamsByMethod,
   AppServerServerRequestResponse,
   AppServerStatus,
   ModelProviderSelectForNextTurnResponse,
@@ -305,12 +307,9 @@ export class AppServerManager {
 
   private handleServerRequest(request: JsonRpcServerRequest): void {
     if (isForwardedServerRequestMethod(request.method)) {
-      this.emitNotification({
-        hostId: this.hostId,
-        requestId: request.id,
-        method: request.method,
-        params: serverRequestParams(request.method, request.params)
-      })
+      this.emitNotification(
+        forwardedServerRequest(this.hostId, { ...request, method: request.method })
+      )
       return
     }
 
@@ -519,10 +518,22 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function serverRequestParams(
-  method: AppServerServerRequestMethod,
+function forwardedServerRequest<Method extends AppServerServerRequestMethod>(
+  hostId: string,
+  request: JsonRpcServerRequest & { method: Method }
+): AppServerServerRequest<Method> {
+  return {
+    hostId,
+    requestId: request.id,
+    method: request.method,
+    params: serverRequestParams(request.method, request.params)
+  }
+}
+
+function serverRequestParams<Method extends AppServerServerRequestMethod>(
+  method: Method,
   params: unknown
-): Record<string, unknown> {
+): AppServerServerRequestParamsByMethod[Method] {
   const safeParams = { ...asRecord(params) }
   if (
     method === 'item/commandExecution/requestApproval' ||
@@ -531,7 +542,7 @@ function serverRequestParams(
     delete safeParams.rawArguments
     delete safeParams.requestId
   }
-  return safeParams
+  return safeParams as AppServerServerRequestParamsByMethod[Method]
 }
 
 function failClosedServerRequestResponse(method: string): AppServerServerRequestResponse {

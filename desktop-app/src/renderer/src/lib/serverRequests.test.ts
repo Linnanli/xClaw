@@ -87,6 +87,12 @@ describe('server request queue helpers', () => {
   })
 
   it('builds method-specific fail-closed responses', () => {
+    expect(failClosedServerRequestResponse('item/commandExecution/requestApproval')).toEqual({
+      decision: {
+        kind: 'reject',
+        data: { reason: 'approval request was not approved in the renderer' }
+      }
+    })
     expect(failClosedServerRequestResponse('item/tool/requestUserInput')).toEqual({
       answers: {}
     })
