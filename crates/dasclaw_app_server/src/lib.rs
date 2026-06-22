@@ -28,18 +28,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dasclaw_app_server_protocol::ClientModelConfig;
 use dasclaw_app_server_protocol::{
     AgentMessageDeltaEvent, AppServerApprovalDecision, ApprovalResponsePayload,
-    CapabilitiesChangedEvent, CapabilitiesChangedReason, CapabilitiesListResponse,
-    CapabilityMatrix, ClientInfo, CommandExecOutputDeltaNotification, CommandExecParams,
-    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
-    CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
-    CommandExecWriteResponse, CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
+    AutoApprovalReviewCompletedEvent, AutoApprovalReviewStartedEvent, CapabilitiesChangedEvent,
+    CapabilitiesChangedReason, CapabilitiesListResponse, CapabilityMatrix, ClientInfo,
+    CommandExecOutputDeltaNotification, CommandExecParams, CommandExecResizeParams,
+    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
+    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
+    CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent,
-    FileChangeApprovalDecision, FileChangeRequestApprovalResponse, FsChangedNotification,
-    FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
-    FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
-    FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
-    FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallParams, DynamicToolCallResponse, ErrorCode,
+    ErrorData, ErrorEvent, FileChangeApprovalDecision, FileChangeOutputDeltaEvent,
+    FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
+    FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
+    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, GuardianApprovalReview,
     HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
     ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
     JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest,
@@ -52,16 +55,17 @@ use dasclaw_app_server_protocol::{
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    PermissionsRequestApprovalResponse, ProtocolSchemaResponse, ProtocolVersion,
-    ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
-    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-    ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
-    ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
-    ToolRequestUserInputResponse, TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse,
-    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
-    TurnStatus,
+    PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, ProtocolSchemaResponse,
+    ProtocolVersion, ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode,
+    ServerInfo, ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent,
+    ServiceHealth, ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse,
+    SkillsChangedNotification, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+    SkillsListParams, SkillsListResponse, ThreadListParams, ThreadListResponse, ThreadReadParams,
+    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
+    ThreadTurnsListParams, ThreadTurnsListResponse, ToolRequestUserInputParams,
+    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnCompletedEvent,
+    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -1931,6 +1935,179 @@ impl AppServer {
         self.notifications.emit_server_request(server_request);
     }
 
+    fn emit_dynamic_tool_call_server_request(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeDynamicToolCallRequest,
+    ) {
+        if !self.threads.turn_is_pending(&thread_id, &turn_id) {
+            return;
+        }
+
+        let request_id = format!("tool_{}", request.request_id);
+        let runtime_request_id = request.request_id.clone();
+        let server_request = match JsonRpcServerRequest::new(
+            request_id.clone(),
+            server_request::ITEM_TOOL_CALL,
+            DynamicToolCallParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                call_id: request.call_id,
+                namespace: request.namespace,
+                tool: request.tool,
+                arguments: request.arguments,
+            },
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                let message =
+                    format!("failed to serialize dynamic tool call server request: {error}");
+                self.fail_pending_turn(thread_id, turn_id, message);
+                return;
+            }
+        };
+
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.clone(),
+            runtime_request_id,
+            kind: PendingServerRequestKind::DynamicToolCall,
+            thread_id,
+            turn_id,
+            created_at: Instant::now(),
+        });
+        self.notifications.emit_server_request(server_request);
+    }
+
+    fn emit_tool_user_input_server_request(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeToolUserInputRequest,
+    ) {
+        if !self.threads.turn_is_pending(&thread_id, &turn_id) {
+            return;
+        }
+
+        let request_id = format!("tool_input_{}", request.request_id);
+        let runtime_request_id = request.request_id.clone();
+        let server_request = match JsonRpcServerRequest::new(
+            request_id.clone(),
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            ToolRequestUserInputParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                item_id: request.item_id,
+                questions: request.questions,
+            },
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                let message =
+                    format!("failed to serialize tool user input server request: {error}");
+                self.fail_pending_turn(thread_id, turn_id, message);
+                return;
+            }
+        };
+
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.clone(),
+            runtime_request_id,
+            kind: PendingServerRequestKind::ToolUserInput,
+            thread_id,
+            turn_id,
+            created_at: Instant::now(),
+        });
+        self.notifications.emit_server_request(server_request);
+    }
+
+    fn emit_file_change_approval_server_request(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeFileChangeApprovalRequest,
+    ) {
+        if !self.threads.turn_is_pending(&thread_id, &turn_id) {
+            return;
+        }
+
+        let request_id = format!("file_change_{}", request.request_id);
+        let runtime_request_id = request.request_id.clone();
+        let server_request = match JsonRpcServerRequest::new(
+            request_id.clone(),
+            server_request::ITEM_FILE_CHANGE_REQUEST_APPROVAL,
+            FileChangeRequestApprovalParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                item_id: request.item_id,
+                reason: request.reason,
+                grant_root: request.grant_root,
+            },
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                let message =
+                    format!("failed to serialize file change approval server request: {error}");
+                self.fail_pending_turn(thread_id, turn_id, message);
+                return;
+            }
+        };
+
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.clone(),
+            runtime_request_id,
+            kind: PendingServerRequestKind::FileChangeApproval,
+            thread_id,
+            turn_id,
+            created_at: Instant::now(),
+        });
+        self.notifications.emit_server_request(server_request);
+    }
+
+    fn emit_permissions_approval_server_request(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimePermissionsApprovalRequest,
+    ) {
+        if !self.threads.turn_is_pending(&thread_id, &turn_id) {
+            return;
+        }
+
+        let request_id = format!("permissions_{}", request.request_id);
+        let runtime_request_id = request.request_id.clone();
+        let server_request = match JsonRpcServerRequest::new(
+            request_id.clone(),
+            server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL,
+            PermissionsRequestApprovalParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                item_id: request.item_id,
+                cwd: request.cwd,
+                reason: request.reason,
+                permissions: request.permissions,
+            },
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                let message =
+                    format!("failed to serialize permissions approval server request: {error}");
+                self.fail_pending_turn(thread_id, turn_id, message);
+                return;
+            }
+        };
+
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.clone(),
+            runtime_request_id,
+            kind: PendingServerRequestKind::PermissionsApproval,
+            thread_id,
+            turn_id,
+            created_at: Instant::now(),
+        });
+        self.notifications.emit_server_request(server_request);
+    }
+
     fn expire_pending_server_requests(&mut self) {
         let expired = self.pending_server_requests.expired(SERVER_REQUEST_TIMEOUT);
         for pending in expired {
@@ -2356,6 +2533,34 @@ impl AppServer {
                 RuntimeTurnOutcome::ApprovalRequested { request } => {
                     self.emit_approval_server_request(update.thread_id, update.turn_id, request);
                 }
+                RuntimeTurnOutcome::DynamicToolCallRequested { request } => {
+                    self.emit_dynamic_tool_call_server_request(
+                        update.thread_id,
+                        update.turn_id,
+                        request,
+                    );
+                }
+                RuntimeTurnOutcome::ToolUserInputRequested { request } => {
+                    self.emit_tool_user_input_server_request(
+                        update.thread_id,
+                        update.turn_id,
+                        request,
+                    );
+                }
+                RuntimeTurnOutcome::FileChangeApprovalRequested { request } => {
+                    self.emit_file_change_approval_server_request(
+                        update.thread_id,
+                        update.turn_id,
+                        request,
+                    );
+                }
+                RuntimeTurnOutcome::PermissionsApprovalRequested { request } => {
+                    self.emit_permissions_approval_server_request(
+                        update.thread_id,
+                        update.turn_id,
+                        request,
+                    );
+                }
                 RuntimeTurnOutcome::ToolResult {
                     update: tool_result,
                 } => {
@@ -2386,6 +2591,70 @@ impl AppServer {
                                 turn_id: update.turn_id,
                                 item_id: output.item_id,
                                 delta: output.delta,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::FileChangeOutputDelta { update: output } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_file_change_output_delta(
+                            FileChangeOutputDeltaEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item_id: output.item_id,
+                                delta: output.delta,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::FileChangePatchUpdated { update: patch } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_file_change_patch_updated(
+                            FileChangePatchUpdatedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item_id: patch.item_id,
+                                changes: patch.changes,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::AutoApprovalReviewStarted { update: review } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_auto_approval_review_started(
+                            AutoApprovalReviewStartedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                review_id: review.review_id,
+                                target_item_id: review.target_item_id,
+                                review: review.review,
+                                action: review.action,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::AutoApprovalReviewCompleted { update: review } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_auto_approval_review_completed(
+                            AutoApprovalReviewCompletedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                review_id: review.review_id,
+                                target_item_id: review.target_item_id,
+                                review: review.review,
+                                action: review.action,
                             },
                         );
                     }
@@ -2717,6 +2986,59 @@ pub struct RuntimeApprovalDecision {
     pub decision: dasclaw_runtime::ApprovalDecision,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDynamicToolCallRequest {
+    pub request_id: String,
+    pub call_id: String,
+    pub namespace: Option<String>,
+    pub tool: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeToolUserInputRequest {
+    pub request_id: String,
+    pub item_id: String,
+    pub questions: Vec<ToolRequestUserInputQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeFileChangeApprovalRequest {
+    pub request_id: String,
+    pub item_id: String,
+    pub reason: Option<String>,
+    pub grant_root: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePermissionsApprovalRequest {
+    pub request_id: String,
+    pub item_id: String,
+    pub cwd: String,
+    pub reason: Option<String>,
+    pub permissions: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeFileChangeOutputDeltaUpdate {
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeFileChangePatchUpdatedUpdate {
+    pub item_id: String,
+    pub changes: Vec<FileUpdateChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAutoApprovalReviewUpdate {
+    pub review_id: String,
+    pub target_item_id: Option<String>,
+    pub review: GuardianApprovalReview,
+    pub action: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeServerRequestResolution {
     pub request_id: String,
@@ -2831,6 +3153,110 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn dynamic_tool_call_requested(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeDynamicToolCallRequest,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::DynamicToolCallRequested { request },
+        });
+    }
+
+    pub fn tool_user_input_requested(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeToolUserInputRequest,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ToolUserInputRequested { request },
+        });
+    }
+
+    pub fn file_change_approval_requested(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeFileChangeApprovalRequest,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::FileChangeApprovalRequested { request },
+        });
+    }
+
+    pub fn permissions_approval_requested(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimePermissionsApprovalRequest,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::PermissionsApprovalRequested { request },
+        });
+    }
+
+    pub fn file_change_output_delta(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeFileChangeOutputDeltaUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::FileChangeOutputDelta { update },
+        });
+    }
+
+    pub fn file_change_patch_updated(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeFileChangePatchUpdatedUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::FileChangePatchUpdated { update },
+        });
+    }
+
+    pub fn auto_approval_review_started(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeAutoApprovalReviewUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::AutoApprovalReviewStarted { update },
+        });
+    }
+
+    pub fn auto_approval_review_completed(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeAutoApprovalReviewUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::AutoApprovalReviewCompleted { update },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -2869,6 +3295,30 @@ pub enum RuntimeTurnOutcome {
     },
     CommandOutputDelta {
         update: RuntimeCommandOutputDeltaUpdate,
+    },
+    DynamicToolCallRequested {
+        request: RuntimeDynamicToolCallRequest,
+    },
+    ToolUserInputRequested {
+        request: RuntimeToolUserInputRequest,
+    },
+    FileChangeApprovalRequested {
+        request: RuntimeFileChangeApprovalRequest,
+    },
+    PermissionsApprovalRequested {
+        request: RuntimePermissionsApprovalRequest,
+    },
+    FileChangeOutputDelta {
+        update: RuntimeFileChangeOutputDeltaUpdate,
+    },
+    FileChangePatchUpdated {
+        update: RuntimeFileChangePatchUpdatedUpdate,
+    },
+    AutoApprovalReviewStarted {
+        update: RuntimeAutoApprovalReviewUpdate,
+    },
+    AutoApprovalReviewCompleted {
+        update: RuntimeAutoApprovalReviewUpdate,
     },
     Completed {
         output: String,
@@ -3428,7 +3878,15 @@ impl SessionThreadHost {
             | RuntimeTurnOutcome::ReasoningSummaryDelta { .. }
             | RuntimeTurnOutcome::ApprovalRequested { .. }
             | RuntimeTurnOutcome::ToolResult { .. }
-            | RuntimeTurnOutcome::CommandOutputDelta { .. } => return None,
+            | RuntimeTurnOutcome::CommandOutputDelta { .. }
+            | RuntimeTurnOutcome::DynamicToolCallRequested { .. }
+            | RuntimeTurnOutcome::ToolUserInputRequested { .. }
+            | RuntimeTurnOutcome::FileChangeApprovalRequested { .. }
+            | RuntimeTurnOutcome::PermissionsApprovalRequested { .. }
+            | RuntimeTurnOutcome::FileChangeOutputDelta { .. }
+            | RuntimeTurnOutcome::FileChangePatchUpdated { .. }
+            | RuntimeTurnOutcome::AutoApprovalReviewStarted { .. }
+            | RuntimeTurnOutcome::AutoApprovalReviewCompleted { .. } => return None,
             RuntimeTurnOutcome::Completed { output } => {
                 turn.status = TurnStatus::Completed;
                 turn.output = Some(output);
@@ -3741,6 +4199,22 @@ impl NotificationBus {
         self.push(ServerNotification::command_execution_terminal_interaction(
             event,
         ));
+    }
+
+    pub fn emit_file_change_output_delta(&mut self, event: FileChangeOutputDeltaEvent) {
+        self.push(ServerNotification::file_change_output_delta(event));
+    }
+
+    pub fn emit_file_change_patch_updated(&mut self, event: FileChangePatchUpdatedEvent) {
+        self.push(ServerNotification::file_change_patch_updated(event));
+    }
+
+    pub fn emit_auto_approval_review_started(&mut self, event: AutoApprovalReviewStartedEvent) {
+        self.push(ServerNotification::auto_approval_review_started(event));
+    }
+
+    pub fn emit_auto_approval_review_completed(&mut self, event: AutoApprovalReviewCompletedEvent) {
+        self.push(ServerNotification::auto_approval_review_completed(event));
     }
 
     pub fn emit_log_entry(&mut self, event: LogEntryEvent) {
@@ -4318,6 +4792,51 @@ mod tests {
                 .events
                 .contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED.to_string())
         );
+    }
+
+    #[test]
+    fn r1_runtime_updates_emit_server_requests_and_notifications() {
+        let bridge = Arc::new(R1ProducingBridge);
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+        let _turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("run r1 producers".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let values = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = values
+            .iter()
+            .filter_map(|value| value["method"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(methods.contains(&"item/tool/call"));
+        assert!(methods.contains(&"item/tool/requestUserInput"));
+        assert!(methods.contains(&"item/fileChange/requestApproval"));
+        assert!(methods.contains(&"item/permissions/requestApproval"));
+        assert!(methods.contains(&"item/fileChange/outputDelta"));
+        assert!(methods.contains(&"item/fileChange/patchUpdated"));
+        assert!(methods.contains(&"item/autoApprovalReview/started"));
+        assert!(methods.contains(&"item/autoApprovalReview/completed"));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/tool/call"
+                && value["params"]["tool"] == "open_url"
+                && value["params"]["arguments"]["url"] == "https://example.test"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/fileChange/patchUpdated"
+                && value["params"]["changes"][0]["path"] == "src/lib.rs"
+        }));
     }
 
     #[test]
@@ -10540,6 +11059,138 @@ mod tests {
         fn shutdown(&self) {}
     }
 
+    #[derive(Debug)]
+    struct R1ProducingBridge;
+
+    impl RuntimeBridge for R1ProducingBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+                dynamic_tool_call: true,
+                tool_user_input: true,
+                permissions_approval: true,
+                file_change_approval: true,
+                file_change_events: true,
+                auto_approval_review: true,
+            }
+        }
+
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            let thread_id = request.thread_id.clone();
+            let turn_id = request.turn_id.clone();
+            request.updates.dynamic_tool_call_requested(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeDynamicToolCallRequest {
+                    request_id: "dynamic_1".to_string(),
+                    call_id: "call_1".to_string(),
+                    namespace: Some("browser".to_string()),
+                    tool: "open_url".to_string(),
+                    arguments: serde_json::json!({"url": "https://example.test"}),
+                },
+            );
+            request.updates.tool_user_input_requested(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeToolUserInputRequest {
+                    request_id: "user_input_1".to_string(),
+                    item_id: format!("{turn_id}:tool:ask"),
+                    questions: vec![ToolRequestUserInputQuestion {
+                        id: "choice".to_string(),
+                        header: "Mode".to_string(),
+                        question: "Pick a mode".to_string(),
+                        is_other: false,
+                        is_secret: false,
+                        options: None,
+                    }],
+                },
+            );
+            request.updates.file_change_approval_requested(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeFileChangeApprovalRequest {
+                    request_id: "file_change_1".to_string(),
+                    item_id: format!("{turn_id}:file:patch"),
+                    reason: Some("apply patch".to_string()),
+                    grant_root: Some("/workspace".to_string()),
+                },
+            );
+            request.updates.permissions_approval_requested(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimePermissionsApprovalRequest {
+                    request_id: "permissions_1".to_string(),
+                    item_id: format!("{turn_id}:permissions:network"),
+                    cwd: "/workspace".to_string(),
+                    reason: Some("network access required".to_string()),
+                    permissions: serde_json::json!({"network": {"allow": ["example.test"]}}),
+                },
+            );
+            request.updates.file_change_output_delta(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeFileChangeOutputDeltaUpdate {
+                    item_id: format!("{turn_id}:file:patch"),
+                    delta: "@@ -1 +1 @@\n".to_string(),
+                },
+            );
+            request.updates.file_change_patch_updated(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeFileChangePatchUpdatedUpdate {
+                    item_id: format!("{turn_id}:file:patch"),
+                    changes: vec![FileUpdateChange {
+                        path: "src/lib.rs".to_string(),
+                        kind: dasclaw_app_server_protocol::FileUpdateKind::Update,
+                        unified_diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+                    }],
+                },
+            );
+            request.updates.auto_approval_review_started(
+                thread_id.clone(),
+                turn_id.clone(),
+                RuntimeAutoApprovalReviewUpdate {
+                    review_id: "review_1".to_string(),
+                    target_item_id: Some(format!("{turn_id}:file:patch")),
+                    review: GuardianApprovalReview {
+                        status: "running".to_string(),
+                        risk_level: None,
+                        user_authorization: None,
+                        rationale: Some("reviewing patch".to_string()),
+                    },
+                    action: "review".to_string(),
+                },
+            );
+            request.updates.auto_approval_review_completed(
+                thread_id,
+                turn_id.clone(),
+                RuntimeAutoApprovalReviewUpdate {
+                    review_id: "review_1".to_string(),
+                    target_item_id: Some(format!("{turn_id}:file:patch")),
+                    review: GuardianApprovalReview {
+                        status: "approved".to_string(),
+                        risk_level: Some("low".to_string()),
+                        user_authorization: Some("not_required".to_string()),
+                        rationale: Some("patch is within policy".to_string()),
+                    },
+                    action: "approve".to_string(),
+                },
+            );
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
     #[derive(Debug, Default)]
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<RuntimeTurnStartRequest>>,
@@ -10709,6 +11360,68 @@ mod tests {
             }
             RuntimeTurnOutcome::CommandOutputDelta { update } => {
                 request.updates.command_output_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::DynamicToolCallRequested { request: dynamic } => {
+                request.updates.dynamic_tool_call_requested(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    dynamic,
+                );
+            }
+            RuntimeTurnOutcome::ToolUserInputRequested {
+                request: user_input,
+            } => {
+                request.updates.tool_user_input_requested(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    user_input,
+                );
+            }
+            RuntimeTurnOutcome::FileChangeApprovalRequested {
+                request: file_change,
+            } => {
+                request.updates.file_change_approval_requested(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    file_change,
+                );
+            }
+            RuntimeTurnOutcome::PermissionsApprovalRequested {
+                request: permissions,
+            } => {
+                request.updates.permissions_approval_requested(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    permissions,
+                );
+            }
+            RuntimeTurnOutcome::FileChangeOutputDelta { update } => {
+                request.updates.file_change_output_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::FileChangePatchUpdated { update } => {
+                request.updates.file_change_patch_updated(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::AutoApprovalReviewStarted { update } => {
+                request.updates.auto_approval_review_started(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::AutoApprovalReviewCompleted { update } => {
+                request.updates.auto_approval_review_completed(
                     request.thread_id.clone(),
                     request.turn_id.clone(),
                     update,
