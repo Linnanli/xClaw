@@ -50,14 +50,14 @@ use dasclaw_app_server_protocol::{
     FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
     FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
     FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams, FuzzyFileSearchResponse,
-    GitDiffToRemoteParams, GitDiffToRemoteResponse, GuardianApprovalReview, HealthCheckParams,
-    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
-    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
-    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
-    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
-    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
-    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
-    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    GetConversationSummaryParams, GetConversationSummaryResponse, GitDiffToRemoteParams,
+    GitDiffToRemoteResponse, GuardianApprovalReview, HealthCheckParams, HealthCheckResponse,
+    InitializeParams, InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JobListParams,
+    JobListResponse, JobReadParams, JobReadResponse, JsonRpcClientResponse, JsonRpcError,
+    JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent,
+    LifecycleReason, LifecycleSnapshot, LifecycleState, LifecycleStatusResponse,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams,
+    McpResourceReadResponse, McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
     McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
@@ -88,7 +88,7 @@ use dasclaw_app_server_protocol::{
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
-    CodexTurnStatus,
+    CodexTurnStatus, ConversationSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
 use dasclaw_core::messages::ReasoningSummary;
@@ -982,6 +982,30 @@ impl AppServer {
             model,
             model_provider,
             cwd,
+        })
+    }
+
+    pub fn get_conversation_summary(
+        &self,
+        params: GetConversationSummaryParams,
+    ) -> Result<GetConversationSummaryResponse, AppServerError> {
+        self.require_initialized("session")?;
+        let summary = match params {
+            GetConversationSummaryParams::ConversationId { conversation_id } => {
+                self.thread_summary_or_error_with_capability(&conversation_id, "session")?
+            }
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                self.threads.summary_by_path(&rollout_path).ok_or_else(|| {
+                    AppServerError::invalid_request(
+                        "session",
+                        format!("unknown rollout path: {rollout_path}"),
+                    )
+                })?
+            }
+        };
+
+        Ok(GetConversationSummaryResponse {
+            summary: self.conversation_summary_view(summary)?,
         })
     }
 
@@ -1977,6 +2001,11 @@ impl AppServer {
             method::SHUTDOWN => route_with_optional_params(request.id, request.params, |params| {
                 Ok(self.shutdown(params))
             }),
+            method::GET_CONVERSATION_SUMMARY => route_with_params(
+                request.id,
+                request.params,
+                |params: GetConversationSummaryParams| self.get_conversation_summary(params),
+            ),
             method::THREAD_START => {
                 route_with_params(request.id, request.params, |params: ThreadStartParams| {
                     self.thread_start(params)
@@ -2982,6 +3011,31 @@ impl AppServer {
             name: summary.title,
             turns,
         })
+    }
+
+    fn conversation_summary_view(
+        &self,
+        summary: ThreadSummary,
+    ) -> Result<ConversationSummary, AppServerError> {
+        Ok(ConversationSummary {
+            conversation_id: summary.thread_id.clone(),
+            path: summary.path.unwrap_or_default(),
+            preview: self.thread_preview(&summary.thread_id)?,
+            timestamp: Some(summary.created_at.to_string()),
+            updated_at: Some(summary.updated_at.to_string()),
+            model_provider: self.model_provider.selected_provider_id(),
+            cwd: summary.workspace_root.unwrap_or_else(|| ".".to_string()),
+            cli_version: SERVER_VERSION.to_string(),
+            source: CodexSessionSource::Unknown,
+            git_info: summary.git_info,
+        })
+    }
+
+    fn thread_preview(&self, thread_id: &str) -> Result<String, AppServerError> {
+        Ok(self
+            .thread_summary_or_error(thread_id)?
+            .title
+            .unwrap_or_default())
     }
 
     fn codex_turn_view(&self, thread_id: &str, turn_id: &str) -> Result<CodexTurn, AppServerError> {
@@ -5778,6 +5832,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
         method::SHUTDOWN,
+        method::GET_CONVERSATION_SUMMARY,
         method::THREAD_START,
         method::THREAD_LIST,
         method::THREAD_READ,
@@ -6316,6 +6371,47 @@ mod tests {
             value["result"]["layers"][0]["config"]["model"],
             "project-model"
         );
+    }
+
+    #[test]
+    fn get_conversation_summary_returns_thread_card_shape() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        let cwd_json = serde_json::to_string(&cwd.to_string_lossy()).expect("cwd json");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let start_response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{{"cwd":{cwd_json}}}}}"#
+            ))
+            .expect("thread/start should return a response");
+        let start_value: serde_json::Value =
+            serde_json::from_str(&start_response).expect("thread/start response JSON");
+        let thread = &start_value["result"]["thread"];
+        let thread_id = thread["id"].as_str().expect("thread id");
+
+        let summary_response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"{}"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY,
+                thread_id
+            ))
+            .expect("getConversationSummary should return a response");
+        let summary_value: serde_json::Value =
+            serde_json::from_str(&summary_response).expect("summary response JSON");
+        let summary = &summary_value["result"]["summary"];
+
+        assert_eq!(summary["conversationId"], thread["id"]);
+        assert_eq!(summary["path"], "");
+        assert_eq!(summary["preview"], "");
+        assert_eq!(summary["timestamp"], thread["createdAt"].to_string());
+        assert_eq!(summary["updatedAt"], thread["updatedAt"].to_string());
+        assert_eq!(summary["modelProvider"], "openai");
+        assert_eq!(summary["cwd"], cwd.to_string_lossy().as_ref());
+        assert_eq!(summary["cliVersion"], SERVER_VERSION);
+        assert_eq!(summary["source"], "unknown");
+        assert_eq!(summary["gitInfo"], serde_json::Value::Null);
     }
 
     #[test]

@@ -119,6 +119,13 @@ impl ThreadLifecycleHost {
             .map(ThreadRecord::to_summary)
     }
 
+    pub fn summary_by_path(&self, path: &str) -> Option<ThreadSummary> {
+        self.threads
+            .iter()
+            .find(|thread| thread.path.as_deref() == Some(path))
+            .map(ThreadRecord::to_summary)
+    }
+
     #[must_use]
     pub fn next_turn_id(&self) -> String {
         format!("turn_{}", self.next_turn_id)
@@ -1185,6 +1192,51 @@ mod tests {
             "unexpected error: {error:?}"
         );
         assert_eq!(host.next_turn_id(), "turn_1");
+    }
+
+    #[test]
+    fn thread_lifecycle_returns_summary_by_rollout_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("threads.json");
+        let rollout_path = "/tmp/rollout.jsonl";
+        let snapshot = ThreadLifecycleSnapshot {
+            version: SNAPSHOT_VERSION,
+            next_thread_id: 2,
+            next_turn_id: 1,
+            threads: vec![PersistedThreadRecord {
+                thread_id: "thread_1".to_string(),
+                title: Some("Loaded".to_string()),
+                workspace_root: Some("/workspace".to_string()),
+                sandbox: None,
+                permission_profile: None,
+                forked_from_id: None,
+                ephemeral: false,
+                archived: false,
+                subscribed: false,
+                path: Some(rollout_path.to_string()),
+                created_at: 1,
+                updated_at: 2,
+                git_info: None,
+                goal: None,
+                compacted_turn_id: None,
+                token_usage: None,
+            }],
+            turns: Vec::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot json"),
+        )
+        .expect("write snapshot");
+
+        let host = ThreadLifecycleHost::with_snapshot_path(path).expect("reload");
+        let summary = host
+            .summary_by_path(rollout_path)
+            .expect("summary by rollout path");
+
+        assert_eq!(summary.thread_id, "thread_1");
+        assert_eq!(summary.path.as_deref(), Some(rollout_path));
+        assert!(host.summary_by_path("/tmp/missing.jsonl").is_none());
     }
 
     #[test]
