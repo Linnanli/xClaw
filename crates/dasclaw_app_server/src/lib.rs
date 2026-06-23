@@ -9800,6 +9800,26 @@ mod tests {
             }),
             "real bridge runtime wait should exit after malformed server response: {after_cancel:?}"
         );
+        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < cleanup_deadline {
+            let still_in_flight = bridge
+                .in_flight
+                .lock()
+                .expect("runtime turn registry should not be poisoned")
+                .contains_key(&turn.turn.id);
+            if !still_in_flight {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !bridge
+                .in_flight
+                .lock()
+                .expect("runtime turn registry should not be poisoned")
+                .contains_key(&turn.turn.id),
+            "malformed dynamic tool response should let the runtime turn thread clean up"
+        );
 
         let error = bridge
             .resolve_server_request(RuntimeServerRequestResolution {
@@ -11880,6 +11900,7 @@ mod tests {
                     id: id.into(),
                     name: name.into(),
                     arguments: serde_json::json!({
+                        "command": "bash /tmp/x",
                         "path": "/tmp/x",
                         "tool_call_id": id,
                         "api_key": "secret-token",
