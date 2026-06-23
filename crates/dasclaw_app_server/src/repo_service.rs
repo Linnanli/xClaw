@@ -71,6 +71,22 @@ impl AppServerRepoService {
     }
 
     async fn git_stdout(args: Vec<String>, cwd: PathBuf) -> Result<String, AppServerError> {
+        let output = Self::git_output(args, cwd).await?;
+        if output.exit_code != 0 {
+            return Err(AppServerError::capability_unavailable(
+                CAPABILITY,
+                format!(
+                    "git {} exited with code {}: {}",
+                    output.display_args,
+                    output.exit_code,
+                    output.stdout.trim()
+                ),
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    async fn git_output(args: Vec<String>, cwd: PathBuf) -> Result<RepoGitOutput, AppServerError> {
         let display_args = args.join(" ");
         let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         let output = dasclaw_git_tools::run_read_only_git(&refs, &cwd)
@@ -81,22 +97,15 @@ impl AppServerRepoService {
                     format!("git {display_args} failed: {error}"),
                 )
             })?;
-        if output.exit_code != 0 {
-            return Err(AppServerError::capability_unavailable(
-                CAPABILITY,
-                format!(
-                    "git {} exited with code {}: {}",
-                    display_args,
-                    output.exit_code,
-                    output.stdout.trim()
-                ),
-            ));
-        }
-        Ok(output.stdout)
+        Ok(RepoGitOutput {
+            display_args,
+            stdout: output.stdout,
+            exit_code: output.exit_code,
+        })
     }
 
     async fn diff_to_remote_async(cwd: PathBuf) -> Result<GitDiffToRemoteResponse, AppServerError> {
-        let upstream = match Self::git_stdout(
+        let upstream = match Self::git_output(
             git_args([
                 "rev-parse",
                 "--abbrev-ref",
@@ -107,11 +116,23 @@ impl AppServerRepoService {
         )
         .await
         {
-            Ok(stdout) => {
-                let upstream = stdout.trim();
+            Ok(output) if output.exit_code == 0 => {
+                let upstream = output.stdout.trim();
                 (!upstream.is_empty()).then(|| upstream.to_string())
             }
-            Err(_) => None,
+            Ok(output) if is_no_upstream_configured(&output.stdout) => None,
+            Ok(output) => {
+                return Err(AppServerError::capability_unavailable(
+                    CAPABILITY,
+                    format!(
+                        "git {} exited with code {}: {}",
+                        output.display_args,
+                        output.exit_code,
+                        output.stdout.trim()
+                    ),
+                ));
+            }
+            Err(error) => return Err(error),
         };
 
         let sha = if let Some(upstream) = upstream {
@@ -149,4 +170,15 @@ impl RepoService for AppServerRepoService {
 
 fn git_args<const N: usize>(args: [&str; N]) -> Vec<String> {
     args.into_iter().map(str::to_string).collect()
+}
+
+struct RepoGitOutput {
+    display_args: String,
+    stdout: String,
+    exit_code: i32,
+}
+
+fn is_no_upstream_configured(output: &str) -> bool {
+    let output = output.to_ascii_lowercase();
+    output.contains("no upstream configured") || output.contains("no upstream branch")
 }

@@ -6476,6 +6476,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         init_git_fixture(temp.path());
         std::fs::write(temp.path().join("src.txt"), "changed\n").expect("write");
+        let expected_sha =
+            run_git_fixture_output(temp.path(), &["merge-base", "HEAD", "@{upstream}"])
+                .trim()
+                .to_string();
 
         let mut server = initialized_server_with_root(temp.path());
         let request = serde_json::json!({
@@ -6488,7 +6492,7 @@ mod tests {
             .handle_json_rpc(&request.to_string())
             .expect("response");
         let value: serde_json::Value = serde_json::from_str(&response).expect("json");
-        assert!(value["result"]["sha"].as_str().expect("sha").len() >= 7);
+        assert_eq!(value["result"]["sha"], expected_sha);
         assert!(
             value["result"]["diff"]
                 .as_str()
@@ -6497,16 +6501,52 @@ mod tests {
         );
     }
 
-    fn init_git_fixture(root: &std::path::Path) {
-        std::fs::write(root.join("src.txt"), "base\n").expect("write base");
-        run_git_fixture(root, ["init"]);
-        run_git_fixture(root, ["config", "user.email", "test@example.com"]);
-        run_git_fixture(root, ["config", "user.name", "Test User"]);
-        run_git_fixture(root, ["add", "."]);
-        run_git_fixture(root, ["commit", "-m", "base"]);
+    #[cfg(unix)]
+    #[test]
+    fn git_diff_to_remote_rejects_symlink_cwd_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        init_git_fixture(outside.path());
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside repo");
+
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":31,"method":"gitDiffToRemote","params":{{"cwd":{}}}}}"#,
+                serde_json::to_string(&root.path().join("outside-link").to_string_lossy())
+                    .expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "repo");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
     }
 
-    fn run_git_fixture<const N: usize>(root: &std::path::Path, args: [&str; N]) {
+    fn init_git_fixture(root: &std::path::Path) {
+        std::fs::write(root.join("src.txt"), "base\n").expect("write base");
+        run_git_fixture(root, &["init"]);
+        run_git_fixture(root, &["config", "user.email", "test@example.com"]);
+        run_git_fixture(root, &["config", "user.name", "Test User"]);
+        run_git_fixture(root, &["add", "."]);
+        run_git_fixture(root, &["commit", "-m", "base"]);
+        let branch = run_git_fixture_output(root, &["branch", "--show-current"])
+            .trim()
+            .to_string();
+        let remote = root.join(".remote.git");
+        let remote_path = remote.to_string_lossy();
+        run_git_fixture(root, &["clone", "--bare", ".", remote_path.as_ref()]);
+        run_git_fixture(root, &["remote", "add", "origin", remote_path.as_ref()]);
+        run_git_fixture(root, &["push", "-u", "origin", &branch]);
+    }
+
+    fn run_git_fixture(root: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .args(args)
             .current_dir(root)
@@ -6514,6 +6554,17 @@ mod tests {
             .status()
             .expect("git fixture command");
         assert!(status.success());
+    }
+
+    fn run_git_fixture_output(root: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git fixture command");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     #[test]
