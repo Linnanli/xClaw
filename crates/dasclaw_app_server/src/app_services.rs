@@ -11,14 +11,15 @@ use dasclaw_app_server_protocol::{
     FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
     FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
     FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
-    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, GitDiffToRemoteParams,
-    GitDiffToRemoteResponse, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
-    ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams,
-    McpResourceReadResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
-    McpServerReloadParams, McpServerReloadResponse, McpServerToolCallParams,
-    McpServerToolCallResponse, McpServiceAvailability, McpToolCallProgressNotification,
-    ServiceHealth, ServiceName, ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse, JobListParams,
+    JobListResponse, JobReadParams, JobReadResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+    McpServerReloadResponse, McpServerToolCallParams, McpServerToolCallResponse,
+    McpServiceAvailability, McpToolCallProgressNotification, ServiceHealth, ServiceName,
+    ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse,
 };
 use dasclaw_runtime::context::ContextManager;
 
@@ -30,6 +31,7 @@ use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
 use crate::mcp_service::AppServerMcpService;
 use crate::repo_service::AppServerRepoService;
+use crate::search_service::{AppServerSearchService, SearchNotification};
 use crate::skills_service::AppServerSkillsService;
 
 pub trait LogService: Send + Sync {
@@ -191,6 +193,22 @@ pub trait RepoService: Send + Sync {
     }
 }
 
+pub trait SearchService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn fuzzy_file_search(
+        &self,
+        params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError>;
+
+    fn drain_search_events(&self) -> Vec<SearchNotification> {
+        Vec::new()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
@@ -201,6 +219,7 @@ pub struct AppServerServices {
     pub command: Arc<dyn CommandExecService>,
     pub config: Arc<dyn ConfigService>,
     pub repo: Arc<dyn RepoService>,
+    pub search: Arc<dyn SearchService>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -222,6 +241,7 @@ impl Default for AppServerServices {
             command: Arc::new(NoopCommandExecService),
             config: Arc::new(NoopConfigService),
             repo: Arc::new(NoopRepoService),
+            search: Arc::new(NoopSearchService),
         }
     }
 }
@@ -239,7 +259,8 @@ impl AppServerServices {
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
             command: Arc::new(AppServerCommandExecService::new(root.clone())),
             config: Arc::new(AppServerConfigService::new(root.clone())),
-            repo: Arc::new(AppServerRepoService::new(root)),
+            repo: Arc::new(AppServerRepoService::new(root.clone())),
+            search: Arc::new(AppServerSearchService::new(root)),
         }
     }
 
@@ -253,6 +274,7 @@ impl AppServerServices {
             self.command.health(),
             self.config.health(),
             self.repo.health(),
+            self.search.health(),
         ]
     }
 
@@ -272,6 +294,10 @@ impl AppServerServices {
         &self,
     ) -> Vec<CommandExecOutputDeltaNotification> {
         self.command.drain_output_delta_events()
+    }
+
+    pub fn drain_search_events(&self) -> Vec<SearchNotification> {
+        self.search.drain_search_events()
     }
 
     pub fn availability(&self) -> AppServerServiceAvailability {
@@ -297,6 +323,7 @@ impl AppServerServices {
             r6: AppServerR6Availability {
                 config: self.config.is_ready(),
                 repo: self.repo.is_ready(),
+                search: self.search.is_ready(),
                 ..AppServerR6Availability::default()
             },
         }
@@ -314,7 +341,8 @@ impl AppServerServices {
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
             command: Arc::new(AppServerCommandExecService::new(root.clone())),
             config: Arc::new(AppServerConfigService::new(root.clone())),
-            repo: Arc::new(AppServerRepoService::new(root)),
+            repo: Arc::new(AppServerRepoService::new(root.clone())),
+            search: Arc::new(AppServerSearchService::new(root)),
         }
     }
 
@@ -336,6 +364,7 @@ impl AppServerServices {
             command: Arc::new(command),
             config: Arc::new(NoopConfigService),
             repo: Arc::new(NoopRepoService),
+            search: Arc::new(NoopSearchService),
         }
     }
 }
@@ -348,6 +377,7 @@ struct NoopFsService;
 struct NoopCommandExecService;
 struct NoopConfigService;
 struct NoopRepoService;
+struct NoopSearchService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -603,6 +633,22 @@ impl RepoService for NoopRepoService {
         Err(AppServerError::capability_unavailable(
             "repo",
             "repo service is not wired",
+        ))
+    }
+}
+
+impl SearchService for NoopSearchService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Search, "search service is not wired")
+    }
+
+    fn fuzzy_file_search(
+        &self,
+        _params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "search",
+            "search service is not wired",
         ))
     }
 }

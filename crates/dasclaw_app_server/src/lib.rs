@@ -14,6 +14,7 @@ pub mod job_service;
 pub mod log_service;
 pub mod mcp_service;
 pub mod repo_service;
+pub mod search_service;
 pub mod skills_service;
 
 mod blocking_runtime;
@@ -48,12 +49,13 @@ use dasclaw_app_server_protocol::{
     FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
     FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
     FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
-    FsWriteFileParams, FsWriteFileResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
-    GuardianApprovalReview, HealthCheckParams, HealthCheckResponse, InitializeParams,
-    InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse,
-    JobReadParams, JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming,
-    JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
-    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams, FuzzyFileSearchResponse,
+    GitDiffToRemoteParams, GitDiffToRemoteResponse, GuardianApprovalReview, HealthCheckParams,
+    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
     McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
@@ -94,6 +96,7 @@ use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
 use dasclaw_llm_provider::provider::registry::ProviderProtocol;
 use dasclaw_runtime::LlmProviderResponder;
+use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -916,6 +919,14 @@ impl AppServer {
     ) -> Result<GitDiffToRemoteResponse, AppServerError> {
         self.require_initialized("repo")?;
         self.app_services.repo.git_diff_to_remote(params)
+    }
+
+    pub fn fuzzy_file_search(
+        &self,
+        params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError> {
+        self.require_initialized("search")?;
+        self.app_services.search.fuzzy_file_search(params)
     }
 
     fn create_thread_record(
@@ -1947,6 +1958,11 @@ impl AppServer {
                 request.params,
                 |params: GitDiffToRemoteParams| self.git_diff_to_remote(params),
             ),
+            method::FUZZY_FILE_SEARCH => route_with_params(
+                request.id,
+                request.params,
+                |params: FuzzyFileSearchParams| self.fuzzy_file_search(params),
+            ),
             method::HEALTH_CHECK => {
                 route_with_optional_params(request.id, request.params, |params| {
                     Ok(self.health_check(params))
@@ -2732,6 +2748,18 @@ impl AppServer {
         }
         for event in self.app_services.drain_command_exec_output_delta_events() {
             self.notifications.emit_command_exec_output_delta(event);
+        }
+        for event in self.app_services.drain_search_events() {
+            match event {
+                SearchNotification::Updated(event) => {
+                    self.notifications
+                        .emit_fuzzy_file_search_session_updated(event);
+                }
+                SearchNotification::Completed(event) => {
+                    self.notifications
+                        .emit_fuzzy_file_search_session_completed(event);
+                }
+            }
         }
     }
 
@@ -5318,6 +5346,22 @@ impl NotificationBus {
         self.push(ServerNotification::mcp_server_startup_status_updated(event));
     }
 
+    pub fn emit_fuzzy_file_search_session_updated(
+        &mut self,
+        event: dasclaw_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification,
+    ) {
+        self.push(ServerNotification::fuzzy_file_search_session_updated(event));
+    }
+
+    pub fn emit_fuzzy_file_search_session_completed(
+        &mut self,
+        event: dasclaw_app_server_protocol::FuzzyFileSearchSessionCompletedNotification,
+    ) {
+        self.push(ServerNotification::fuzzy_file_search_session_completed(
+            event,
+        ));
+    }
+
     pub fn emit_server_request(&mut self, request: JsonRpcServerRequest) {
         if self.lag_disconnect_signaled {
             return;
@@ -5729,6 +5773,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::CONFIG_VALUE_WRITE,
         method::CONFIG_BATCH_WRITE,
         method::GIT_DIFF_TO_REMOTE,
+        method::FUZZY_FILE_SEARCH,
         method::HEALTH_CHECK,
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
@@ -6499,6 +6544,35 @@ mod tests {
                 .expect("diff")
                 .contains("changed")
         );
+    }
+
+    #[test]
+    fn fuzzy_file_search_returns_files_and_session_notifications() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("mkdir");
+        std::fs::write(temp.path().join("src/config_service.rs"), "").expect("write");
+
+        let mut server = initialized_server_with_root(temp.path());
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": "cfg",
+                "roots": [temp.path().to_string_lossy()],
+                "cancellationToken": "session-a"
+            }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["files"][0]["fileName"], "config_service.rs");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = methods_from_values(&notifications);
+        assert!(methods.contains(&"fuzzyFileSearch/sessionUpdated"));
+        assert!(methods.contains(&"fuzzyFileSearch/sessionCompleted"));
     }
 
     #[cfg(unix)]
