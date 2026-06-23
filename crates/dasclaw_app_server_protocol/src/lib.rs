@@ -50,10 +50,17 @@ pub mod method {
     pub const SKILLS_CONFIG_WRITE: &str = "skills/config/write";
     pub const MCP_SERVER_OAUTH_LOGIN: &str = "mcpServer/oauth/login";
     pub const CONFIG_REQUIREMENTS_READ: &str = "configRequirements/read";
+    pub const CONFIG_READ: &str = "config/read";
+    pub const CONFIG_VALUE_WRITE: &str = "config/value/write";
+    pub const CONFIG_BATCH_WRITE: &str = "config/batchWrite";
     pub const CONFIG_MCP_SERVER_RELOAD: &str = "config/mcpServer/reload";
     pub const MCP_SERVER_STATUS_LIST: &str = "mcpServerStatus/list";
     pub const MCP_SERVER_RESOURCE_READ: &str = "mcpServer/resource/read";
     pub const MCP_SERVER_TOOL_CALL: &str = "mcpServer/tool/call";
+    pub const GIT_DIFF_TO_REMOTE: &str = "gitDiffToRemote";
+    pub const FUZZY_FILE_SEARCH: &str = "fuzzyFileSearch";
+    pub const GET_CONVERSATION_SUMMARY: &str = "getConversationSummary";
+    pub const REVIEW_START: &str = "review/start";
     pub const FS_READ_FILE: &str = "fs/readFile";
     pub const FS_WRITE_FILE: &str = "fs/writeFile";
     pub const FS_CREATE_DIRECTORY: &str = "fs/createDirectory";
@@ -117,6 +124,16 @@ pub mod event {
     pub const ITEM_MCP_TOOL_CALL_PROGRESS: &str = "item/mcpToolCall/progress";
     pub const MCP_SERVER_OAUTH_LOGIN_COMPLETED: &str = "mcpServer/oauthLogin/completed";
     pub const MCP_SERVER_STARTUP_STATUS_UPDATED: &str = "mcpServer/startupStatus/updated";
+    pub const FUZZY_FILE_SEARCH_SESSION_UPDATED: &str = "fuzzyFileSearch/sessionUpdated";
+    pub const FUZZY_FILE_SEARCH_SESSION_COMPLETED: &str = "fuzzyFileSearch/sessionCompleted";
+    pub const MODEL_REROUTED: &str = "model/rerouted";
+    pub const MODEL_VERIFICATION: &str = "model/verification";
+    pub const HOOK_STARTED: &str = "hook/started";
+    pub const HOOK_COMPLETED: &str = "hook/completed";
+    pub const WARNING: &str = "warning";
+    pub const GUARDIAN_WARNING: &str = "guardianWarning";
+    pub const CONFIG_WARNING: &str = "configWarning";
+    pub const DEPRECATION_NOTICE: &str = "deprecationNotice";
     pub const FS_CHANGED: &str = "fs/changed";
     pub const COMMAND_EXEC_OUTPUT_DELTA: &str = "command/exec/outputDelta";
     pub const ERROR: &str = "error";
@@ -666,6 +683,12 @@ pub struct CapabilityMatrix {
     pub thread_lifecycle: Capability,
     pub thread_goal: Capability,
     pub thread_compact: Capability,
+    pub config: Capability,
+    pub repo: Capability,
+    pub search: Capability,
+    pub review: Capability,
+    pub hooks: Capability,
+    pub warnings: Capability,
 }
 
 impl CapabilityMatrix {
@@ -729,6 +752,12 @@ impl CapabilityMatrix {
             sandbox: declared_future_capability("sandbox"),
             filesystem: declared_future_capability("filesystem"),
             command_exec: declared_future_capability("command_exec"),
+            config: declared_future_capability("config"),
+            repo: declared_future_capability("repo"),
+            search: declared_future_capability("search"),
+            review: declared_future_capability("review"),
+            hooks: declared_future_capability("hooks"),
+            warnings: declared_future_capability("warnings"),
             thread_lifecycle: Capability::implemented(
                 "thread_lifecycle",
                 &[
@@ -870,6 +899,66 @@ impl CapabilityMatrix {
         if !mcp_methods.is_empty() || !mcp_events.is_empty() {
             self.mcp = Capability::implemented("mcp", &mcp_methods, &mcp_events);
         }
+        if availability.r6.config {
+            self.config = Capability::implemented(
+                "config",
+                &[
+                    method::CONFIG_READ,
+                    method::CONFIG_VALUE_WRITE,
+                    method::CONFIG_BATCH_WRITE,
+                ],
+                &[event::CONFIG_WARNING],
+            );
+        }
+        if availability.r6.repo {
+            self.repo = Capability::implemented("repo", &[method::GIT_DIFF_TO_REMOTE], &[]);
+        }
+        if availability.r6.search {
+            self.search = Capability::implemented(
+                "search",
+                &[method::FUZZY_FILE_SEARCH],
+                &[
+                    event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+                    event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+                ],
+            );
+        }
+        if availability.r6.review {
+            self.review = Capability::implemented(
+                "review",
+                &[method::GET_CONVERSATION_SUMMARY, method::REVIEW_START],
+                &[],
+            );
+        }
+        if availability.r6.model_events {
+            self.model_provider = Capability::implemented(
+                "model_provider",
+                &[
+                    method::MODEL_LIST,
+                    method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+                ],
+                &[event::MODEL_REROUTED, event::MODEL_VERIFICATION],
+            );
+        }
+        if availability.r6.hooks {
+            self.hooks = Capability::implemented(
+                "hooks",
+                &[],
+                &[event::HOOK_STARTED, event::HOOK_COMPLETED],
+            );
+        }
+        if availability.r6.warnings {
+            self.warnings = Capability::implemented(
+                "warnings",
+                &[],
+                &[
+                    event::WARNING,
+                    event::GUARDIAN_WARNING,
+                    event::CONFIG_WARNING,
+                    event::DEPRECATION_NOTICE,
+                ],
+            );
+        }
         self.with_p5_filesystem_command(availability.p5)
     }
 
@@ -917,12 +1006,24 @@ pub struct AppServerServiceAvailability {
     pub skills: bool,
     pub mcp: McpServiceAvailability,
     pub p5: AppServerP5Availability,
+    pub r6: AppServerR6Availability,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AppServerP5Availability {
     pub filesystem: bool,
     pub command: CommandExecAvailability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppServerR6Availability {
+    pub config: bool,
+    pub repo: bool,
+    pub search: bool,
+    pub review: bool,
+    pub model_events: bool,
+    pub hooks: bool,
+    pub warnings: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1041,6 +1142,11 @@ pub struct ProtocolSchemaResponse {
 }
 
 impl ProtocolSchemaResponse {
+    #[must_use]
+    pub fn current() -> Self {
+        Self::phase_one(CapabilityMatrix::phase_one())
+    }
+
     #[must_use]
     pub fn phase_one(capabilities: CapabilityMatrix) -> Self {
         Self {
@@ -1284,6 +1390,55 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "sandbox",
             None,
             "ConfigRequirementsReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_READ,
+            "config",
+            Some("ConfigReadParams"),
+            "ConfigReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_VALUE_WRITE,
+            "config",
+            Some("ConfigValueWriteParams"),
+            "ConfigWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_BATCH_WRITE,
+            "config",
+            Some("ConfigBatchWriteParams"),
+            "ConfigWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::GIT_DIFF_TO_REMOTE,
+            "repo",
+            Some("GitDiffToRemoteParams"),
+            "GitDiffToRemoteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FUZZY_FILE_SEARCH,
+            "search",
+            Some("FuzzyFileSearchParams"),
+            "FuzzyFileSearchResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::GET_CONVERSATION_SUMMARY,
+            "review",
+            Some("GetConversationSummaryParams"),
+            "GetConversationSummaryResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::REVIEW_START,
+            "review",
+            Some("ReviewStartParams"),
+            "ReviewStartResponse",
             true,
         ),
         MethodSchema::new(
@@ -1794,6 +1949,44 @@ fn phase_one_events() -> Vec<EventSchema> {
             "mcp",
             "McpServerStatusUpdatedNotification",
         ),
+        EventSchema::new(
+            event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+            "search",
+            "FuzzyFileSearchSessionUpdatedNotification",
+        ),
+        EventSchema::new(
+            event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+            "search",
+            "FuzzyFileSearchSessionCompletedNotification",
+        ),
+        EventSchema::new(
+            event::MODEL_REROUTED,
+            "model_provider",
+            "ModelReroutedNotification",
+        ),
+        EventSchema::new(
+            event::MODEL_VERIFICATION,
+            "model_provider",
+            "ModelVerificationNotification",
+        ),
+        EventSchema::new(event::HOOK_STARTED, "hooks", "HookStartedNotification"),
+        EventSchema::new(event::HOOK_COMPLETED, "hooks", "HookCompletedNotification"),
+        EventSchema::new(event::WARNING, "warnings", "WarningNotification"),
+        EventSchema::new(
+            event::GUARDIAN_WARNING,
+            "warnings",
+            "GuardianWarningNotification",
+        ),
+        EventSchema::new(
+            event::CONFIG_WARNING,
+            "warnings",
+            "ConfigWarningNotification",
+        ),
+        EventSchema::new(
+            event::DEPRECATION_NOTICE,
+            "warnings",
+            "DeprecationNoticeNotification",
+        ),
         EventSchema::new(event::FS_CHANGED, "filesystem", "FsChangedNotification"),
         EventSchema::new(
             event::COMMAND_EXEC_OUTPUT_DELTA,
@@ -1821,6 +2014,10 @@ pub enum ServiceName {
     Logs,
     Filesystem,
     CommandExec,
+    Config,
+    Repo,
+    Search,
+    Hooks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1911,6 +2108,447 @@ pub struct CapabilitiesListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRequirementsReadResponse {
     pub allowed_sandbox_modes: Vec<SandboxMode>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub include_layers: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadResponse {
+    pub config: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<ConfigLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayerMetadata {
+    pub id: String,
+    pub source: ConfigLayerSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub readonly: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayer {
+    pub metadata: ConfigLayerMetadata,
+    pub values: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfigLayerSource {
+    Defaults,
+    System,
+    User,
+    Workspace,
+    Environment,
+    Runtime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigValueWriteParams {
+    pub key: String,
+    pub value: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<ConfigLayerSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_strategy: Option<MergeStrategy>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeStrategy {
+    Replace,
+    MergeObjects,
+    Append,
+    Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBatchWriteParams {
+    pub edits: Vec<ConfigEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEdit {
+    pub key: String,
+    pub value: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<ConfigLayerSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_strategy: Option<MergeStrategy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWriteResponse {
+    pub config: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ConfigWarningNotification>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub include_untracked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteResponse {
+    pub diff: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_info: Option<CodexGitInfo>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchResponse {
+    pub results: Vec<FuzzyFileSearchResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchResult {
+    pub path: String,
+    pub score: i64,
+    pub match_type: MatchType,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<TextRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MatchType {
+    FileName,
+    Path,
+    Contents,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdatedNotification {
+    pub session_id: String,
+    pub results: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionCompletedNotification {
+    pub session_id: String,
+    pub results: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryParams {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryResponse {
+    pub summary: ConversationSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub thread_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<CodexTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartParams {
+    pub target: ReviewTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewTarget {
+    Thread {
+        thread_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+    },
+    GitDiff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        diff: String,
+    },
+    Files {
+        paths: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewDelivery {
+    Notification,
+    Thread {
+        thread_id: String,
+    },
+    Webhook {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers: Option<serde_json::Value>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartResponse {
+    pub review_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelReroutedNotification {
+    pub from_model: String,
+    pub to_model: String,
+    pub reason: ModelRerouteReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelRerouteReason {
+    Unavailable,
+    Policy,
+    Capacity,
+    UserPreference,
+    Fallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelVerificationNotification {
+    pub verification: ModelVerification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelVerification {
+    pub model: String,
+    pub verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookStartedNotification {
+    pub run: HookRunSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookCompletedNotification {
+    pub run: HookRunSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output: Vec<HookOutputEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookRunSummary {
+    pub run_id: String,
+    pub event: HookEventName,
+    pub status: HookRunStatus,
+    pub execution_mode: HookExecutionMode,
+    pub handler_type: HookHandlerType,
+    pub scope: HookScope,
+    pub source: HookSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookEventName {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    Notification,
+    Stop,
+    SubagentStop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookExecutionMode {
+    Blocking,
+    Async,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookHandlerType {
+    Command,
+    Script,
+    Builtin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookScope {
+    User,
+    Project,
+    Workspace,
+    Runtime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookSource {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookRunStatus {
+    Started,
+    Completed,
+    Failed,
+    Skipped,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookOutputEntry {
+    pub kind: HookOutputEntryKind,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookOutputEntryKind {
+    Stdout,
+    Stderr,
+    Message,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarningNotification {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianWarningNotification {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWarningNotification {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeprecationNoticeNotification {
+    pub message: String,
+    pub deprecated: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3375,6 +4013,54 @@ impl ServerNotification {
         Self::new(event::COMMAND_EXEC_OUTPUT_DELTA, event)
     }
 
+    pub fn fuzzy_file_search_session_updated(
+        event: FuzzyFileSearchSessionUpdatedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::FUZZY_FILE_SEARCH_SESSION_UPDATED, event)
+    }
+
+    pub fn fuzzy_file_search_session_completed(
+        event: FuzzyFileSearchSessionCompletedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::FUZZY_FILE_SEARCH_SESSION_COMPLETED, event)
+    }
+
+    pub fn model_rerouted(event: ModelReroutedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::MODEL_REROUTED, event)
+    }
+
+    pub fn model_verification(
+        event: ModelVerificationNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::MODEL_VERIFICATION, event)
+    }
+
+    pub fn hook_started(event: HookStartedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::HOOK_STARTED, event)
+    }
+
+    pub fn hook_completed(event: HookCompletedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::HOOK_COMPLETED, event)
+    }
+
+    pub fn warning(event: WarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::WARNING, event)
+    }
+
+    pub fn guardian_warning(event: GuardianWarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::GUARDIAN_WARNING, event)
+    }
+
+    pub fn config_warning(event: ConfigWarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::CONFIG_WARNING, event)
+    }
+
+    pub fn deprecation_notice(
+        event: DeprecationNoticeNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::DEPRECATION_NOTICE, event)
+    }
+
     pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ERROR, event)
     }
@@ -3880,6 +4566,47 @@ mod tests {
 
     fn protocol_schema() -> ProtocolSchemaResponse {
         ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one())
+    }
+
+    #[test]
+    fn r6_protocol_schema_lists_config_repo_search_review_and_warning_contracts() {
+        let schema = ProtocolSchemaResponse::current();
+        let methods: std::collections::BTreeSet<_> = schema
+            .methods
+            .iter()
+            .map(|entry| entry.method.as_str())
+            .collect();
+        for method in [
+            method::CONFIG_READ,
+            method::CONFIG_VALUE_WRITE,
+            method::CONFIG_BATCH_WRITE,
+            method::GIT_DIFF_TO_REMOTE,
+            method::FUZZY_FILE_SEARCH,
+            method::GET_CONVERSATION_SUMMARY,
+            method::REVIEW_START,
+        ] {
+            assert!(methods.contains(method), "missing R6 method {method}");
+        }
+
+        let events: std::collections::BTreeSet<_> = schema
+            .events
+            .iter()
+            .map(|entry| entry.event.as_str())
+            .collect();
+        for event in [
+            event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+            event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+            event::MODEL_REROUTED,
+            event::MODEL_VERIFICATION,
+            event::HOOK_STARTED,
+            event::HOOK_COMPLETED,
+            event::WARNING,
+            event::GUARDIAN_WARNING,
+            event::CONFIG_WARNING,
+            event::DEPRECATION_NOTICE,
+        ] {
+            assert!(events.contains(event), "missing R6 event {event}");
+        }
     }
 
     #[test]
@@ -4587,6 +5314,12 @@ mod tests {
             schema.capabilities.thread_lifecycle.id.as_str(),
             schema.capabilities.thread_goal.id.as_str(),
             schema.capabilities.thread_compact.id.as_str(),
+            schema.capabilities.config.id.as_str(),
+            schema.capabilities.repo.id.as_str(),
+            schema.capabilities.search.id.as_str(),
+            schema.capabilities.review.id.as_str(),
+            schema.capabilities.hooks.id.as_str(),
+            schema.capabilities.warnings.id.as_str(),
         ];
 
         for method in &schema.methods {
@@ -4754,6 +5487,19 @@ mod tests {
                 method::THREAD_READ,
                 method::THREAD_LIST,
                 method::THREAD_TURNS_LIST,
+                method::THREAD_RESUME,
+                method::THREAD_FORK,
+                method::THREAD_ARCHIVE,
+                method::THREAD_UNARCHIVE,
+                method::THREAD_UNSUBSCRIBE,
+                method::THREAD_NAME_SET,
+                method::THREAD_METADATA_UPDATE,
+                method::THREAD_ROLLBACK,
+                method::THREAD_LOADED_LIST,
+                method::THREAD_INJECT_ITEMS,
+                method::THREAD_GOAL_SET,
+                method::THREAD_GOAL_GET,
+                method::THREAD_GOAL_CLEAR,
                 method::TURN_START,
                 method::TURN_INTERRUPT,
                 method::TURN_READ,
@@ -5085,6 +5831,65 @@ mod tests {
                 item: CodexThreadItem::completed_agent_message("turn_1", "hello"),
             })
             .expect("item/completed fixture should serialize"),
+            ServerNotification::thread_status_changed(ThreadStatusChangedEvent {
+                thread_id: "thread_1".to_string(),
+                status: CodexThreadStatus::Idle,
+            })
+            .expect("thread/status fixture should serialize"),
+            ServerNotification::thread_archived(ThreadArchivedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/archived fixture should serialize"),
+            ServerNotification::thread_unarchived(ThreadUnarchivedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/unarchived fixture should serialize"),
+            ServerNotification::thread_name_updated(ThreadNameUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                thread_name: Some("thread name".to_string()),
+            })
+            .expect("thread/name fixture should serialize"),
+            ServerNotification::thread_goal_updated(ThreadGoalUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: Some("turn_1".to_string()),
+                goal: ThreadGoal {
+                    thread_id: "thread_1".to_string(),
+                    objective: "finish task".to_string(),
+                    status: ThreadGoalStatus::Active,
+                    token_budget: Some(1000),
+                    tokens_used: 10,
+                    time_used_seconds: 1,
+                    created_at: 1,
+                    updated_at: 2,
+                },
+            })
+            .expect("thread/goal updated fixture should serialize"),
+            ServerNotification::thread_goal_cleared(ThreadGoalClearedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/goal cleared fixture should serialize"),
+            ServerNotification::thread_token_usage_updated(ThreadTokenUsageUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                token_usage: ThreadTokenUsage {
+                    total: TokenUsageBreakdown {
+                        total_tokens: 10,
+                        input_tokens: 6,
+                        cached_input_tokens: 2,
+                        output_tokens: 4,
+                        reasoning_output_tokens: 1,
+                    },
+                    last: TokenUsageBreakdown {
+                        total_tokens: 10,
+                        input_tokens: 6,
+                        cached_input_tokens: 2,
+                        output_tokens: 4,
+                        reasoning_output_tokens: 1,
+                    },
+                    model_context_window: Some(128000),
+                },
+            })
+            .expect("thread/token usage fixture should serialize"),
             ServerNotification::error(ErrorEvent {
                 code: ErrorCode::ServiceDegraded,
                 message: "runtime failed".to_string(),
@@ -5813,6 +6618,7 @@ mod tests {
                     startup_status_events: true,
                 },
                 p5: AppServerP5Availability::default(),
+                r6: AppServerR6Availability::default(),
             });
 
         assert_eq!(matrix.logs.status, CapabilityStatus::Implemented);
