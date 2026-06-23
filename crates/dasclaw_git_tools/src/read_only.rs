@@ -171,7 +171,11 @@ fn truncate(s: &str) -> String {
     if s.len() <= MAX_OUTPUT_BYTES {
         return s.to_string();
     }
-    let cut = &s[..MAX_OUTPUT_BYTES];
+    let mut end = MAX_OUTPUT_BYTES;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = &s[..end];
     format!(
         "{}\n\n--- output truncated ({} bytes total) ---",
         cut,
@@ -203,6 +207,15 @@ mod tests {
         assert!(ensure_read_only_args(&["status", "--porcelain=v1"]).is_ok());
         assert!(ensure_read_only_args(&["branch", "--show-current"]).is_ok());
         assert!(ensure_read_only_args(&["config", "user.name"]).is_ok());
+    }
+
+    #[test]
+    fn read_only_git_truncation_is_utf8_boundary_safe() {
+        let input = format!("{}é{}", "a".repeat(MAX_OUTPUT_BYTES - 1), "b".repeat(8));
+
+        let output = truncate(&input);
+
+        assert!(output.contains("--- output truncated"));
     }
 
     #[tokio::test]
