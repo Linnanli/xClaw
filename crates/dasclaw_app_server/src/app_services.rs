@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dasclaw_app_server_protocol::{
@@ -261,8 +262,12 @@ impl Default for AppServerServices {
 impl AppServerServices {
     #[must_use]
     pub fn real() -> Self {
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::real_with_root(root)
+    }
+
+    fn real_with_root(root: PathBuf) -> Self {
         let manager = Arc::new(ContextManager::default());
-        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         Self {
             logs: Arc::new(AppServerLogService::new()),
             jobs: Arc::new(AppServerJobService::new(manager)),
@@ -350,21 +355,8 @@ impl AppServerServices {
     }
 
     #[cfg(test)]
-    pub fn real_with_root_for_tests(root: std::path::PathBuf) -> Self {
-        Self {
-            logs: Arc::new(AppServerLogService::new()),
-            jobs: Arc::new(AppServerJobService::new(
-                Arc::new(ContextManager::default()),
-            )),
-            skills: Arc::new(AppServerSkillsService::new()),
-            mcp: Arc::new(AppServerMcpService::default()),
-            filesystem: Arc::new(AppServerFsService::new(root.clone())),
-            command: Arc::new(AppServerCommandExecService::new(root.clone())),
-            config: Arc::new(AppServerConfigService::new(root.clone())),
-            repo: Arc::new(AppServerRepoService::new(root.clone())),
-            search: Arc::new(AppServerSearchService::new(root)),
-            hooks: Arc::new(AppServerHookService::default()),
-        }
+    pub fn real_with_root_for_tests(root: PathBuf) -> Self {
+        Self::real_with_root(root)
     }
 
     #[cfg(test)]

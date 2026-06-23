@@ -76,7 +76,7 @@ fn collect_matches(
         }
 
         if file_type.is_file() {
-            push_match(root, &path, &name, FuzzyPathMatchType::File, query, results)?;
+            push_match(root, &path, &name, FuzzyPathMatchType::File, query, results);
         } else if file_type.is_dir() {
             push_match(
                 root,
@@ -85,7 +85,7 @@ fn collect_matches(
                 FuzzyPathMatchType::Directory,
                 query,
                 results,
-            )?;
+            );
             collect_matches(root, &path, query, depth + 1, results)?;
         }
     }
@@ -99,13 +99,13 @@ fn push_match(
     match_type: FuzzyPathMatchType,
     query: &str,
     results: &mut Vec<FuzzyPathSearchResult>,
-) -> io::Result<()> {
+) {
     let rel = path.strip_prefix(root).unwrap_or(path);
     let rel_path = rel
         .to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/");
     let Some((score, indices)) = score_path(file_name, &rel_path, query) else {
-        return Ok(());
+        return;
     };
 
     results.push(FuzzyPathSearchResult {
@@ -116,7 +116,6 @@ fn push_match(
         score,
         indices: Some(indices),
     });
-    Ok(())
 }
 
 fn score_path(file_name: &str, rel_path: &str, query: &str) -> Option<(f64, Vec<usize>)> {
