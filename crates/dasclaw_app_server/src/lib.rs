@@ -10,6 +10,7 @@ pub mod app_services;
 pub mod command_service;
 pub mod config_service;
 pub mod fs_service;
+pub mod hook_service;
 pub mod job_service;
 pub mod log_service;
 pub mod mcp_service;
@@ -41,23 +42,25 @@ use dasclaw_app_server_protocol::{
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigBatchWriteParams,
     ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse, ConfigValueWriteParams,
-    ConfigWriteResponse, DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem,
-    DynamicToolCallParams, DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent,
-    FileChangeApprovalDecision, FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent,
-    FileChangeRequestApprovalParams, FileChangeRequestApprovalResponse, FileUpdateChange,
-    FsChangedNotification, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
-    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
-    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
-    FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
-    FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams, FuzzyFileSearchResponse,
-    GetConversationSummaryParams, GetConversationSummaryResponse, GitDiffToRemoteParams,
-    GitDiffToRemoteResponse, GuardianApprovalReview, HealthCheckParams, HealthCheckResponse,
-    InitializeParams, InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JobListParams,
-    JobListResponse, JobReadParams, JobReadResponse, JsonRpcClientResponse, JsonRpcError,
-    JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent,
-    LifecycleReason, LifecycleSnapshot, LifecycleState, LifecycleStatusResponse,
-    ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams,
-    McpResourceReadResponse, McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    ConfigWarningNotification, ConfigWriteResponse, DEFAULT_MAX_PENDING_NOTIFICATIONS,
+    DeprecationNoticeNotification, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent, FileChangeApprovalDecision,
+    FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
+    FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
+    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, GetConversationSummaryParams, GetConversationSummaryResponse,
+    GitDiffToRemoteParams, GitDiffToRemoteResponse, GuardianApprovalReview,
+    GuardianWarningNotification, HealthCheckParams, HealthCheckResponse, HookCompletedNotification,
+    HookStartedNotification, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
     McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
@@ -85,7 +88,7 @@ use dasclaw_app_server_protocol::{
     TokenUsageBreakdown, ToolRequestUserInputParams, ToolRequestUserInputQuestion,
     ToolRequestUserInputResponse, TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse,
     TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
-    TurnStatus,
+    TurnStatus, WarningNotification,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -98,6 +101,7 @@ use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
 use dasclaw_llm_provider::provider::registry::ProviderProtocol;
 use dasclaw_runtime::LlmProviderResponder;
+use hook_service::AppServerHookNotification;
 use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -2841,6 +2845,28 @@ impl AppServer {
                 }
             }
         }
+        for event in self.app_services.drain_hook_notifications() {
+            match event {
+                AppServerHookNotification::Started(event) => {
+                    self.notifications.emit_hook_started(event);
+                }
+                AppServerHookNotification::Completed(event) => {
+                    self.notifications.emit_hook_completed(event);
+                }
+                AppServerHookNotification::Warning(event) => {
+                    self.notifications.emit_warning(event);
+                }
+                AppServerHookNotification::GuardianWarning(event) => {
+                    self.notifications.emit_guardian_warning(event);
+                }
+                AppServerHookNotification::ConfigWarning(event) => {
+                    self.notifications.emit_config_warning(event);
+                }
+                AppServerHookNotification::DeprecationNotice(event) => {
+                    self.notifications.emit_deprecation_notice(event);
+                }
+            }
+        }
     }
 
     fn refresh_service_capabilities(&mut self) {
@@ -5502,6 +5528,30 @@ impl NotificationBus {
         self.push(ServerNotification::model_verification(event));
     }
 
+    pub fn emit_hook_started(&mut self, event: HookStartedNotification) {
+        self.push(ServerNotification::hook_started(event));
+    }
+
+    pub fn emit_hook_completed(&mut self, event: HookCompletedNotification) {
+        self.push(ServerNotification::hook_completed(event));
+    }
+
+    pub fn emit_warning(&mut self, event: WarningNotification) {
+        self.push(ServerNotification::warning(event));
+    }
+
+    pub fn emit_guardian_warning(&mut self, event: GuardianWarningNotification) {
+        self.push(ServerNotification::guardian_warning(event));
+    }
+
+    pub fn emit_config_warning(&mut self, event: ConfigWarningNotification) {
+        self.push(ServerNotification::config_warning(event));
+    }
+
+    pub fn emit_deprecation_notice(&mut self, event: DeprecationNoticeNotification) {
+        self.push(ServerNotification::deprecation_notice(event));
+    }
+
     pub fn emit_log_entry(&mut self, event: LogEntryEvent) {
         self.push(ServerNotification::log_entry(event));
     }
@@ -6095,8 +6145,10 @@ mod tests {
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         CommandExecTerminalSize, DynamicToolCallOutputContentItem, FsChangedKind,
-        FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope, SkillsListEntry,
-        TransportKind, UserInput, WorkspaceInfo, WorkspaceTrust, event, server_request,
+        FsChangedNotification, HookEventName, HookExecutionMode, HookHandlerType, HookOutputEntry,
+        HookOutputEntryKind, HookRunStatus, HookRunSummary, HookScope, HookSource, ServiceStatus,
+        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, UserInput, WorkspaceInfo,
+        WorkspaceTrust, event, server_request,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -12139,6 +12191,96 @@ mod tests {
     }
 
     #[test]
+    fn hook_service_events_drain_to_json_rpc_notifications() {
+        let hook_service = hook_service::AppServerHookService::default();
+        hook_service.push(AppServerHookNotification::Started(
+            HookStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run: sample_hook_run(HookRunStatus::Running),
+            },
+        ));
+        hook_service.push(AppServerHookNotification::Completed(
+            HookCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run: sample_hook_run(HookRunStatus::Completed),
+            },
+        ));
+        let services = app_services::AppServerServices {
+            hooks: Arc::new(hook_service),
+            ..app_services::AppServerServices::for_tests(
+                app_services::TestLogService::ready(),
+                app_services::TestJobService::ready(vec![]),
+                app_services::TestSkillsService::ready(vec![]),
+                app_services::TestMcpService::ready(vec![]),
+                app_services::TestFsService::disabled(),
+                app_services::TestCommandExecService::disabled(),
+            )
+        };
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["hook/started", "hook/completed"]
+        );
+        assert_eq!(notifications[0]["params"]["run"]["status"], "running");
+        assert_eq!(notifications[0]["params"]["run"]["eventName"], "preToolUse");
+        assert_eq!(notifications[1]["params"]["run"]["status"], "completed");
+        assert_eq!(notifications[1]["params"]["run"]["eventName"], "preToolUse");
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
+    fn warning_service_events_drain_to_json_rpc_notifications() {
+        let hook_service = hook_service::AppServerHookService::default();
+        hook_service.push(AppServerHookNotification::Warning(WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "general warning".to_string(),
+        }));
+        hook_service.push(AppServerHookNotification::ConfigWarning(
+            ConfigWarningNotification {
+                summary: "unsupported config key".to_string(),
+                details: Some("experimental.foo is ignored".to_string()),
+                path: Some("/tmp/config.json".to_string()),
+                range: None,
+            },
+        ));
+        let services = app_services::AppServerServices {
+            hooks: Arc::new(hook_service),
+            ..app_services::AppServerServices::for_tests(
+                app_services::TestLogService::ready(),
+                app_services::TestJobService::ready(vec![]),
+                app_services::TestSkillsService::ready(vec![]),
+                app_services::TestMcpService::ready(vec![]),
+                app_services::TestFsService::disabled(),
+                app_services::TestCommandExecService::disabled(),
+            )
+        };
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["warning", "configWarning"]
+        );
+        assert_eq!(notifications[0]["params"]["message"], "general warning");
+        assert_eq!(
+            notifications[1]["params"]["summary"],
+            "unsupported config key"
+        );
+        assert_eq!(
+            notifications[1]["params"]["details"],
+            "experimental.foo is ignored"
+        );
+        assert_eq!(notifications[1]["params"]["path"], "/tmp/config.json");
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
     fn runtime_model_reroute_update_emits_notification() {
         let mut server = initialized_server();
         let thread = server
@@ -15407,6 +15549,28 @@ mod tests {
 
     fn json_rpc_values(lines: Vec<String>) -> Vec<Value> {
         lines.into_iter().map(json_rpc_value).collect()
+    }
+
+    fn sample_hook_run(status: HookRunStatus) -> HookRunSummary {
+        HookRunSummary {
+            id: "hook-run-1".to_string(),
+            event_name: HookEventName::PreToolUse,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Turn,
+            source_path: "/tmp/hook.sh".to_string(),
+            source: HookSource::Project,
+            display_order: 1,
+            status,
+            status_message: None,
+            started_at: 1,
+            completed_at: Some(2),
+            duration_ms: Some(1),
+            entries: vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "check this".to_string(),
+            }],
+        }
     }
 
     fn replace_file_with_directory(path: &Path) {

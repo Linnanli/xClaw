@@ -27,6 +27,7 @@ use crate::AppServerError;
 use crate::command_service::AppServerCommandExecService;
 use crate::config_service::AppServerConfigService;
 use crate::fs_service::AppServerFsService;
+use crate::hook_service::{AppServerHookNotification, AppServerHookService};
 use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
 use crate::mcp_service::AppServerMcpService;
@@ -209,6 +210,15 @@ pub trait SearchService: Send + Sync {
     }
 }
 
+pub trait HookNotificationService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification>;
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
@@ -220,6 +230,7 @@ pub struct AppServerServices {
     pub config: Arc<dyn ConfigService>,
     pub repo: Arc<dyn RepoService>,
     pub search: Arc<dyn SearchService>,
+    pub hooks: Arc<dyn HookNotificationService>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -242,6 +253,7 @@ impl Default for AppServerServices {
             config: Arc::new(NoopConfigService),
             repo: Arc::new(NoopRepoService),
             search: Arc::new(NoopSearchService),
+            hooks: Arc::new(NoopHookService),
         }
     }
 }
@@ -261,6 +273,7 @@ impl AppServerServices {
             config: Arc::new(AppServerConfigService::new(root.clone())),
             repo: Arc::new(AppServerRepoService::new(root.clone())),
             search: Arc::new(AppServerSearchService::new(root)),
+            hooks: Arc::new(AppServerHookService::default()),
         }
     }
 
@@ -275,6 +288,7 @@ impl AppServerServices {
             self.config.health(),
             self.repo.health(),
             self.search.health(),
+            self.hooks.health(),
         ]
     }
 
@@ -298,6 +312,10 @@ impl AppServerServices {
 
     pub fn drain_search_events(&self) -> Vec<SearchNotification> {
         self.search.drain_search_events()
+    }
+
+    pub fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
+        self.hooks.drain_hook_notifications()
     }
 
     pub fn availability(&self) -> AppServerServiceAvailability {
@@ -324,6 +342,8 @@ impl AppServerServices {
                 config: self.config.is_ready(),
                 repo: self.repo.is_ready(),
                 search: self.search.is_ready(),
+                hooks: self.hooks.is_ready(),
+                warnings: self.hooks.is_ready(),
                 ..AppServerR6Availability::default()
             },
         }
@@ -343,6 +363,7 @@ impl AppServerServices {
             config: Arc::new(AppServerConfigService::new(root.clone())),
             repo: Arc::new(AppServerRepoService::new(root.clone())),
             search: Arc::new(AppServerSearchService::new(root)),
+            hooks: Arc::new(AppServerHookService::default()),
         }
     }
 
@@ -365,6 +386,7 @@ impl AppServerServices {
             config: Arc::new(NoopConfigService),
             repo: Arc::new(NoopRepoService),
             search: Arc::new(NoopSearchService),
+            hooks: Arc::new(NoopHookService),
         }
     }
 }
@@ -378,6 +400,7 @@ struct NoopCommandExecService;
 struct NoopConfigService;
 struct NoopRepoService;
 struct NoopSearchService;
+struct NoopHookService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -650,6 +673,16 @@ impl SearchService for NoopSearchService {
             "search",
             "search service is not wired",
         ))
+    }
+}
+
+impl HookNotificationService for NoopHookService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Hooks, "hook notification service is not wired")
+    }
+
+    fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
     }
 }
 
