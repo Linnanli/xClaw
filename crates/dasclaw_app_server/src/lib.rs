@@ -6303,6 +6303,159 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn config_read_rejects_user_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join(".dasclaw"),
+            root.path().join(".dasclaw"),
+        )
+        .expect("symlink .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":17,"method":"config/read","params":{"includeLayers":false}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+        assert!(!value.to_string().contains("outside-model"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_write_rejects_user_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join(".dasclaw"),
+            root.path().join(".dasclaw"),
+        )
+        .expect("symlink .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":18,"method":"config/value/write","params":{"keyPath":"model","value":"inside-model","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+
+        let outside_config = fs::read_to_string(
+            outside
+                .path()
+                .join(".dasclaw")
+                .join("app-server-config.json"),
+        )
+        .expect("outside config");
+        assert!(outside_config.contains("outside-model"));
+        assert!(!outside_config.contains("inside-model"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_read_rejects_project_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let project = root.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(outside.path().join(".dasclaw"), project.join(".dasclaw"))
+            .expect("symlink project .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":19,"method":"config/read","params":{{"includeLayers":true,"cwd":{}}}}}"#,
+                serde_json::to_string(&project.to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(!value.to_string().contains("outside-model"));
+    }
+
+    #[test]
+    fn config_write_rejects_secret_keys_inside_object_value() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":20,"method":"config/value/write","params":{"keyPath":"model","value":{"api_key":"secret"},"mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_batch_write_rejects_secret_keys_inside_nested_object_value() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":21,"method":"config/batchWrite","params":{"edits":[{"keyPath":"profile","value":{"nested":{"token":"secret"}},"mergeStrategy":"upsert"}]}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_write_persists_complete_json_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":22,"method":"config/value/write","params":{"keyPath":"model","value":"gpt-test","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], "gpt-test");
+
+        let written =
+            fs::read_to_string(temp.path().join(".dasclaw").join("app-server-config.json"))
+                .expect("written config");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("complete json");
+        assert_eq!(parsed["model"], "gpt-test");
+    }
+
     #[test]
     fn app_server_ready_p5_streaming_command_capabilities_are_advertised() {
         let services = app_services::AppServerServices::for_tests(

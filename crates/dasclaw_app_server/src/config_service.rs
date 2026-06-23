@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dasclaw_app_server_protocol::{
     ConfigBatchWriteParams, ConfigEdit, ConfigLayer, ConfigLayerMetadata, ConfigLayerSource,
@@ -71,14 +73,7 @@ impl AppServerConfigService {
             None => self.default_file(),
         };
 
-        if !file.starts_with(&self.root) {
-            return Err(AppServerError::capability_unavailable(
-                CAPABILITY,
-                "config file path is outside service root",
-            ));
-        }
-
-        Ok(file)
+        self.resolve_config_file(file, "config file path")
     }
 
     fn resolve_cwd(&self, cwd: &str) -> Result<PathBuf, AppServerError> {
@@ -103,12 +98,23 @@ impl AppServerConfigService {
         Ok(resolved)
     }
 
+    fn resolve_config_file(&self, file: PathBuf, label: &str) -> Result<PathBuf, AppServerError> {
+        guard_path_under_root(&file, &self.root).map_err(|message| {
+            AppServerError::capability_unavailable(
+                CAPABILITY,
+                format!("{label} is outside service root: {message}"),
+            )
+        })
+    }
+
     fn read_target(&self, cwd: Option<&str>) -> Result<ConfigReadTarget, AppServerError> {
         match cwd {
             Some(cwd) => {
                 let cwd = self.resolve_cwd(cwd)?;
+                let file =
+                    self.resolve_config_file(cwd.join(CONFIG_DIR).join(CONFIG_FILE), "config cwd")?;
                 Ok(ConfigReadTarget {
-                    file: cwd.join(CONFIG_DIR).join(CONFIG_FILE),
+                    file,
                     source: ConfigLayerSource::Project {
                         dot_dasclaw_folder: display_path(&cwd.join(CONFIG_DIR)),
                     },
@@ -144,6 +150,10 @@ impl ConfigService for AppServerConfigService {
     }
 
     fn read(&self, params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let target = self.read_target(params.cwd.as_deref())?;
         let config = read_json(&target.file)?;
         let version = version_for(&config);
@@ -207,6 +217,7 @@ impl ConfigService for AppServerConfigService {
 
         for edit in params.edits {
             ensure_writable_key(&edit.key_path)?;
+            ensure_no_secret_keys_in_value(&edit.value)?;
             apply_edit(&mut config, edit)?;
         }
 
@@ -259,12 +270,45 @@ fn write_json(file: &Path, config: &Value) -> Result<(), AppServerError> {
     let bytes = serde_json::to_vec_pretty(config).map_err(|error| {
         AppServerError::service_degraded(CAPABILITY, format!("failed to encode config: {error}"))
     })?;
-    fs::write(file, bytes).map_err(|error| {
-        AppServerError::service_degraded(
+    let temp_file = temp_file_for(file)?;
+    let write_result = write_temp_json(&temp_file, &bytes)
+        .and_then(|()| fs::rename(&temp_file, file).map_err(|error| error.to_string()));
+    if let Err(message) = write_result {
+        let _ = fs::remove_file(&temp_file);
+        return Err(AppServerError::service_degraded(
             CAPABILITY,
-            format!("failed to write config file: {error}"),
-        )
-    })
+            format!("failed to write config file: {message}"),
+        ));
+    }
+    Ok(())
+}
+
+fn write_temp_json(temp_file: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp_file)
+        .map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    file.flush().map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
+}
+
+fn temp_file_for(file: &Path) -> Result<PathBuf, AppServerError> {
+    let parent = file.parent().ok_or_else(|| {
+        AppServerError::service_degraded(CAPABILITY, "config file path has no parent")
+    })?;
+    let file_name = file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            AppServerError::service_degraded(CAPABILITY, "config file path has no file name")
+        })?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    Ok(parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos)))
 }
 
 fn version_for(config: &Value) -> String {
@@ -303,6 +347,29 @@ fn ensure_writable_key(key_path: &str) -> Result<(), AppServerError> {
             format!("config keyPath is not writable: {key_path}"),
         ))
     }
+}
+
+fn ensure_no_secret_keys_in_value(value: &Value) -> Result<(), AppServerError> {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if is_secret_key(key) {
+                    return Err(AppServerError::invalid_request(
+                        CAPABILITY,
+                        format!("secret config value key is not writable: {key}"),
+                    ));
+                }
+                ensure_no_secret_keys_in_value(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                ensure_no_secret_keys_in_value(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn apply_edit(config: &mut Value, edit: ConfigEdit) -> Result<(), AppServerError> {
@@ -408,4 +475,34 @@ fn origins_for(
 
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn guard_path_under_root(path: &Path, root: &Path) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexical(root));
+    let normalized = normalize_lexical(path);
+    let mut ancestor = normalized.as_path();
+    let mut tail = Vec::new();
+
+    loop {
+        if ancestor.exists() {
+            let canonical_ancestor = ancestor.canonicalize().map_err(|error| error.to_string())?;
+            if !canonical_ancestor.starts_with(&root) {
+                return Err(format!("{}", normalized.display()));
+            }
+            let mut guarded = canonical_ancestor;
+            for part in tail.iter().rev() {
+                guarded.push(part);
+            }
+            return Ok(guarded);
+        }
+
+        if let Some(file_name) = ancestor.file_name() {
+            tail.push(file_name.to_os_string());
+        }
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| format!("{} has no existing parent", normalized.display()))?;
+    }
 }
