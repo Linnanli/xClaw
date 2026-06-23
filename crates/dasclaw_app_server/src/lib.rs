@@ -6575,6 +6575,83 @@ mod tests {
         assert!(methods.contains(&"fuzzyFileSearch/sessionCompleted"));
     }
 
+    #[test]
+    fn fuzzy_file_search_rejects_root_outside_service_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![outside.path().to_string_lossy().to_string()],
+        );
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+    }
+
+    #[test]
+    fn fuzzy_file_search_rejects_empty_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(&mut server, "cfg", vec![String::new()]);
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fuzzy_file_search_rejects_symlink_root_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("cfg.rs"), "").expect("write outside file");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![
+                root.path()
+                    .join("outside-link")
+                    .to_string_lossy()
+                    .to_string(),
+            ],
+        );
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fuzzy_file_search_does_not_follow_symlink_entries() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("cfg.rs"), "").expect("write outside file");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![root.path().to_string_lossy().to_string()],
+        );
+
+        assert_eq!(
+            value["result"]["files"]
+                .as_array()
+                .expect("files array")
+                .len(),
+            0
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn git_diff_to_remote_rejects_symlink_cwd_escape() {
@@ -6618,6 +6695,26 @@ mod tests {
         run_git_fixture(root, &["clone", "--bare", ".", remote_path.as_ref()]);
         run_git_fixture(root, &["remote", "add", "origin", remote_path.as_ref()]);
         run_git_fixture(root, &["push", "-u", "origin", &branch]);
+    }
+
+    fn fuzzy_file_search_json_rpc(
+        server: &mut AppServer,
+        query: &str,
+        roots: Vec<String>,
+    ) -> serde_json::Value {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": query,
+                "roots": roots
+            }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        serde_json::from_str(&response).expect("json")
     }
 
     fn run_git_fixture(root: &std::path::Path, args: &[&str]) {

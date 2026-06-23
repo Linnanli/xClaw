@@ -52,7 +52,7 @@ fn collect_matches(
     depth: usize,
     results: &mut Vec<FuzzyPathSearchResult>,
 ) -> io::Result<()> {
-    if depth > MAX_DEPTH || results.len() >= HARD_MAX_RESULTS {
+    if depth > MAX_DEPTH {
         return Ok(());
     }
 
@@ -62,10 +62,6 @@ fn collect_matches(
     entries.sort_by_key(|entry| entry.file_name());
 
     for entry in entries {
-        if results.len() >= HARD_MAX_RESULTS {
-            break;
-        }
-
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if should_skip_entry(&name) {
@@ -176,5 +172,40 @@ mod tests {
         assert_eq!(results[0].file_name, "config_service.rs");
         assert_eq!(results[0].match_type, FuzzyPathMatchType::File);
         assert!(results[0].indices.as_ref().expect("indices").len() >= 2);
+    }
+
+    #[test]
+    fn fuzzy_path_search_sorts_before_truncating_results() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("late")).expect("mkdir");
+
+        for index in 0..225 {
+            std::fs::write(
+                temp.path()
+                    .join(format!("a{index:03}_c_padding_f_padding_g.rs")),
+                "",
+            )
+            .expect("write low score file");
+        }
+        std::fs::write(temp.path().join("late/cfg.rs"), "").expect("write high score file");
+
+        let results = fuzzy_file_search(temp.path(), "cfg", 50).expect("search");
+        assert_eq!(results[0].file_name, "cfg.rs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fuzzy_path_search_does_not_follow_symlink_entries() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("cfg.rs"), "").expect("write outside file");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside");
+
+        let results = fuzzy_file_search(root.path(), "cfg", 50).expect("search");
+        assert!(
+            results.is_empty(),
+            "symlink entry should not be traversed: {results:?}"
+        );
     }
 }
