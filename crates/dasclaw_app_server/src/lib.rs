@@ -88,7 +88,8 @@ use dasclaw_app_server_protocol::{
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
-    CodexTurnStatus, ConversationSummary,
+    CodexTurnStatus, ConversationSummary, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+    ReviewTarget,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
 use dasclaw_core::messages::ReasoningSummary;
@@ -1006,6 +1007,49 @@ impl AppServer {
 
         Ok(GetConversationSummaryResponse {
             summary: self.conversation_summary_view(summary)?,
+        })
+    }
+
+    pub fn review_start(
+        &mut self,
+        params: ReviewStartParams,
+    ) -> Result<ReviewStartResponse, AppServerError> {
+        self.require_initialized("review")?;
+        self.thread_summary_or_error_with_capability(&params.thread_id, "review")?;
+
+        let prompt = review_start_prompt(&params.target)?;
+        let review_thread_id = match params.delivery.unwrap_or(ReviewDelivery::Inline) {
+            ReviewDelivery::Inline => params.thread_id,
+            ReviewDelivery::Detached => {
+                self.thread_fork(ThreadForkParams {
+                    thread_id: params.thread_id,
+                    ephemeral: true,
+                    exclude_turns: false,
+                    persist_extended_history: false,
+                    cwd: None,
+                })?
+                .thread
+                .id
+            }
+        };
+        let turn = self
+            .turn_start(TurnStartParams {
+                thread_id: review_thread_id.clone(),
+                input: vec![dasclaw_app_server_protocol::UserInput::Text {
+                    text: prompt,
+                    text_elements: Vec::new(),
+                }],
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })?
+            .turn;
+
+        Ok(ReviewStartResponse {
+            turn,
+            review_thread_id,
         })
     }
 
@@ -2006,6 +2050,11 @@ impl AppServer {
                 request.params,
                 |params: GetConversationSummaryParams| self.get_conversation_summary(params),
             ),
+            method::REVIEW_START => {
+                route_with_params(request.id, request.params, |params: ReviewStartParams| {
+                    self.review_start(params)
+                })
+            }
             method::THREAD_START => {
                 route_with_params(request.id, request.params, |params: ThreadStartParams| {
                     self.thread_start(params)
@@ -2803,7 +2852,9 @@ impl AppServer {
         capabilities.jobs = service_baseline.jobs;
         capabilities.skills = service_baseline.skills;
         capabilities.mcp = service_baseline.mcp;
-        capabilities.with_app_services(self.app_services.availability())
+        let mut availability = self.app_services.availability();
+        availability.r6.review = true;
+        capabilities.with_app_services(availability)
     }
 
     fn tools_health(&self) -> ServiceHealth {
@@ -5818,6 +5869,41 @@ fn compatibility_profiles() -> Vec<CompatibilityProfile> {
     vec![CompatibilityProfile::codex_app_server_v2_chat_session_subset()]
 }
 
+fn review_start_prompt(target: &ReviewTarget) -> Result<String, AppServerError> {
+    let label = match target {
+        ReviewTarget::UncommittedChanges => "uncommitted changes".to_string(),
+        ReviewTarget::BaseBranch { branch } => {
+            format!("changes against base branch {}", branch.trim())
+        }
+        ReviewTarget::Commit { sha, title } => {
+            let mut label = format!("commit {}", sha.trim());
+            if let Some(title) = title
+                .as_ref()
+                .map(|title| title.trim())
+                .filter(|title| !title.is_empty())
+            {
+                label.push_str(": ");
+                label.push_str(title);
+            }
+            label
+        }
+        ReviewTarget::Custom { instructions } => {
+            let trimmed = instructions.trim();
+            if trimmed.is_empty() {
+                return Err(AppServerError::invalid_request(
+                    "review",
+                    "custom review instructions must not be empty",
+                ));
+            }
+            trimmed.to_string()
+        }
+    };
+
+    Ok(format!(
+        "Review request: {label}\n\nFocus on correctness, regressions, safety, and missing tests. Return findings first with file and line references."
+    ))
+}
+
 pub fn supported_methods() -> &'static [&'static str] {
     &[
         method::INITIALIZE,
@@ -5833,6 +5919,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::LIFECYCLE_STATUS,
         method::SHUTDOWN,
         method::GET_CONVERSATION_SUMMARY,
+        method::REVIEW_START,
         method::THREAD_START,
         method::THREAD_LIST,
         method::THREAD_READ,
@@ -10452,6 +10539,102 @@ mod tests {
     }
 
     #[test]
+    fn review_start_inline_runs_review_turn_on_existing_thread() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::UncommittedChanges,
+                delivery: None,
+            })
+            .expect("inline review should start");
+
+        assert_eq!(response.review_thread_id, thread.thread_id);
+        assert_eq!(response.turn.status, CodexTurnStatus::InProgress);
+        assert_eq!(response.turn.id, "turn_1");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, response.review_thread_id);
+        assert_eq!(calls[0].turn_id, response.turn.id);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: uncommitted changes")
+        );
+        assert!(calls[0].prompt.contains("Focus on correctness"));
+        assert!(calls[0].prompt.contains("Return findings first"));
+    }
+
+    #[test]
+    fn review_start_detached_forks_review_thread() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Detached),
+            })
+            .expect("detached review should start");
+
+        assert_ne!(response.review_thread_id, thread.thread_id);
+        assert_eq!(response.turn.status, CodexTurnStatus::InProgress);
+        let review_thread = server
+            .thread_read(ThreadReadParams {
+                thread_id: response.review_thread_id.clone(),
+            })
+            .expect("review thread should be readable")
+            .thread;
+        assert_eq!(review_thread.forked_from_id, Some(thread.thread_id));
+        assert!(review_thread.ephemeral);
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, response.review_thread_id);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: changes against base branch main")
+        );
+        assert!(calls[0].prompt.contains("file and line references"));
+    }
+
+    #[test]
+    fn review_start_rejects_empty_custom_instructions() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let error = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id,
+                target: ReviewTarget::Custom {
+                    instructions: " \n\t ".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect_err("empty custom instructions should fail");
+
+        let AppServerError::Protocol { data } = error;
+        assert_eq!(data.capability, Some("review".to_string()));
+        assert!(bridge.calls.lock().expect("calls lock").is_empty());
+    }
+
+    #[test]
     fn thread_compact_start_is_capability_unavailable_without_runtime_owner() {
         let mut server = initialized_server();
         server
@@ -14878,6 +15061,8 @@ mod tests {
             CodexThreadItem::AgentMessage { text, .. } if !text.is_empty() => Some(text.clone()),
             CodexThreadItem::AgentMessage { .. } => None,
             CodexThreadItem::Reasoning { .. } => None,
+            CodexThreadItem::EnteredReviewMode { .. } => None,
+            CodexThreadItem::ExitedReviewMode { .. } => None,
         })
     }
 

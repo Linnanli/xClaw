@@ -1002,11 +1002,27 @@ fn injected_codex_item(
             summary: string_array_field(&fields, "summary")?,
             content: string_array_field(&fields, "content")?,
         }),
+        "enteredReviewMode" => Ok(CodexThreadItem::EnteredReviewMode {
+            id,
+            review: string_field(&fields, "review"),
+        }),
+        "exitedReviewMode" => Ok(CodexThreadItem::ExitedReviewMode {
+            id,
+            review: string_field(&fields, "review"),
+        }),
         _ => Err(AppServerError::invalid_request(
             "thread_lifecycle",
             format!("unsupported injected item type: {item_type}"),
         )),
     }
+}
+
+fn string_field(fields: &serde_json::Map<String, Value>, name: &str) -> String {
+    fields
+        .get(name)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn string_array_field(

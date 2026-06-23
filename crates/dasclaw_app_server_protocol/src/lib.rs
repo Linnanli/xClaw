@@ -2940,6 +2940,10 @@ pub enum CodexThreadItem {
         #[serde(default)]
         content: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl CodexThreadItem {
@@ -4704,6 +4708,46 @@ mod tests {
                 },
                 "reviewThreadId": "review-thread-1"
             })
+        );
+    }
+
+    #[test]
+    fn codex_thread_item_review_mode_items_roundtrip() {
+        let entered = CodexThreadItem::EnteredReviewMode {
+            id: "item-enter".to_string(),
+            review: "review local changes".to_string(),
+        };
+        let exited = CodexThreadItem::ExitedReviewMode {
+            id: "item-exit".to_string(),
+            review: "review complete".to_string(),
+        };
+
+        let entered_json = serde_json::to_value(&entered).expect("entered item serializes");
+        let exited_json = serde_json::to_value(&exited).expect("exited item serializes");
+
+        assert_eq!(
+            entered_json,
+            serde_json::json!({
+                "type": "enteredReviewMode",
+                "id": "item-enter",
+                "review": "review local changes"
+            })
+        );
+        assert_eq!(
+            exited_json,
+            serde_json::json!({
+                "type": "exitedReviewMode",
+                "id": "item-exit",
+                "review": "review complete"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<CodexThreadItem>(entered_json).expect("entered roundtrip"),
+            entered
+        );
+        assert_eq!(
+            serde_json::from_value::<CodexThreadItem>(exited_json).expect("exited roundtrip"),
+            exited
         );
     }
 
