@@ -3475,6 +3475,7 @@ impl DasclawAgentRuntimeBridge {
             features: RuntimeBridgeFeatures {
                 approval: true,
                 tools: true,
+                dynamic_tool_call: true,
                 sandbox: false,
                 ..RuntimeBridgeFeatures::default()
             },
@@ -4026,6 +4027,24 @@ fn is_client_dynamic_tool(name: &str) -> bool {
     name.strip_prefix("client.").is_some() || name == "open_url"
 }
 
+fn client_open_url_tool_definition() -> dasclaw_core::messages::ToolDefinition {
+    dasclaw_core::messages::ToolDefinition {
+        name: "open_url".to_string(),
+        description: "Open an http or https URL in the desktop client.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The http or https URL to open."
+                }
+            },
+            "required": ["url"],
+            "additionalProperties": false
+        }),
+    }
+}
+
 fn command_from_arguments(arguments: &Value) -> Option<String> {
     string_field(arguments, "cmd").or_else(|| string_field(arguments, "command"))
 }
@@ -4033,7 +4052,7 @@ fn command_from_arguments(arguments: &Value) -> Option<String> {
 fn agent_from_model_provider_snapshot(
     ctx: RuntimeAgentFactoryContext,
 ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
-    let snapshot = ctx.model_provider;
+    let snapshot = ctx.model_provider.clone();
     let config = registry_config_from_snapshot(&snapshot)?;
     let provider = ClawCodeLlmProvider::from_registry_config(&config).map_err(|error| {
         RuntimeBridgeError::fatal(redact_snapshot_secret(&error.to_string(), &snapshot))
@@ -4041,9 +4060,17 @@ fn agent_from_model_provider_snapshot(
     let responder =
         LlmProviderResponder::new(Arc::new(provider)).with_reasoning_summary(ctx.reasoning_summary);
 
+    agent_with_client_dynamic_tools(Arc::new(responder), ctx)
+}
+
+fn agent_with_client_dynamic_tools(
+    responder: Arc<dyn dasclaw_runtime::AgentResponder>,
+    ctx: RuntimeAgentFactoryContext,
+) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
     dasclaw_runtime::Agent::builder()
-        .responder(responder)
+        .responder_arc(responder)
         .tool_executor_arc(ctx.dynamic_tool_executor)
+        .tools(vec![client_open_url_tool_definition()])
         .cancellation_token(ctx.token)
         .build()
         .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
@@ -10034,6 +10061,45 @@ mod tests {
     }
 
     #[test]
+    fn default_agent_runtime_bridge_advertises_client_open_url_tool() {
+        let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
+        let features = bridge.features();
+        assert!(features.dynamic_tool_call);
+        assert!(
+            features
+                .runtime_tool_approval_availability()
+                .dynamic_tool_call
+        );
+
+        let updates = RuntimeTurnUpdateSink::new();
+        let agent = agent_with_client_dynamic_tools(
+            Arc::new(ToolListingResponder),
+            RuntimeAgentFactoryContext {
+                token: CancellationToken::new(),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                dynamic_tool_executor: Arc::new(RuntimeClientDynamicToolExecutor {
+                    pending_dynamic_tools: Arc::new(Mutex::new(HashMap::new())),
+                    updates,
+                    thread_id: "thread_1".to_string(),
+                    turn_id: "turn_1".to_string(),
+                    token: CancellationToken::new(),
+                }),
+            },
+        )
+        .expect("agent with client dynamic tools should build");
+
+        let output = run_async_test(async {
+            agent
+                .invoke("list tools", dasclaw_runtime::AgentRunOptions::invoke())
+                .await
+                .expect("tool listing responder should complete")
+        });
+
+        assert_eq!(output.text, "open_url");
+    }
+
+    #[test]
     fn agent_runtime_bridge_maps_non_command_approval_to_permissions_request() {
         let executor = Arc::new(CountingExecutor::new());
         let factory_executor = Arc::clone(&executor);
@@ -11831,6 +11897,21 @@ mod tests {
                 let _ = event_tx.send(event.clone()).await;
             }
             Ok(text_output(&self.output))
+        }
+    }
+
+    struct ToolListingResponder;
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for ToolListingResponder {
+        async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            let tools = ctx
+                .available_tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(text_output(&tools))
         }
     }
 
