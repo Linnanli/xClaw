@@ -19,6 +19,7 @@ base64 = "0.22"
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
 dasclaw_fs_tools = { path = "../dasclaw_fs_tools" }
+dasclaw_git_tools = { path = "../dasclaw_git_tools" }
 dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 dasclaw_mcp = { path = "../dasclaw_mcp" }
 dasclaw_observability = { path = "../dasclaw_observability" }

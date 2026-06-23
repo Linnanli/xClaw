@@ -13,6 +13,7 @@ pub mod fs_service;
 pub mod job_service;
 pub mod log_service;
 pub mod mcp_service;
+pub mod repo_service;
 pub mod skills_service;
 
 mod blocking_runtime;
@@ -47,12 +48,12 @@ use dasclaw_app_server_protocol::{
     FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
     FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
     FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
-    FsWriteFileParams, FsWriteFileResponse, GuardianApprovalReview, HealthCheckParams,
-    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
-    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
-    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
-    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
-    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    FsWriteFileParams, FsWriteFileResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
+    GuardianApprovalReview, HealthCheckParams, HealthCheckResponse, InitializeParams,
+    InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse,
+    JobReadParams, JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming,
+    JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
+    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
     McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
@@ -907,6 +908,14 @@ impl AppServer {
     ) -> Result<ConfigWriteResponse, AppServerError> {
         self.require_initialized("config")?;
         self.app_services.config.write_batch(params)
+    }
+
+    pub fn git_diff_to_remote(
+        &self,
+        params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError> {
+        self.require_initialized("repo")?;
+        self.app_services.repo.git_diff_to_remote(params)
     }
 
     fn create_thread_record(
@@ -1932,6 +1941,11 @@ impl AppServer {
                 request.id,
                 request.params,
                 |params: ConfigBatchWriteParams| self.config_batch_write(params),
+            ),
+            method::GIT_DIFF_TO_REMOTE => route_with_params(
+                request.id,
+                request.params,
+                |params: GitDiffToRemoteParams| self.git_diff_to_remote(params),
             ),
             method::HEALTH_CHECK => {
                 route_with_optional_params(request.id, request.params, |params| {
@@ -5714,6 +5728,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::CONFIG_READ,
         method::CONFIG_VALUE_WRITE,
         method::CONFIG_BATCH_WRITE,
+        method::GIT_DIFF_TO_REMOTE,
         method::HEALTH_CHECK,
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
@@ -6454,6 +6469,51 @@ mod tests {
                 .expect("written config");
         let parsed: serde_json::Value = serde_json::from_str(&written).expect("complete json");
         assert_eq!(parsed["model"], "gpt-test");
+    }
+
+    #[test]
+    fn git_diff_to_remote_returns_merge_base_sha_and_patch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        init_git_fixture(temp.path());
+        std::fs::write(temp.path().join("src.txt"), "changed\n").expect("write");
+
+        let mut server = initialized_server_with_root(temp.path());
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "gitDiffToRemote",
+            "params": { "cwd": temp.path().to_string_lossy() }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert!(value["result"]["sha"].as_str().expect("sha").len() >= 7);
+        assert!(
+            value["result"]["diff"]
+                .as_str()
+                .expect("diff")
+                .contains("changed")
+        );
+    }
+
+    fn init_git_fixture(root: &std::path::Path) {
+        std::fs::write(root.join("src.txt"), "base\n").expect("write base");
+        run_git_fixture(root, ["init"]);
+        run_git_fixture(root, ["config", "user.email", "test@example.com"]);
+        run_git_fixture(root, ["config", "user.name", "Test User"]);
+        run_git_fixture(root, ["add", "."]);
+        run_git_fixture(root, ["commit", "-m", "base"]);
+    }
+
+    fn run_git_fixture<const N: usize>(root: &std::path::Path, args: [&str; N]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .expect("git fixture command");
+        assert!(status.success());
     }
 
     #[test]

@@ -11,14 +11,14 @@ use dasclaw_app_server_protocol::{
     FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
     FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
     FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
-    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams,
-    JobListResponse, JobReadParams, JobReadResponse, ListMcpServerStatusParams,
-    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
-    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
-    McpServerReloadResponse, McpServerToolCallParams, McpServerToolCallResponse,
-    McpServiceAvailability, McpToolCallProgressNotification, ServiceHealth, ServiceName,
-    ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-    SkillsListResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, GitDiffToRemoteParams,
+    GitDiffToRemoteResponse, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams,
+    McpResourceReadResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
+    McpServerReloadParams, McpServerReloadResponse, McpServerToolCallParams,
+    McpServerToolCallResponse, McpServiceAvailability, McpToolCallProgressNotification,
+    ServiceHealth, ServiceName, ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+    SkillsListParams, SkillsListResponse,
 };
 use dasclaw_runtime::context::ContextManager;
 
@@ -29,6 +29,7 @@ use crate::fs_service::AppServerFsService;
 use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
 use crate::mcp_service::AppServerMcpService;
+use crate::repo_service::AppServerRepoService;
 use crate::skills_service::AppServerSkillsService;
 
 pub trait LogService: Send + Sync {
@@ -178,6 +179,18 @@ pub trait ConfigService: Send + Sync {
     }
 }
 
+pub trait RepoService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn git_diff_to_remote(
+        &self,
+        params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError>;
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
@@ -187,6 +200,7 @@ pub struct AppServerServices {
     pub filesystem: Arc<dyn FsService>,
     pub command: Arc<dyn CommandExecService>,
     pub config: Arc<dyn ConfigService>,
+    pub repo: Arc<dyn RepoService>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -207,6 +221,7 @@ impl Default for AppServerServices {
             filesystem: Arc::new(NoopFsService),
             command: Arc::new(NoopCommandExecService),
             config: Arc::new(NoopConfigService),
+            repo: Arc::new(NoopRepoService),
         }
     }
 }
@@ -223,7 +238,8 @@ impl AppServerServices {
             mcp: Arc::new(AppServerMcpService::default()),
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
             command: Arc::new(AppServerCommandExecService::new(root.clone())),
-            config: Arc::new(AppServerConfigService::new(root)),
+            config: Arc::new(AppServerConfigService::new(root.clone())),
+            repo: Arc::new(AppServerRepoService::new(root)),
         }
     }
 
@@ -236,6 +252,7 @@ impl AppServerServices {
             self.filesystem.health(),
             self.command.health(),
             self.config.health(),
+            self.repo.health(),
         ]
     }
 
@@ -279,6 +296,7 @@ impl AppServerServices {
             },
             r6: AppServerR6Availability {
                 config: self.config.is_ready(),
+                repo: self.repo.is_ready(),
                 ..AppServerR6Availability::default()
             },
         }
@@ -295,7 +313,8 @@ impl AppServerServices {
             mcp: Arc::new(AppServerMcpService::default()),
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
             command: Arc::new(AppServerCommandExecService::new(root.clone())),
-            config: Arc::new(AppServerConfigService::new(root)),
+            config: Arc::new(AppServerConfigService::new(root.clone())),
+            repo: Arc::new(AppServerRepoService::new(root)),
         }
     }
 
@@ -316,6 +335,7 @@ impl AppServerServices {
             filesystem: Arc::new(filesystem),
             command: Arc::new(command),
             config: Arc::new(NoopConfigService),
+            repo: Arc::new(NoopRepoService),
         }
     }
 }
@@ -327,6 +347,7 @@ struct NoopMcpService;
 struct NoopFsService;
 struct NoopCommandExecService;
 struct NoopConfigService;
+struct NoopRepoService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -568,6 +589,22 @@ fn config_not_wired<T>() -> Result<T, AppServerError> {
         "config",
         "config service is not wired",
     ))
+}
+
+impl RepoService for NoopRepoService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Repo, "repo service is not wired")
+    }
+
+    fn git_diff_to_remote(
+        &self,
+        _params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "repo",
+            "repo service is not wired",
+        ))
+    }
 }
 
 #[cfg(test)]
