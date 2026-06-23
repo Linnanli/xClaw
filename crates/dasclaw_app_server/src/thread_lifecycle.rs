@@ -1004,11 +1004,11 @@ fn injected_codex_item(
         }),
         "enteredReviewMode" => Ok(CodexThreadItem::EnteredReviewMode {
             id,
-            review: string_field(&fields, "review"),
+            review: required_string_field(&fields, "review")?,
         }),
         "exitedReviewMode" => Ok(CodexThreadItem::ExitedReviewMode {
             id,
-            review: string_field(&fields, "review"),
+            review: required_string_field(&fields, "review")?,
         }),
         _ => Err(AppServerError::invalid_request(
             "thread_lifecycle",
@@ -1017,12 +1017,19 @@ fn injected_codex_item(
     }
 }
 
-fn string_field(fields: &serde_json::Map<String, Value>, name: &str) -> String {
-    fields
-        .get(name)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+fn required_string_field(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<String, AppServerError> {
+    let Some(value) = fields.get(name) else {
+        return Err(AppServerError::invalid_request(
+            "thread_lifecycle",
+            format!("{name} must be a string"),
+        ));
+    };
+    value.as_str().map(ToString::to_string).ok_or_else(|| {
+        AppServerError::invalid_request("thread_lifecycle", format!("{name} must be a string"))
+    })
 }
 
 fn string_array_field(

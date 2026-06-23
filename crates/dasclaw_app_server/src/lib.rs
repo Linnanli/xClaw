@@ -1027,7 +1027,8 @@ impl AppServer {
                     exclude_turns: false,
                     persist_extended_history: false,
                     cwd: None,
-                })?
+                })
+                .map_err(|error| error.with_capability("review"))?
                 .thread
                 .id
             }
@@ -5787,6 +5788,15 @@ impl AppServerError {
         }
     }
 
+    fn with_capability(self, capability: impl Into<String>) -> Self {
+        match self {
+            Self::Protocol { mut data } => {
+                data.capability = Some(capability.into());
+                Self::Protocol { data }
+            }
+        }
+    }
+
     fn version_mismatch(lifecycle: LifecycleSnapshot) -> Self {
         Self::protocol(ErrorData {
             code: ErrorCode::VersionMismatch,
@@ -10412,6 +10422,70 @@ mod tests {
     }
 
     #[test]
+    fn thread_lifecycle_inject_review_mode_items_requires_string_review() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+
+        let valid = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"valid","method":"thread/inject_items","params":{"threadId":"thread_1","items":[{"type":"enteredReviewMode","review":"review started"},{"type":"exitedReviewMode","review":"review exited"}]}}"#,
+            )
+            .expect("valid review items should return a response");
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"read","method":"thread/read","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/read should return a response");
+
+        let valid_value: Value = serde_json::from_str(&valid).expect("valid response JSON");
+        let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
+        assert_eq!(valid_value["result"], serde_json::json!({}));
+        let items = read_value["result"]["thread"]["turns"][0]["items"]
+            .as_array()
+            .expect("items array");
+        assert_eq!(items[0]["type"], "enteredReviewMode");
+        assert_eq!(items[0]["review"], "review started");
+        assert_eq!(items[1]["type"], "exitedReviewMode");
+        assert_eq!(items[1]["review"], "review exited");
+
+        for (id, item) in [
+            ("missing", serde_json::json!({"type": "enteredReviewMode"})),
+            (
+                "wrong",
+                serde_json::json!({"type": "exitedReviewMode", "review": 42}),
+            ),
+        ] {
+            let response = server
+                .handle_json_rpc(
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "thread/inject_items",
+                        "params": {
+                            "threadId": "thread_1",
+                            "items": [item]
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("malformed review item should return a response");
+            let value: Value = serde_json::from_str(&response).expect("error response JSON");
+            assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+            assert_eq!(value["error"]["data"]["capability"], "thread_lifecycle");
+            assert!(
+                value["error"]["message"]
+                    .as_str()
+                    .expect("error message")
+                    .contains("review must be a string")
+            );
+        }
+    }
+
+    #[test]
     fn thread_goal_set_get_and_clear_persist_and_emit_notifications() {
         let mut server = initialized_server();
         server
@@ -10569,6 +10643,8 @@ mod tests {
         );
         assert!(calls[0].prompt.contains("Focus on correctness"));
         assert!(calls[0].prompt.contains("Return findings first"));
+        drop(calls);
+        interrupt_turn(&mut server, response.review_thread_id, response.turn.id);
     }
 
     #[test]
@@ -10609,6 +10685,8 @@ mod tests {
                 .contains("Review request: changes against base branch main")
         );
         assert!(calls[0].prompt.contains("file and line references"));
+        drop(calls);
+        interrupt_turn(&mut server, response.review_thread_id, response.turn.id);
     }
 
     #[test]
@@ -10632,6 +10710,134 @@ mod tests {
         let AppServerError::Protocol { data } = error;
         assert_eq!(data.capability, Some("review".to_string()));
         assert!(bridge.calls.lock().expect("calls lock").is_empty());
+    }
+
+    #[test]
+    fn review_start_json_rpc_returns_in_progress_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "review",
+                    "method": "review/start",
+                    "params": {
+                        "threadId": thread.thread_id,
+                        "target": {"type": "uncommittedChanges"},
+                        "delivery": "inline"
+                    }
+                })
+                .to_string(),
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review response JSON");
+        assert_eq!(value["result"]["reviewThreadId"], "thread_1");
+        assert_eq!(value["result"]["turn"]["status"], "inProgress");
+        assert_eq!(value["result"]["turn"]["id"], "turn_1");
+        interrupt_turn(&mut server, "thread_1", "turn_1");
+    }
+
+    #[test]
+    fn review_start_json_rpc_reports_review_capability_before_initialize() {
+        let mut server = AppServer::new();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"review","method":"review/start","params":{"threadId":"thread_1","target":{"type":"uncommittedChanges"}}}"#,
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review error JSON");
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "review");
+    }
+
+    #[test]
+    fn review_start_json_rpc_reports_review_capability_for_unknown_thread() {
+        let mut server =
+            initialized_server_with_bridge(Arc::new(RecordingRuntimeBridge::default()));
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"review","method":"review/start","params":{"threadId":"missing","target":{"type":"uncommittedChanges"}}}"#,
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review error JSON");
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "review");
+    }
+
+    #[test]
+    fn review_start_commit_target_prompt_includes_sha_and_title() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::Commit {
+                    sha: "abc123".to_string(),
+                    title: Some("fix owner routing".to_string()),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect("commit review should start");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: commit abc123: fix owner routing")
+        );
+        drop(calls);
+        interrupt_turn(&mut server, thread.thread_id, "turn_1");
+    }
+
+    #[test]
+    fn review_start_detached_pending_turn_error_uses_review_capability() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let pending = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("leave pending".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let error = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::UncommittedChanges,
+                delivery: Some(ReviewDelivery::Detached),
+            })
+            .expect_err("detached review should reject pending source thread");
+
+        let AppServerError::Protocol { data } = error;
+        assert_eq!(data.code, ErrorCode::InvalidParams);
+        assert_eq!(data.capability, Some("review".to_string()));
+        assert!(data.message.contains("pending turns"));
+        assert!(!data.retryable);
+        assert!(data.lifecycle.is_none());
+        interrupt_turn(&mut server, thread.thread_id, pending.turn.id);
     }
 
     #[test]
@@ -15023,6 +15229,19 @@ mod tests {
             text: text.into(),
             text_elements: Vec::new(),
         }]
+    }
+
+    fn interrupt_turn(
+        server: &mut AppServer,
+        thread_id: impl Into<String>,
+        turn_id: impl Into<String>,
+    ) {
+        server
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: thread_id.into(),
+                turn_id: turn_id.into(),
+            })
+            .expect("turn should interrupt");
     }
 
     fn assert_turn_status_and_ready(
