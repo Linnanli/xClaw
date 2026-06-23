@@ -5,6 +5,7 @@
 //! simple sidecar before we commit to a longer-lived socket transport.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -92,12 +93,12 @@ fn usage() -> &'static str {
 }
 
 fn build_stdio_app_server() -> Result<AppServer, String> {
-    app_server_for_env_runtime_mode()
-}
-
-fn app_server_for_env_runtime_mode() -> Result<AppServer, String> {
     let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
-    app_server_for_runtime_mode(mode.as_deref())
+    let server = app_server_for_runtime_mode(mode.as_deref())?;
+    if mode.as_deref() == Some("noop") {
+        return Ok(server);
+    }
+    with_persistent_thread_snapshot(server)
 }
 
 fn app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> {
@@ -110,6 +111,25 @@ fn app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> 
             "unknown DASCLAW_APP_SERVER_RUNTIME: {other}; expected echo or noop"
         )),
     }
+}
+
+fn with_persistent_thread_snapshot(server: AppServer) -> Result<AppServer, String> {
+    let path = thread_snapshot_path()
+        .ok_or_else(|| "HOME is required for app-server thread snapshot persistence".to_string())?;
+    server
+        .with_thread_snapshot_path(path)
+        .map_err(|error| error.to_string())
+}
+
+fn thread_snapshot_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("DASCLAW_APP_SERVER_THREAD_SNAPSHOT") {
+        return Some(PathBuf::from(path));
+    }
+    std::env::var_os("HOME").map(PathBuf::from).map(|home| {
+        home.join(".dasclaw")
+            .join("app-server")
+            .join("threads.json")
+    })
 }
 
 fn default_app_server() -> AppServer {
