@@ -100,6 +100,9 @@ pub const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supporte
 pub struct AgentRunOutput {
     /// User-visible assistant text.
     pub text: String,
+    /// Token usage for the LLM response that produced this final text.
+    #[serde(default)]
+    pub usage: TokenUsage,
 }
 
 /// Provider call mode for the next model request.
@@ -406,6 +409,7 @@ pub trait ToolDispatcher: Send + Sync {
 /// are the responsibility of the [`ToolDispatcher`] implementation.
 /// Dispatchers typically clone the same `Arc<HookBundle>` at
 /// construction time.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agentic_loop(
     responder: &dyn AgentResponder,
     dispatcher: Option<&dyn ToolDispatcher>,

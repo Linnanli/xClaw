@@ -55,8 +55,9 @@ pub(crate) use dasclaw_core::agentic_loop::TOOLS_NOT_SUPPORTED_REASON;
 pub use dasclaw_core::agentic_loop::{AgentEvent, AgentResponder, AgentRunOutput, ModelCallMode};
 use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_core::hooks::HookBundle;
-use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
+use dasclaw_core::messages::{ChatMessage, Role, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
+use dasclaw_core::response_types::TokenUsage;
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -586,7 +587,7 @@ impl Agent {
         // branch. That keeps the next call in a multi-turn
         // `Session::invoke` aware of what the model just said without
         // requiring the caller to plumb usage out of `LoopOutcome`.
-        map_outcome(outcome, loop_config.max_iterations)
+        map_outcome(outcome, loop_config.max_iterations, ctx)
     }
 
     /// Run a single user prompt through the loop and return the final
@@ -811,9 +812,16 @@ impl AgentBuilder {
     }
 }
 
-fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<AgentRunOutput, AgentError> {
+fn map_outcome(
+    outcome: LoopOutcome,
+    max_iterations: usize,
+    ctx: &ReasoningContext,
+) -> Result<AgentRunOutput, AgentError> {
     match outcome {
-        LoopOutcome::Response(text) => Ok(AgentRunOutput { text }),
+        LoopOutcome::Response(text) => Ok(AgentRunOutput {
+            text,
+            usage: final_assistant_usage(ctx),
+        }),
         LoopOutcome::MaxIterations => Err(AgentError::MaxIterations(max_iterations)),
         LoopOutcome::Failure(reason) if reason == TOOLS_NOT_SUPPORTED_REASON => {
             Err(AgentError::ToolsNotSupported)
@@ -841,6 +849,15 @@ fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<AgentRunOu
         #[allow(deprecated)]
         LoopOutcome::NeedApproval(_) => Err(AgentError::ApprovalRequested),
     }
+}
+
+fn final_assistant_usage(ctx: &ReasoningContext) -> TokenUsage {
+    ctx.messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::Assistant)
+        .and_then(|message| message.usage)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1393,6 +1410,7 @@ mod tests {
             AgentEvent::FinishReason(FinishReason::Stop),
             AgentEvent::Completed(AgentRunOutput {
                 text: "done".into(),
+                usage: TokenUsage::default(),
             }),
         ];
         let json: Vec<String> = chunks

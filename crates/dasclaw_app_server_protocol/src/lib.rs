@@ -21,6 +21,20 @@ pub mod method {
     pub const LIFECYCLE_STATUS: &str = "lifecycle/status";
     pub const SHUTDOWN: &str = "shutdown";
     pub const THREAD_START: &str = "thread/start";
+    pub const THREAD_RESUME: &str = "thread/resume";
+    pub const THREAD_FORK: &str = "thread/fork";
+    pub const THREAD_ARCHIVE: &str = "thread/archive";
+    pub const THREAD_UNARCHIVE: &str = "thread/unarchive";
+    pub const THREAD_UNSUBSCRIBE: &str = "thread/unsubscribe";
+    pub const THREAD_NAME_SET: &str = "thread/name/set";
+    pub const THREAD_METADATA_UPDATE: &str = "thread/metadata/update";
+    pub const THREAD_ROLLBACK: &str = "thread/rollback";
+    pub const THREAD_LOADED_LIST: &str = "thread/loaded/list";
+    pub const THREAD_INJECT_ITEMS: &str = "thread/inject_items";
+    pub const THREAD_GOAL_SET: &str = "thread/goal/set";
+    pub const THREAD_GOAL_GET: &str = "thread/goal/get";
+    pub const THREAD_GOAL_CLEAR: &str = "thread/goal/clear";
+    pub const THREAD_COMPACT_START: &str = "thread/compact/start";
     pub const THREAD_LIST: &str = "thread/list";
     pub const THREAD_READ: &str = "thread/read";
     pub const THREAD_TURNS_LIST: &str = "thread/turns/list";
@@ -71,6 +85,14 @@ pub mod event {
     pub const CAPABILITIES_CHANGED: &str = "capabilities/changed";
     pub const LOG_ENTRY: &str = "log/entry";
     pub const THREAD_STARTED: &str = "thread/started";
+    pub const THREAD_STATUS_CHANGED: &str = "thread/status/changed";
+    pub const THREAD_ARCHIVED: &str = "thread/archived";
+    pub const THREAD_UNARCHIVED: &str = "thread/unarchived";
+    pub const THREAD_NAME_UPDATED: &str = "thread/name/updated";
+    pub const THREAD_GOAL_UPDATED: &str = "thread/goal/updated";
+    pub const THREAD_GOAL_CLEARED: &str = "thread/goal/cleared";
+    pub const THREAD_TOKEN_USAGE_UPDATED: &str = "thread/tokenUsage/updated";
+    pub const THREAD_COMPACTED: &str = "thread/compacted";
     pub const TURN_STARTED: &str = "turn/started";
     pub const TURN_COMPLETED: &str = "turn/completed";
     pub const ITEM_STARTED: &str = "item/started";
@@ -641,6 +663,9 @@ pub struct CapabilityMatrix {
     pub logs: Capability,
     pub filesystem: Capability,
     pub command_exec: Capability,
+    pub thread_lifecycle: Capability,
+    pub thread_goal: Capability,
+    pub thread_compact: Capability,
 }
 
 impl CapabilityMatrix {
@@ -704,6 +729,38 @@ impl CapabilityMatrix {
             sandbox: declared_future_capability("sandbox"),
             filesystem: declared_future_capability("filesystem"),
             command_exec: declared_future_capability("command_exec"),
+            thread_lifecycle: Capability::implemented(
+                "thread_lifecycle",
+                &[
+                    method::THREAD_RESUME,
+                    method::THREAD_FORK,
+                    method::THREAD_ARCHIVE,
+                    method::THREAD_UNARCHIVE,
+                    method::THREAD_UNSUBSCRIBE,
+                    method::THREAD_NAME_SET,
+                    method::THREAD_METADATA_UPDATE,
+                    method::THREAD_ROLLBACK,
+                    method::THREAD_LOADED_LIST,
+                    method::THREAD_INJECT_ITEMS,
+                ],
+                &[
+                    event::THREAD_STATUS_CHANGED,
+                    event::THREAD_ARCHIVED,
+                    event::THREAD_UNARCHIVED,
+                    event::THREAD_NAME_UPDATED,
+                    event::THREAD_TOKEN_USAGE_UPDATED,
+                ],
+            ),
+            thread_goal: Capability::implemented(
+                "thread_goal",
+                &[
+                    method::THREAD_GOAL_SET,
+                    method::THREAD_GOAL_GET,
+                    method::THREAD_GOAL_CLEAR,
+                ],
+                &[event::THREAD_GOAL_UPDATED, event::THREAD_GOAL_CLEARED],
+            ),
+            thread_compact: declared_future_capability("thread_compact"),
         }
     }
 
@@ -832,6 +889,16 @@ impl CapabilityMatrix {
             self.command_exec =
                 Capability::implemented("command_exec", &command_methods, &command_events);
         }
+        self
+    }
+
+    #[must_use]
+    pub fn with_thread_compact_ready(mut self) -> Self {
+        self.thread_compact = Capability::implemented(
+            "thread_compact",
+            &[method::THREAD_COMPACT_START],
+            &[event::THREAD_COMPACTED],
+        );
         self
     }
 }
@@ -1020,6 +1087,19 @@ impl CompatibilityProfile {
                 method::THREAD_READ.to_string(),
                 method::THREAD_LIST.to_string(),
                 method::THREAD_TURNS_LIST.to_string(),
+                method::THREAD_RESUME.to_string(),
+                method::THREAD_FORK.to_string(),
+                method::THREAD_ARCHIVE.to_string(),
+                method::THREAD_UNARCHIVE.to_string(),
+                method::THREAD_UNSUBSCRIBE.to_string(),
+                method::THREAD_NAME_SET.to_string(),
+                method::THREAD_METADATA_UPDATE.to_string(),
+                method::THREAD_ROLLBACK.to_string(),
+                method::THREAD_LOADED_LIST.to_string(),
+                method::THREAD_INJECT_ITEMS.to_string(),
+                method::THREAD_GOAL_SET.to_string(),
+                method::THREAD_GOAL_GET.to_string(),
+                method::THREAD_GOAL_CLEAR.to_string(),
                 method::TURN_START.to_string(),
                 method::TURN_INTERRUPT.to_string(),
                 method::TURN_READ.to_string(),
@@ -1043,11 +1123,7 @@ impl CompatibilityProfile {
                 CapabilityOptOut::phase_one("dlp_policy"),
                 CapabilityOptOut::phase_one("jobs"),
                 CapabilityOptOut::phase_one("sandbox"),
-                CapabilityOptOut::phase_one("thread.fork"),
-                CapabilityOptOut::phase_one("thread.archive"),
-                CapabilityOptOut::phase_one("thread.resume"),
                 CapabilityOptOut::phase_one("thread.compact"),
-                CapabilityOptOut::phase_one("thread.rollback"),
             ],
             event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
         }
@@ -1067,6 +1143,13 @@ const CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS: &[&str] = &[
     event::ITEM_REASONING_SUMMARY_PART_ADDED,
     event::ITEM_REASONING_TEXT_DELTA,
     event::ITEM_COMPLETED,
+    event::THREAD_STATUS_CHANGED,
+    event::THREAD_ARCHIVED,
+    event::THREAD_UNARCHIVED,
+    event::THREAD_NAME_UPDATED,
+    event::THREAD_GOAL_UPDATED,
+    event::THREAD_GOAL_CLEARED,
+    event::THREAD_TOKEN_USAGE_UPDATED,
     event::ERROR,
 ];
 
@@ -1236,6 +1319,104 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "session",
             Some("ThreadStartParams"),
             "ThreadStartResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_RESUME,
+            "thread_lifecycle",
+            Some("ThreadResumeParams"),
+            "ThreadResumeResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_FORK,
+            "thread_lifecycle",
+            Some("ThreadForkParams"),
+            "ThreadForkResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_ARCHIVE,
+            "thread_lifecycle",
+            Some("ThreadArchiveParams"),
+            "ThreadArchiveResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_UNARCHIVE,
+            "thread_lifecycle",
+            Some("ThreadUnarchiveParams"),
+            "ThreadUnarchiveResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_UNSUBSCRIBE,
+            "thread_lifecycle",
+            Some("ThreadUnsubscribeParams"),
+            "ThreadUnsubscribeResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_NAME_SET,
+            "thread_lifecycle",
+            Some("ThreadSetNameParams"),
+            "ThreadSetNameResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_METADATA_UPDATE,
+            "thread_lifecycle",
+            Some("ThreadMetadataUpdateParams"),
+            "ThreadMetadataUpdateResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_ROLLBACK,
+            "thread_lifecycle",
+            Some("ThreadRollbackParams"),
+            "ThreadRollbackResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_LOADED_LIST,
+            "thread_lifecycle",
+            Some("ThreadLoadedListParams"),
+            "ThreadLoadedListResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_INJECT_ITEMS,
+            "thread_lifecycle",
+            Some("ThreadInjectItemsParams"),
+            "ThreadInjectItemsResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_GOAL_SET,
+            "thread_goal",
+            Some("ThreadGoalSetParams"),
+            "ThreadGoalSetResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_GOAL_GET,
+            "thread_goal",
+            Some("ThreadGoalGetParams"),
+            "ThreadGoalGetResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_GOAL_CLEAR,
+            "thread_goal",
+            Some("ThreadGoalClearParams"),
+            "ThreadGoalClearResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_COMPACT_START,
+            "thread_compact",
+            Some("ThreadCompactStartParams"),
+            "ThreadCompactStartResponse",
             true,
         ),
         MethodSchema::new(
@@ -1478,6 +1659,46 @@ fn phase_one_events() -> Vec<EventSchema> {
         ),
         EventSchema::new(event::LOG_ENTRY, "logs", "LogEntryEvent"),
         EventSchema::new(event::THREAD_STARTED, "session", "ThreadStartedEvent"),
+        EventSchema::new(
+            event::THREAD_STATUS_CHANGED,
+            "thread_lifecycle",
+            "ThreadStatusChangedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_ARCHIVED,
+            "thread_lifecycle",
+            "ThreadArchivedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_UNARCHIVED,
+            "thread_lifecycle",
+            "ThreadUnarchivedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_NAME_UPDATED,
+            "thread_lifecycle",
+            "ThreadNameUpdatedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_GOAL_UPDATED,
+            "thread_goal",
+            "ThreadGoalUpdatedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_GOAL_CLEARED,
+            "thread_goal",
+            "ThreadGoalClearedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_TOKEN_USAGE_UPDATED,
+            "thread_lifecycle",
+            "ThreadTokenUsageUpdatedEvent",
+        ),
+        EventSchema::new(
+            event::THREAD_COMPACTED,
+            "thread_compact",
+            "ThreadCompactedEvent",
+        ),
         EventSchema::new(event::TURN_STARTED, "session", "TurnStartedEvent"),
         EventSchema::new(event::TURN_COMPLETED, "session", "TurnCompletedEvent"),
         EventSchema::new(event::ITEM_STARTED, "session", "ItemStartedEvent"),
@@ -1710,6 +1931,233 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub cwd: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResumeParams {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub exclude_turns: bool,
+    #[serde(default)]
+    pub persist_extended_history: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResumeResponse {
+    pub thread: CodexThread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadForkParams {
+    pub thread_id: String,
+    #[serde(default)]
+    pub ephemeral: bool,
+    #[serde(default)]
+    pub exclude_turns: bool,
+    #[serde(default)]
+    pub persist_extended_history: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadForkResponse {
+    pub thread: CodexThread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchiveResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnarchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnarchiveResponse {
+    pub thread: CodexThread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnsubscribeParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadUnsubscribeStatus {
+    NotLoaded,
+    NotSubscribed,
+    Unsubscribed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnsubscribeResponse {
+    pub status: ThreadUnsubscribeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetNameParams {
+    pub thread_id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetNameResponse {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMetadataUpdateParams {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_info: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMetadataUpdateResponse {
+    pub thread: CodexThread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRollbackParams {
+    pub thread_id: String,
+    pub num_turns: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRollbackResponse {
+    pub thread: CodexThread,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadLoadedListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadLoadedListResponse {
+    pub data: Vec<String>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadInjectItemsParams {
+    pub thread_id: String,
+    pub items: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadInjectItemsResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadGoalStatus {
+    Active,
+    Paused,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoal {
+    pub thread_id: String,
+    pub objective: String,
+    pub status: ThreadGoalStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    pub time_used_seconds: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalSetParams {
+    pub thread_id: String,
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ThreadGoalStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalSetResponse {
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalGetParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalGetResponse {
+    pub goal: Option<ThreadGoal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCompactStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCompactStartResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2511,6 +2959,81 @@ pub struct ThreadStartedEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadStatusChangedEvent {
+    pub thread_id: String,
+    pub status: CodexThreadStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchivedEvent {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnarchivedEvent {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadNameUpdatedEvent {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalUpdatedEvent {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearedEvent {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageBreakdown {
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsage {
+    pub total: TokenUsageBreakdown,
+    pub last: TokenUsageBreakdown,
+    pub model_context_window: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsageUpdatedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCompactedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnStartedEvent {
     pub thread_id: String,
     pub turn: CodexTurn,
@@ -2696,6 +3219,42 @@ impl ServerNotification {
 
     pub fn thread_started(event: ThreadStartedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::THREAD_STARTED, event)
+    }
+
+    pub fn thread_status_changed(
+        event: ThreadStatusChangedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_STATUS_CHANGED, event)
+    }
+
+    pub fn thread_archived(event: ThreadArchivedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_ARCHIVED, event)
+    }
+
+    pub fn thread_unarchived(event: ThreadUnarchivedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_UNARCHIVED, event)
+    }
+
+    pub fn thread_name_updated(event: ThreadNameUpdatedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_NAME_UPDATED, event)
+    }
+
+    pub fn thread_goal_updated(event: ThreadGoalUpdatedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_GOAL_UPDATED, event)
+    }
+
+    pub fn thread_goal_cleared(event: ThreadGoalClearedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_GOAL_CLEARED, event)
+    }
+
+    pub fn thread_token_usage_updated(
+        event: ThreadTokenUsageUpdatedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_TOKEN_USAGE_UPDATED, event)
+    }
+
+    pub fn thread_compacted(event: ThreadCompactedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_COMPACTED, event)
     }
 
     pub fn turn_started(event: TurnStartedEvent) -> Result<Self, serde_json::Error> {
@@ -3311,6 +3870,10 @@ pub struct ErrorData {
 mod tests {
     use super::*;
 
+    fn protocol_schema() -> ProtocolSchemaResponse {
+        ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one())
+    }
+
     #[test]
     fn protocol_versions_match_by_major() {
         assert!(
@@ -3327,6 +3890,21 @@ mod tests {
                 patch: 0,
             })
         );
+    }
+
+    #[test]
+    fn r4_thread_lifecycle_methods_and_events_are_registered() {
+        assert_r4_thread_lifecycle_methods_and_events_are_registered();
+    }
+
+    #[test]
+    fn r4_thread_lifecycle_payloads_use_camel_case_wire_names() {
+        assert_r4_thread_lifecycle_payloads_use_camel_case_wire_names();
+    }
+
+    #[test]
+    fn phase_one_schema_capabilities_reference_declared_matrix_ids() {
+        assert_phase_one_schema_capabilities_reference_declared_matrix_ids();
     }
 
     #[test]
@@ -3477,6 +4055,169 @@ mod tests {
         assert!(event_names.contains(&event::ITEM_FILE_CHANGE_PATCH_UPDATED));
         assert!(event_names.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_STARTED));
         assert!(event_names.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED));
+    }
+
+    fn assert_r4_thread_lifecycle_methods_and_events_are_registered() {
+        let schema = protocol_schema();
+        let methods: std::collections::BTreeSet<_> = schema
+            .methods
+            .iter()
+            .map(|method| method.method.as_str())
+            .collect();
+        let events: std::collections::BTreeSet<_> = schema
+            .events
+            .iter()
+            .map(|event| event.event.as_str())
+            .collect();
+
+        for method in [
+            method::THREAD_RESUME,
+            method::THREAD_FORK,
+            method::THREAD_ARCHIVE,
+            method::THREAD_UNARCHIVE,
+            method::THREAD_UNSUBSCRIBE,
+            method::THREAD_NAME_SET,
+            method::THREAD_METADATA_UPDATE,
+            method::THREAD_ROLLBACK,
+            method::THREAD_LOADED_LIST,
+            method::THREAD_INJECT_ITEMS,
+            method::THREAD_GOAL_SET,
+            method::THREAD_GOAL_GET,
+            method::THREAD_GOAL_CLEAR,
+            method::THREAD_COMPACT_START,
+        ] {
+            assert!(methods.contains(method), "{method} missing from schema");
+        }
+
+        for event in [
+            event::THREAD_STATUS_CHANGED,
+            event::THREAD_ARCHIVED,
+            event::THREAD_UNARCHIVED,
+            event::THREAD_NAME_UPDATED,
+            event::THREAD_GOAL_UPDATED,
+            event::THREAD_GOAL_CLEARED,
+            event::THREAD_TOKEN_USAGE_UPDATED,
+            event::THREAD_COMPACTED,
+        ] {
+            assert!(events.contains(event), "{event} missing from schema");
+        }
+    }
+
+    fn assert_r4_thread_lifecycle_payloads_use_camel_case_wire_names() {
+        let unsubscribe = serde_json::to_value(ThreadUnsubscribeResponse {
+            status: ThreadUnsubscribeStatus::NotSubscribed,
+        })
+        .expect("unsubscribe response serializes");
+        assert_eq!(unsubscribe["status"], "notSubscribed");
+
+        let metadata: ThreadMetadataUpdateParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "gitInfo": {
+                "sha": null,
+                "branch": "main",
+                "originUrl": "https://example.test/repo.git"
+            }
+        }))
+        .expect("metadata update params deserialize");
+        assert_eq!(metadata.thread_id, "thread_1");
+        assert_eq!(
+            metadata.git_info.expect("git info patch present")["sha"],
+            serde_json::Value::Null
+        );
+
+        let usage = ThreadTokenUsageUpdatedEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: "turn_1".to_string(),
+            token_usage: ThreadTokenUsage {
+                total: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 6,
+                    cached_input_tokens: 2,
+                    output_tokens: 4,
+                    reasoning_output_tokens: 0,
+                },
+                last: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 6,
+                    cached_input_tokens: 2,
+                    output_tokens: 4,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: None,
+            },
+        };
+        let value = serde_json::to_value(usage).expect("usage event serializes");
+        assert_eq!(value["threadId"], "thread_1");
+        assert_eq!(value["tokenUsage"]["last"]["cachedInputTokens"], 2);
+
+        let goal_status =
+            serde_json::to_value(ThreadGoalStatus::BudgetLimited).expect("goal status serializes");
+        assert_eq!(goal_status, "budgetLimited");
+
+        let goal = ThreadGoal {
+            thread_id: "thread_1".to_string(),
+            objective: "ship R4".to_string(),
+            status: ThreadGoalStatus::BudgetLimited,
+            token_budget: Some(1000),
+            tokens_used: 250,
+            time_used_seconds: 60,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let goal_value = serde_json::to_value(goal).expect("goal serializes");
+        assert_eq!(goal_value["threadId"], "thread_1");
+        assert_eq!(goal_value["objective"], "ship R4");
+        assert_eq!(goal_value["tokenBudget"], 1000);
+
+        let rollback = serde_json::to_value(ThreadRollbackParams {
+            thread_id: "thread_1".to_string(),
+            num_turns: 2,
+        })
+        .expect("rollback params serialize");
+        assert_eq!(rollback["threadId"], "thread_1");
+        assert_eq!(rollback["numTurns"], 2);
+
+        let compacted = serde_json::to_value(ThreadCompactedEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: "turn_1".to_string(),
+        })
+        .expect("compacted event serializes");
+        assert_eq!(compacted["threadId"], "thread_1");
+        assert_eq!(compacted["turnId"], "turn_1");
+
+        let loaded_list_params = serde_json::to_value(ThreadLoadedListParams {
+            cursor: Some("cursor_1".to_string()),
+            limit: Some(25),
+        })
+        .expect("loaded list params serialize");
+        assert_eq!(loaded_list_params["cursor"], "cursor_1");
+        assert_eq!(loaded_list_params["limit"], 25);
+
+        let loaded_list_response = serde_json::to_value(ThreadLoadedListResponse {
+            data: vec!["thread_1".to_string()],
+            next_cursor: Some("cursor_2".to_string()),
+        })
+        .expect("loaded list response serializes");
+        assert_eq!(loaded_list_response["data"][0], "thread_1");
+        assert_eq!(loaded_list_response["nextCursor"], "cursor_2");
+
+        let goal_updated = serde_json::to_value(ThreadGoalUpdatedEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: Some("turn_1".to_string()),
+            goal: ThreadGoal {
+                thread_id: "thread_1".to_string(),
+                objective: "ship R4".to_string(),
+                status: ThreadGoalStatus::Active,
+                token_budget: None,
+                tokens_used: 0,
+                time_used_seconds: 0,
+                created_at: 1,
+                updated_at: 2,
+            },
+        })
+        .expect("goal updated event serializes");
+        assert_eq!(goal_updated["threadId"], "thread_1");
+        assert_eq!(goal_updated["turnId"], "turn_1");
     }
 
     fn codex_thread_fixture() -> CodexThread {
@@ -3700,6 +4441,61 @@ mod tests {
         assert!(profile.events.contains(&event::THREAD_STARTED.to_string()));
         assert!(profile.events.contains(&event::TURN_COMPLETED.to_string()));
         assert!(!profile.events.contains(&"turn/delta".to_string()));
+        for method in [
+            method::THREAD_RESUME,
+            method::THREAD_FORK,
+            method::THREAD_ARCHIVE,
+            method::THREAD_ROLLBACK,
+            method::THREAD_GOAL_SET,
+            method::THREAD_GOAL_GET,
+            method::THREAD_GOAL_CLEAR,
+        ] {
+            assert!(
+                profile.methods.contains(&method.to_string()),
+                "implemented R4 method should be in compatibility profile: {method}"
+            );
+        }
+        for event in [
+            event::THREAD_ARCHIVED,
+            event::THREAD_STATUS_CHANGED,
+            event::THREAD_GOAL_UPDATED,
+            event::THREAD_TOKEN_USAGE_UPDATED,
+        ] {
+            assert!(
+                profile.events.contains(&event.to_string()),
+                "implemented R4 event should be in compatibility profile: {event}"
+            );
+        }
+        assert!(
+            !profile
+                .methods
+                .contains(&method::THREAD_COMPACT_START.to_string())
+        );
+        assert!(
+            !profile
+                .events
+                .contains(&event::THREAD_COMPACTED.to_string())
+        );
+        assert!(
+            profile
+                .capability_opt_outs
+                .iter()
+                .any(|opt_out| opt_out.capability == "thread.compact")
+        );
+        for capability in [
+            "thread.fork",
+            "thread.archive",
+            "thread.resume",
+            "thread.rollback",
+        ] {
+            assert!(
+                !profile
+                    .capability_opt_outs
+                    .iter()
+                    .any(|opt_out| opt_out.capability == capability),
+                "implemented R4 capability should not remain opted out: {capability}"
+            );
+        }
     }
 
     #[test]
@@ -3749,6 +4545,8 @@ mod tests {
             schema.capabilities.health.methods,
             schema.capabilities.session.methods,
             schema.capabilities.model_provider.methods,
+            schema.capabilities.thread_lifecycle.methods,
+            schema.capabilities.thread_goal.methods,
         ]
         .concat();
 
@@ -3756,6 +4554,47 @@ mod tests {
             assert!(
                 schema_methods.contains(&method.as_str()),
                 "implemented capability method must be described by protocol/schema: {method}"
+            );
+        }
+    }
+
+    fn assert_phase_one_schema_capabilities_reference_declared_matrix_ids() {
+        let schema = ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one());
+        let capability_ids = [
+            schema.capabilities.protocol.id.as_str(),
+            schema.capabilities.lifecycle.id.as_str(),
+            schema.capabilities.health.id.as_str(),
+            schema.capabilities.session.id.as_str(),
+            schema.capabilities.approval.id.as_str(),
+            schema.capabilities.dlp_policy.id.as_str(),
+            schema.capabilities.model_provider.id.as_str(),
+            schema.capabilities.tools.id.as_str(),
+            schema.capabilities.jobs.id.as_str(),
+            schema.capabilities.skills.id.as_str(),
+            schema.capabilities.mcp.id.as_str(),
+            schema.capabilities.sandbox.id.as_str(),
+            schema.capabilities.logs.id.as_str(),
+            schema.capabilities.filesystem.id.as_str(),
+            schema.capabilities.command_exec.id.as_str(),
+            schema.capabilities.thread_lifecycle.id.as_str(),
+            schema.capabilities.thread_goal.id.as_str(),
+            schema.capabilities.thread_compact.id.as_str(),
+        ];
+
+        for method in &schema.methods {
+            assert!(
+                capability_ids.contains(&method.capability.as_str()),
+                "method {} references undeclared capability {}",
+                method.method,
+                method.capability
+            );
+        }
+        for event in &schema.events {
+            assert!(
+                capability_ids.contains(&event.capability.as_str()),
+                "event {} references undeclared capability {}",
+                event.event,
+                event.capability
             );
         }
     }

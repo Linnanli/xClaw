@@ -16,6 +16,7 @@ pub mod skills_service;
 
 mod blocking_runtime;
 mod sandbox_protocol;
+mod thread_lifecycle;
 
 pub use sandbox_protocol::RuntimeSandboxContext;
 
@@ -61,12 +62,22 @@ use dasclaw_app_server_protocol::{
     ServerInfo, ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent,
     ServiceHealth, ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse,
     SkillsChangedNotification, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse, ThreadListParams, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
-    ThreadTurnsListParams, ThreadTurnsListResponse, ToolRequestUserInputParams,
-    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnCompletedEvent,
-    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, TurnStatus,
+    SkillsListParams, SkillsListResponse, ThreadArchiveParams, ThreadArchiveResponse,
+    ThreadArchivedEvent, ThreadCompactStartParams, ThreadCompactStartResponse,
+    ThreadCompactedEvent, ThreadForkParams, ThreadForkResponse, ThreadGoalClearParams,
+    ThreadGoalClearResponse, ThreadGoalClearedEvent, ThreadGoalGetParams, ThreadGoalGetResponse,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadGoalUpdatedEvent, ThreadInjectItemsParams,
+    ThreadInjectItemsResponse, ThreadListParams, ThreadListResponse, ThreadLoadedListParams,
+    ThreadLoadedListResponse, ThreadMetadataUpdateResponse, ThreadNameUpdatedEvent,
+    ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
+    ThreadRollbackParams, ThreadRollbackResponse, ThreadSetNameParams, ThreadSetNameResponse,
+    ThreadStartParams, ThreadStartResponse, ThreadStartedEvent, ThreadStatusChangedEvent,
+    ThreadTokenUsageUpdatedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
+    ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnarchivedEvent, ThreadUnsubscribeParams,
+    ThreadUnsubscribeResponse, ThreadUnsubscribeStatus, TokenUsageBreakdown,
+    ToolRequestUserInputParams, ToolRequestUserInputQuestion, ToolRequestUserInputResponse,
+    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
+    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -81,6 +92,9 @@ use dasclaw_runtime::LlmProviderResponder;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thread_lifecycle::{
+    ThreadCreation, ThreadFork, ThreadLifecycleHost, ThreadSummary, TurnSummary,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -97,7 +111,7 @@ pub struct AppServer {
     capabilities: CapabilityMatrix,
     client: Option<ClientInfo>,
     notifications: NotificationBus,
-    threads: SessionThreadHost,
+    threads: ThreadLifecycleHost,
     runtime_bridge: Arc<dyn RuntimeBridge>,
     runtime_features: RuntimeBridgeFeatures,
     runtime_turn_updates: RuntimeTurnUpdateSink,
@@ -685,7 +699,7 @@ impl AppServer {
             capabilities: CapabilityMatrix::phase_one(),
             client: None,
             notifications: NotificationBus::new(),
-            threads: SessionThreadHost::new(),
+            threads: ThreadLifecycleHost::new(),
             runtime_bridge: Arc::new(NoopRuntimeBridge),
             runtime_features: RuntimeBridgeFeatures::default(),
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
@@ -693,6 +707,14 @@ impl AppServer {
             model_provider: ModelProviderState::default(),
             app_services: app_services::AppServerServices::default(),
         }
+    }
+
+    pub fn with_thread_snapshot_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, AppServerError> {
+        self.threads = ThreadLifecycleHost::with_snapshot_path(path)?;
+        Ok(self)
     }
 
     #[must_use]
@@ -709,6 +731,9 @@ impl AppServer {
         }
         if features.sandbox {
             server.capabilities = server.capabilities.with_runtime_sandbox_ready();
+        }
+        if features.thread_compact {
+            server.capabilities = server.capabilities.with_thread_compact_ready();
         }
         server.runtime_features = features;
         server.runtime_bridge = runtime_bridge;
@@ -864,7 +889,14 @@ impl AppServer {
         }
         self.require_initialized("session")?;
 
-        let thread_id = self.threads.create(params)?;
+        let thread_id = self.threads.create(ThreadCreation {
+            cwd: params.cwd,
+            sandbox: params.sandbox,
+            permission_profile: params.permission_profile,
+            title: None,
+            ephemeral: true,
+            forked_from_id: None,
+        })?;
         self.emit_codex_thread_started(thread_id.clone())?;
 
         Ok(thread_id)
@@ -932,6 +964,288 @@ impl AppServer {
         })
     }
 
+    pub fn thread_resume(
+        &mut self,
+        params: ThreadResumeParams,
+    ) -> Result<ThreadResumeResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        if params.history.is_some() {
+            return Err(history_import_unsupported());
+        }
+        let summary =
+            self.thread_summary_or_error_with_capability(&params.thread_id, "thread_lifecycle")?;
+        if summary.archived {
+            return Err(AppServerError::invalid_request(
+                "thread_lifecycle",
+                "cannot resume archived thread",
+            ));
+        }
+        if params.path.is_some() && params.path != summary.path {
+            return Err(history_import_unsupported());
+        }
+        let selected_model = self.model_provider.selected_snapshot()?;
+        self.threads.set_subscribed(&params.thread_id, true)?;
+        let thread = self.codex_thread_view(&params.thread_id, !params.exclude_turns)?;
+        let cwd = thread.cwd.clone();
+        self.emit_thread_status_changed(&thread.id, thread.status.clone());
+        Ok(ThreadResumeResponse {
+            thread,
+            model: selected_model.model_id,
+            model_provider: selected_model.provider,
+            cwd,
+        })
+    }
+
+    pub fn thread_fork(
+        &mut self,
+        params: ThreadForkParams,
+    ) -> Result<ThreadForkResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        self.thread_summary_or_error_with_capability(&params.thread_id, "thread_lifecycle")?;
+        let selected_model = self.model_provider.selected_snapshot()?;
+        let thread_id = self.threads.fork(
+            &params.thread_id,
+            ThreadFork {
+                cwd: params.cwd,
+                ephemeral: params.ephemeral,
+                exclude_turns: params.exclude_turns,
+            },
+        )?;
+        self.emit_codex_thread_started(thread_id.clone())?;
+        let thread = self.codex_thread_view(&thread_id, true)?;
+        let cwd = thread.cwd.clone();
+        Ok(ThreadForkResponse {
+            thread,
+            model: selected_model.model_id,
+            model_provider: selected_model.provider,
+            cwd,
+        })
+    }
+
+    pub fn thread_archive(
+        &mut self,
+        params: ThreadArchiveParams,
+    ) -> Result<ThreadArchiveResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        self.threads.set_archived(&params.thread_id, true)?;
+        self.notifications
+            .emit_thread_archived(ThreadArchivedEvent {
+                thread_id: params.thread_id,
+            });
+        Ok(ThreadArchiveResponse {})
+    }
+
+    pub fn thread_unarchive(
+        &mut self,
+        params: ThreadUnarchiveParams,
+    ) -> Result<ThreadUnarchiveResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        self.threads.set_archived(&params.thread_id, false)?;
+        self.notifications
+            .emit_thread_unarchived(ThreadUnarchivedEvent {
+                thread_id: params.thread_id.clone(),
+            });
+        Ok(ThreadUnarchiveResponse {
+            thread: self.codex_thread_view(&params.thread_id, true)?,
+        })
+    }
+
+    pub fn thread_unsubscribe(
+        &mut self,
+        params: ThreadUnsubscribeParams,
+    ) -> Result<ThreadUnsubscribeResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        let status = match self.threads.summary(&params.thread_id) {
+            None => ThreadUnsubscribeStatus::NotLoaded,
+            Some(summary) if !summary.subscribed => ThreadUnsubscribeStatus::NotSubscribed,
+            Some(_) => {
+                self.threads.set_subscribed(&params.thread_id, false)?;
+                ThreadUnsubscribeStatus::Unsubscribed
+            }
+        };
+        Ok(ThreadUnsubscribeResponse { status })
+    }
+
+    pub fn thread_name_set(
+        &mut self,
+        params: ThreadSetNameParams,
+    ) -> Result<ThreadSetNameResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        let name = params.name.and_then(|name| {
+            let trimmed = name.trim().to_string();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+        self.threads.set_name(&params.thread_id, name.clone())?;
+        self.notifications
+            .emit_thread_name_updated(ThreadNameUpdatedEvent {
+                thread_id: params.thread_id.clone(),
+                thread_name: name,
+            });
+        Ok(ThreadSetNameResponse {})
+    }
+
+    pub fn thread_metadata_update_value(
+        &mut self,
+        params: Value,
+    ) -> Result<ThreadMetadataUpdateResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        let thread_id = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppServerError::invalid_request("thread_lifecycle", "missing threadId"))?
+            .to_string();
+        if let Some(git_info) = params.get("gitInfo") {
+            let patch = match git_info {
+                Value::Null => None,
+                value => Some(value.clone()),
+            };
+            self.threads.update_git_info(&thread_id, patch)?;
+        } else {
+            self.thread_summary_or_error_with_capability(&thread_id, "thread_lifecycle")?;
+        }
+        Ok(ThreadMetadataUpdateResponse {
+            thread: self.codex_thread_view(&thread_id, true)?,
+        })
+    }
+
+    pub fn thread_rollback(
+        &mut self,
+        params: ThreadRollbackParams,
+    ) -> Result<ThreadRollbackResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        if params.num_turns == 0 {
+            return Err(AppServerError::invalid_request(
+                "thread_lifecycle",
+                "numTurns must be greater than 0",
+            ));
+        }
+        self.threads
+            .rollback(&params.thread_id, params.num_turns as usize)?;
+        let thread = self.codex_thread_view(&params.thread_id, true)?;
+        self.emit_thread_status_changed(&thread.id, thread.status.clone());
+        Ok(ThreadRollbackResponse { thread })
+    }
+
+    pub fn thread_loaded_list(
+        &self,
+        params: ThreadLoadedListParams,
+    ) -> Result<ThreadLoadedListResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        let limit = params.limit.unwrap_or(50);
+        if limit == 0 {
+            return Err(AppServerError::invalid_request(
+                "thread_lifecycle",
+                "limit must be greater than 0",
+            ));
+        }
+        let start = match params.cursor {
+            Some(cursor) => cursor.parse::<usize>().map_err(|_| {
+                AppServerError::invalid_request("thread_lifecycle", "invalid cursor")
+            })?,
+            None => 0,
+        };
+        let loaded = self
+            .threads
+            .list()
+            .into_iter()
+            .filter(|thread| thread.subscribed && !thread.archived)
+            .map(|thread| thread.thread_id)
+            .collect::<Vec<_>>();
+        let end = start.saturating_add(limit as usize).min(loaded.len());
+        let data = loaded
+            .get(start..end)
+            .map_or_else(Vec::new, |threads| threads.to_vec());
+        let next_cursor = (end < loaded.len()).then(|| end.to_string());
+        Ok(ThreadLoadedListResponse { data, next_cursor })
+    }
+
+    pub fn thread_inject_items(
+        &mut self,
+        params: ThreadInjectItemsParams,
+    ) -> Result<ThreadInjectItemsResponse, AppServerError> {
+        self.require_initialized("thread_lifecycle")?;
+        self.threads.inject_items(&params.thread_id, params.items)?;
+        Ok(ThreadInjectItemsResponse {})
+    }
+
+    pub fn thread_goal_set(
+        &mut self,
+        params: ThreadGoalSetParams,
+    ) -> Result<ThreadGoalSetResponse, AppServerError> {
+        self.require_initialized("thread_goal")?;
+        if params.objective.trim().is_empty() {
+            return Err(AppServerError::invalid_request(
+                "thread_goal",
+                "objective must not be empty",
+            ));
+        }
+        let goal = self.threads.set_goal(
+            &params.thread_id,
+            params.objective.trim().to_string(),
+            params.status,
+            params.token_budget,
+        )?;
+        self.notifications
+            .emit_thread_goal_updated(ThreadGoalUpdatedEvent {
+                thread_id: params.thread_id,
+                turn_id: None,
+                goal: goal.clone(),
+            });
+        Ok(ThreadGoalSetResponse { goal })
+    }
+
+    pub fn thread_goal_get(
+        &self,
+        params: ThreadGoalGetParams,
+    ) -> Result<ThreadGoalGetResponse, AppServerError> {
+        self.require_initialized("thread_goal")?;
+        Ok(ThreadGoalGetResponse {
+            goal: self.threads.get_goal(&params.thread_id)?,
+        })
+    }
+
+    pub fn thread_goal_clear(
+        &mut self,
+        params: ThreadGoalClearParams,
+    ) -> Result<ThreadGoalClearResponse, AppServerError> {
+        self.require_initialized("thread_goal")?;
+        if self.threads.clear_goal(&params.thread_id)? {
+            self.notifications
+                .emit_thread_goal_cleared(ThreadGoalClearedEvent {
+                    thread_id: params.thread_id,
+                });
+        }
+        Ok(ThreadGoalClearResponse {})
+    }
+
+    pub fn thread_compact_start(
+        &mut self,
+        params: ThreadCompactStartParams,
+    ) -> Result<ThreadCompactStartResponse, AppServerError> {
+        self.require_initialized("thread_compact")?;
+        self.thread_summary_or_error_with_capability(&params.thread_id, "thread_compact")?;
+        if !self.runtime_features.thread_compact {
+            return Err(AppServerError::capability_unavailable(
+                "thread_compact",
+                "runtime bridge does not support thread compact",
+            ));
+        }
+        let result = self
+            .runtime_bridge
+            .compact_thread(RuntimeThreadCompactRequest {
+                thread_id: params.thread_id.clone(),
+            })
+            .map_err(AppServerError::runtime_bridge)?;
+        self.threads
+            .record_compacted_turn(&params.thread_id, result.turn_id.clone())?;
+        self.notifications
+            .emit_thread_compacted(ThreadCompactedEvent {
+                thread_id: params.thread_id,
+                turn_id: result.turn_id,
+            });
+        Ok(ThreadCompactStartResponse {})
+    }
+
     pub fn turn_start(
         &mut self,
         params: TurnStartParams,
@@ -965,6 +1279,8 @@ impl AppServer {
             "turn/start",
         )?;
         let turn_id = self.threads.next_turn_id();
+        self.threads
+            .record_started_turn(&params.thread_id, turn_id.clone())?;
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
                 thread_id: params.thread_id.clone(),
@@ -976,9 +1292,18 @@ impl AppServer {
                 sandbox_context,
                 updates: self.runtime_turn_updates.clone(),
             })
-            .map_err(AppServerError::runtime_bridge)?;
-        self.threads
-            .record_started_turn(&params.thread_id, turn_id.clone());
+            .map_err(|error| {
+                if let Err(cancel_error) = self.threads.cancel_turn(&params.thread_id, &turn_id) {
+                    return AppServerError::service_degraded(
+                        "thread_lifecycle",
+                        format!(
+                            "runtime start failed: {error}; failed to cancel pending turn: {}",
+                            cancel_error.public_message()
+                        ),
+                    );
+                }
+                AppServerError::runtime_bridge(error)
+            })?;
         self.transition_lifecycle(
             LifecycleState::Running,
             LifecycleReason::RequestInProgress,
@@ -1243,7 +1568,7 @@ impl AppServer {
         }
         let changed = self
             .threads
-            .cancel_turn(&params.thread_id, &params.turn_id)
+            .cancel_turn(&params.thread_id, &params.turn_id)?
             .ok_or_else(|| {
                 AppServerError::invalid_request(
                     "session",
@@ -1361,10 +1686,32 @@ impl AppServer {
         }
 
         self.drain_runtime_turn_updates();
+        let cancelled_turns = match self.threads.cancel_pending_turns() {
+            Ok(turns) => turns,
+            Err(error) => {
+                let message = error.public_message().to_string();
+                self.notifications.emit_error(ErrorEvent {
+                    code: ErrorCode::ServiceDegraded,
+                    message: message.clone(),
+                    thread_id: None,
+                    turn_id: None,
+                    retryable: true,
+                });
+                self.transition_lifecycle(
+                    LifecycleState::Degraded,
+                    LifecycleReason::InternalError,
+                    Some(format!("shutdown rejected: {message}")),
+                );
+                return ShutdownResponse {
+                    accepted: false,
+                    lifecycle: self.lifecycle.clone(),
+                };
+            }
+        };
         self.runtime_bridge.shutdown();
         let pending_approvals = self.pending_server_requests.drain_all();
         self.emit_failed_pending_server_request_resolutions(pending_approvals, "server shutdown");
-        for turn in self.threads.cancel_pending_turns() {
+        for turn in cancelled_turns {
             self.emit_codex_item_completed(turn.thread_id.clone(), turn.turn_id.clone(), None);
             self.notifications.emit_turn_completed(TurnCompletedEvent {
                 thread_id: turn.thread_id.clone(),
@@ -1572,6 +1919,76 @@ impl AppServer {
                     self.thread_read(params)
                 })
             }
+            method::THREAD_RESUME => {
+                route_with_params(request.id, request.params, |params: ThreadResumeParams| {
+                    self.thread_resume(params)
+                })
+            }
+            method::THREAD_FORK => {
+                route_with_params(request.id, request.params, |params: ThreadForkParams| {
+                    self.thread_fork(params)
+                })
+            }
+            method::THREAD_ARCHIVE => {
+                route_with_params(request.id, request.params, |params: ThreadArchiveParams| {
+                    self.thread_archive(params)
+                })
+            }
+            method::THREAD_UNARCHIVE => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadUnarchiveParams| self.thread_unarchive(params),
+            ),
+            method::THREAD_UNSUBSCRIBE => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadUnsubscribeParams| self.thread_unsubscribe(params),
+            ),
+            method::THREAD_NAME_SET => {
+                route_with_params(request.id, request.params, |params: ThreadSetNameParams| {
+                    self.thread_name_set(params)
+                })
+            }
+            method::THREAD_METADATA_UPDATE => {
+                route_with_params(request.id, request.params, |params: Value| {
+                    self.thread_metadata_update_value(params)
+                })
+            }
+            method::THREAD_ROLLBACK => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadRollbackParams| self.thread_rollback(params),
+            ),
+            method::THREAD_LOADED_LIST => route_with_optional_params(
+                request.id,
+                request.params,
+                |params: ThreadLoadedListParams| self.thread_loaded_list(params),
+            ),
+            method::THREAD_INJECT_ITEMS => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadInjectItemsParams| self.thread_inject_items(params),
+            ),
+            method::THREAD_GOAL_SET => {
+                route_with_params(request.id, request.params, |params: ThreadGoalSetParams| {
+                    self.thread_goal_set(params)
+                })
+            }
+            method::THREAD_GOAL_GET => {
+                route_with_params(request.id, request.params, |params: ThreadGoalGetParams| {
+                    self.thread_goal_get(params)
+                })
+            }
+            method::THREAD_GOAL_CLEAR => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadGoalClearParams| self.thread_goal_clear(params),
+            ),
+            method::THREAD_COMPACT_START => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadCompactStartParams| self.thread_compact_start(params),
+            ),
             method::TURN_START => {
                 route_with_params(request.id, request.params, |params: TurnStartParams| {
                     self.turn_start(params)
@@ -1882,12 +2299,17 @@ impl AppServer {
 
     fn fail_pending_turn(&mut self, thread_id: String, turn_id: String, error: String) {
         let update = RuntimeTurnUpdate {
-            thread_id,
-            turn_id,
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
             outcome: RuntimeTurnOutcome::Failed { error },
         };
-        let Some(summary) = self.threads.apply_runtime_turn_update(update) else {
-            return;
+        let summary = match self.threads.apply_runtime_turn_update(update) {
+            Ok(Some(summary)) => summary,
+            Ok(None) => return,
+            Err(error) => {
+                self.emit_codex_error(thread_id, turn_id, error.public_message().to_string());
+                return;
+            }
         };
         if summary.status != TurnStatus::Failed {
             return;
@@ -2349,6 +2771,9 @@ impl AppServer {
             "logs" => self.capabilities.logs.status,
             "filesystem" => self.capabilities.filesystem.status,
             "command_exec" => self.capabilities.command_exec.status,
+            "thread_lifecycle" => self.capabilities.thread_lifecycle.status,
+            "thread_goal" => self.capabilities.thread_goal.status,
+            "thread_compact" => self.capabilities.thread_compact.status,
             _ => return false,
         };
         status == dasclaw_app_server_protocol::CapabilityStatus::Implemented
@@ -2387,8 +2812,16 @@ impl AppServer {
     }
 
     fn thread_summary_or_error(&self, thread_id: &str) -> Result<ThreadSummary, AppServerError> {
+        self.thread_summary_or_error_with_capability(thread_id, "session")
+    }
+
+    fn thread_summary_or_error_with_capability(
+        &self,
+        thread_id: &str,
+        capability: &str,
+    ) -> Result<ThreadSummary, AppServerError> {
         self.threads.summary(thread_id).ok_or_else(|| {
-            AppServerError::invalid_request("session", format!("unknown thread id: {thread_id}"))
+            AppServerError::invalid_request(capability, format!("unknown thread id: {thread_id}"))
         })
     }
 
@@ -2409,6 +2842,14 @@ impl AppServer {
         self.notifications
             .emit_thread_started(ThreadStartedEvent { thread });
         Ok(())
+    }
+
+    fn emit_thread_status_changed(&mut self, thread_id: &str, status: CodexThreadStatus) {
+        self.notifications
+            .emit_thread_status_changed(ThreadStatusChangedEvent {
+                thread_id: thread_id.to_string(),
+                status,
+            });
     }
 
     fn codex_thread_view(
@@ -2432,12 +2873,12 @@ impl AppServer {
 
         Ok(CodexThread {
             id: summary.thread_id,
-            forked_from_id: None,
+            forked_from_id: summary.forked_from_id,
             preview: summary.title.clone().unwrap_or_default(),
-            ephemeral: true,
+            ephemeral: summary.ephemeral,
             model_provider: self.model_provider.selected_provider_id(),
-            created_at: 0,
-            updated_at: 0,
+            created_at: summary.created_at,
+            updated_at: summary.updated_at,
             status: if has_pending_turn {
                 CodexThreadStatus::Active {
                     active_flags: Vec::new(),
@@ -2445,13 +2886,13 @@ impl AppServer {
             } else {
                 CodexThreadStatus::Idle
             },
-            path: None,
+            path: summary.path,
             cwd: summary.workspace_root.unwrap_or_else(|| ".".to_string()),
             cli_version: SERVER_VERSION.to_string(),
             source: CodexSessionSource::AppServer,
             agent_nickname: None,
             agent_role: None,
-            git_info: None,
+            git_info: summary.git_info,
             name: summary.title,
             turns,
         })
@@ -2718,36 +3159,80 @@ impl AppServer {
                         );
                     }
                 }
+                RuntimeTurnOutcome::TokenUsageUpdated { usage } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        match self
+                            .threads
+                            .apply_token_usage(&update.thread_id, token_usage_breakdown(usage))
+                        {
+                            Ok(token_usage) => {
+                                self.notifications.emit_thread_token_usage_updated(
+                                    ThreadTokenUsageUpdatedEvent {
+                                        thread_id: update.thread_id,
+                                        turn_id: update.turn_id,
+                                        token_usage,
+                                    },
+                                );
+                            }
+                            Err(error) => {
+                                self.emit_codex_error(
+                                    update.thread_id,
+                                    update.turn_id,
+                                    error.public_message().to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
                 outcome => {
                     let update = RuntimeTurnUpdate { outcome, ..update };
-                    if let Some(summary) = self.threads.apply_runtime_turn_update(update) {
-                        terminal_update_applied = true;
-                        match summary.status {
-                            TurnStatus::Completed => {
-                                self.emit_codex_item_completed(
-                                    summary.thread_id.clone(),
-                                    summary.turn_id.clone(),
-                                    summary.output.clone(),
-                                );
-                                self.notifications.emit_turn_completed(TurnCompletedEvent {
-                                    thread_id: summary.thread_id.clone(),
-                                    turn: codex_turn_from_summary(summary.clone()),
-                                });
+                    let thread_id = update.thread_id.clone();
+                    let turn_id = update.turn_id.clone();
+                    match self.threads.apply_runtime_turn_update(update) {
+                        Ok(Some(summary)) => {
+                            terminal_update_applied = true;
+                            match summary.status {
+                                TurnStatus::Completed => {
+                                    self.emit_codex_item_completed(
+                                        summary.thread_id.clone(),
+                                        summary.turn_id.clone(),
+                                        summary.output.clone(),
+                                    );
+                                    self.notifications.emit_turn_completed(TurnCompletedEvent {
+                                        thread_id: summary.thread_id.clone(),
+                                        turn: codex_turn_from_summary(summary.clone()),
+                                    });
+                                }
+                                TurnStatus::Failed => {
+                                    let error = summary.error.clone().unwrap_or_default();
+                                    self.emit_codex_item_completed(
+                                        summary.thread_id.clone(),
+                                        summary.turn_id.clone(),
+                                        None,
+                                    );
+                                    self.notifications.emit_turn_completed(TurnCompletedEvent {
+                                        thread_id: summary.thread_id.clone(),
+                                        turn: codex_turn_from_summary(summary.clone()),
+                                    });
+                                    self.emit_codex_error(
+                                        summary.thread_id,
+                                        summary.turn_id,
+                                        error,
+                                    );
+                                }
+                                TurnStatus::Pending | TurnStatus::Cancelled => {}
                             }
-                            TurnStatus::Failed => {
-                                let error = summary.error.clone().unwrap_or_default();
-                                self.emit_codex_item_completed(
-                                    summary.thread_id.clone(),
-                                    summary.turn_id.clone(),
-                                    None,
-                                );
-                                self.notifications.emit_turn_completed(TurnCompletedEvent {
-                                    thread_id: summary.thread_id.clone(),
-                                    turn: codex_turn_from_summary(summary.clone()),
-                                });
-                                self.emit_codex_error(summary.thread_id, summary.turn_id, error);
-                            }
-                            TurnStatus::Pending | TurnStatus::Cancelled => {}
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            self.emit_codex_error(
+                                thread_id,
+                                turn_id,
+                                error.public_message().to_string(),
+                            );
                         }
                     }
                 }
@@ -2954,6 +3439,14 @@ pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
 
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError>;
     fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError>;
+    fn compact_thread(
+        &self,
+        _request: RuntimeThreadCompactRequest,
+    ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
+        Err(RuntimeBridgeError::fatal(
+            "runtime bridge does not support thread compact",
+        ))
+    }
     fn resolve_approval(
         &self,
         _decision: RuntimeApprovalDecision,
@@ -2995,6 +3488,7 @@ pub struct RuntimeBridgeFeatures {
     pub file_change_approval: bool,
     pub file_change_events: bool,
     pub auto_approval_review: bool,
+    pub thread_compact: bool,
 }
 
 impl RuntimeBridgeFeatures {
@@ -3026,6 +3520,16 @@ pub struct RuntimeTurnStartRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeTurnCancelRequest {
     pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeThreadCompactRequest {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeThreadCompactResult {
     pub turn_id: String,
 }
 
@@ -3752,6 +4256,19 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn token_usage_updated(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        usage: dasclaw_core::response_types::TokenUsage,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::TokenUsageUpdated { usage },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -3814,6 +4331,9 @@ pub enum RuntimeTurnOutcome {
     },
     AutoApprovalReviewCompleted {
         update: RuntimeAutoApprovalReviewUpdate,
+    },
+    TokenUsageUpdated {
+        usage: dasclaw_core::response_types::TokenUsage,
     },
     Completed {
         output: String,
@@ -4185,7 +4705,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                     }
                                 }
                                 Ok(dasclaw_runtime::AgentEvent::Completed(output)) => {
-                                    return Ok(output.text);
+                                    return Ok(output);
                                 }
                                 Ok(dasclaw_runtime::AgentEvent::ApprovalNeeded {
                                     request_id,
@@ -4290,7 +4810,14 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
 
                 bridge.cleanup_runtime_turn(&runtime_cleanup_turn_id, &runtime_cleanup_agent);
                 match result {
-                    Ok(output) => updates.complete(thread_id, turn_id, output),
+                    Ok(output) => {
+                        updates.token_usage_updated(
+                            thread_id.clone(),
+                            turn_id.clone(),
+                            output.usage,
+                        );
+                        updates.complete(thread_id, turn_id, output.text);
+                    }
                     Err(error) => updates.fail(thread_id, turn_id, error.to_string()),
                 }
             })
@@ -4475,201 +5002,6 @@ fn redact_snapshot_secret(message: &str, snapshot: &RuntimeModelProviderSnapshot
     message.replace(&snapshot.api_key, "<redacted>")
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SessionThreadHost {
-    next_thread_id: u64,
-    next_turn_id: u64,
-    threads: Vec<ThreadRecord>,
-    turns: Vec<TurnRecord>,
-}
-
-impl SessionThreadHost {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            next_thread_id: 1,
-            next_turn_id: 1,
-            threads: Vec::new(),
-            turns: Vec::new(),
-        }
-    }
-
-    fn create(&mut self, params: ThreadStartParams) -> Result<String, AppServerError> {
-        let cwd = params
-            .cwd
-            .as_deref()
-            .map(std::path::Path::new)
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let sandbox_context = crate::sandbox_protocol::resolve_thread_context(
-            params.sandbox,
-            params.permission_profile,
-            cwd,
-            "thread/start",
-        )?;
-        let thread_id = format!("thread_{}", self.next_thread_id);
-        self.next_thread_id += 1;
-        self.threads.push(ThreadRecord {
-            thread_id: thread_id.clone(),
-            title: None,
-            workspace_root: params.cwd,
-            sandbox_context,
-        });
-        Ok(thread_id)
-    }
-
-    fn list(&self) -> Vec<ThreadSummary> {
-        self.threads.iter().map(ThreadRecord::to_summary).collect()
-    }
-
-    fn summary(&self, thread_id: &str) -> Option<ThreadSummary> {
-        self.threads
-            .iter()
-            .find(|thread| thread.thread_id == thread_id)
-            .map(ThreadRecord::to_summary)
-    }
-
-    fn next_turn_id(&self) -> String {
-        format!("turn_{}", self.next_turn_id)
-    }
-
-    fn record_started_turn(&mut self, thread_id: &str, turn_id: String) {
-        self.next_turn_id += 1;
-        self.turns.push(TurnRecord {
-            thread_id: thread_id.to_string(),
-            turn_id,
-            status: TurnStatus::Pending,
-            output: None,
-            error: None,
-        });
-    }
-
-    fn apply_runtime_turn_update(&mut self, update: RuntimeTurnUpdate) -> Option<TurnSummary> {
-        let turn = self
-            .turns
-            .iter_mut()
-            .find(|turn| turn.thread_id == update.thread_id && turn.turn_id == update.turn_id)?;
-        if turn.status != TurnStatus::Pending {
-            return None;
-        }
-
-        match update.outcome {
-            RuntimeTurnOutcome::Delta { .. }
-            | RuntimeTurnOutcome::ReasoningSummaryDelta { .. }
-            | RuntimeTurnOutcome::ApprovalRequested { .. }
-            | RuntimeTurnOutcome::ToolResult { .. }
-            | RuntimeTurnOutcome::CommandOutputDelta { .. }
-            | RuntimeTurnOutcome::DynamicToolCallRequested { .. }
-            | RuntimeTurnOutcome::ToolUserInputRequested { .. }
-            | RuntimeTurnOutcome::FileChangeApprovalRequested { .. }
-            | RuntimeTurnOutcome::PermissionsApprovalRequested { .. }
-            | RuntimeTurnOutcome::FileChangeOutputDelta { .. }
-            | RuntimeTurnOutcome::FileChangePatchUpdated { .. }
-            | RuntimeTurnOutcome::AutoApprovalReviewStarted { .. }
-            | RuntimeTurnOutcome::AutoApprovalReviewCompleted { .. } => return None,
-            RuntimeTurnOutcome::Completed { output } => {
-                turn.status = TurnStatus::Completed;
-                turn.output = Some(output);
-                turn.error = None;
-            }
-            RuntimeTurnOutcome::Failed { error } => {
-                turn.status = TurnStatus::Failed;
-                turn.output = None;
-                turn.error = Some(error);
-            }
-        }
-
-        Some(turn.to_summary())
-    }
-
-    fn turn_is_pending(&self, thread_id: &str, turn_id: &str) -> bool {
-        self.turns.iter().any(|turn| {
-            turn.thread_id == thread_id
-                && turn.turn_id == turn_id
-                && turn.status == TurnStatus::Pending
-        })
-    }
-
-    fn has_pending_turns(&self) -> bool {
-        self.turns
-            .iter()
-            .any(|turn| turn.status == TurnStatus::Pending)
-    }
-
-    fn cancel_turn(&mut self, thread_id: &str, turn_id: &str) -> Option<bool> {
-        let turn = self
-            .turns
-            .iter_mut()
-            .find(|turn| turn.thread_id == thread_id && turn.turn_id == turn_id)?;
-        if turn.status == TurnStatus::Cancelled {
-            return Some(false);
-        }
-
-        turn.status = TurnStatus::Cancelled;
-        Some(true)
-    }
-
-    fn cancel_pending_turns(&mut self) -> Vec<TurnSummary> {
-        let mut cancelled = Vec::new();
-        for turn in &mut self.turns {
-            if turn.status == TurnStatus::Pending {
-                turn.status = TurnStatus::Cancelled;
-                turn.output = None;
-                turn.error = None;
-                cancelled.push(turn.to_summary());
-            }
-        }
-        cancelled
-    }
-
-    fn list_turns(&self, thread_id: &str) -> Vec<TurnSummary> {
-        self.turns
-            .iter()
-            .filter(|turn| turn.thread_id == thread_id)
-            .map(TurnRecord::to_summary)
-            .collect()
-    }
-
-    fn turn_summary(&self, thread_id: &str, turn_id: &str) -> Option<TurnSummary> {
-        self.turns
-            .iter()
-            .find(|turn| turn.thread_id == thread_id && turn.turn_id == turn_id)
-            .map(TurnRecord::to_summary)
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.threads.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.threads.is_empty()
-    }
-
-    #[must_use]
-    pub fn contains(&self, thread_id: &str) -> bool {
-        self.threads
-            .iter()
-            .any(|thread| thread.thread_id == thread_id)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadRecord {
-    pub thread_id: String,
-    pub title: Option<String>,
-    pub workspace_root: Option<String>,
-    pub sandbox_context: RuntimeSandboxContext,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummary {
-    pub thread_id: String,
-    pub title: Option<String>,
-    pub workspace_root: Option<String>,
-    pub sandbox_context: RuntimeSandboxContext,
-}
-
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestThreadParams {
@@ -4681,35 +5013,6 @@ struct TestThreadParams {
 struct TestThreadHandle {
     thread_id: String,
     lifecycle: LifecycleSnapshot,
-}
-
-impl ThreadRecord {
-    fn to_summary(&self) -> ThreadSummary {
-        ThreadSummary {
-            thread_id: self.thread_id.clone(),
-            title: self.title.clone(),
-            workspace_root: self.workspace_root.clone(),
-            sandbox_context: self.sandbox_context.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnRecord {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    pub output: Option<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnSummary {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    pub output: Option<String>,
-    pub error: Option<String>,
 }
 
 #[cfg(test)]
@@ -4739,33 +5042,25 @@ struct TestTurnsSnapshot {
     turns: Vec<TurnSummary>,
 }
 
-impl TurnRecord {
-    fn to_summary(&self) -> TurnSummary {
-        TurnSummary {
-            thread_id: self.thread_id.clone(),
-            turn_id: self.turn_id.clone(),
-            status: self.status,
-            output: self.output.clone(),
-            error: self.error.clone(),
-        }
-    }
-}
-
 fn codex_turn_from_summary(summary: TurnSummary) -> CodexTurn {
-    let items = match summary.status {
-        TurnStatus::Pending => vec![CodexThreadItem::started_agent_message(
-            summary.turn_id.clone(),
-        )],
-        TurnStatus::Completed => vec![CodexThreadItem::completed_agent_message(
-            summary.turn_id.clone(),
-            summary.output.clone().unwrap_or_default(),
-        )],
-        TurnStatus::Failed | TurnStatus::Cancelled => {
-            vec![CodexThreadItem::completed_agent_message(
+    let items = if summary.items.is_empty() {
+        match summary.status {
+            TurnStatus::Pending => vec![CodexThreadItem::started_agent_message(
+                summary.turn_id.clone(),
+            )],
+            TurnStatus::Completed => vec![CodexThreadItem::completed_agent_message(
                 summary.turn_id.clone(),
                 summary.output.clone().unwrap_or_default(),
-            )]
+            )],
+            TurnStatus::Failed | TurnStatus::Cancelled => {
+                vec![CodexThreadItem::completed_agent_message(
+                    summary.turn_id.clone(),
+                    summary.output.clone().unwrap_or_default(),
+                )]
+            }
         }
+    } else {
+        summary.items
     };
     CodexTurn {
         id: summary.turn_id,
@@ -4837,6 +5132,38 @@ impl NotificationBus {
 
     pub fn emit_thread_started(&mut self, event: ThreadStartedEvent) {
         self.push(ServerNotification::thread_started(event));
+    }
+
+    pub fn emit_thread_status_changed(&mut self, event: ThreadStatusChangedEvent) {
+        self.push(ServerNotification::thread_status_changed(event));
+    }
+
+    pub fn emit_thread_archived(&mut self, event: ThreadArchivedEvent) {
+        self.push(ServerNotification::thread_archived(event));
+    }
+
+    pub fn emit_thread_unarchived(&mut self, event: ThreadUnarchivedEvent) {
+        self.push(ServerNotification::thread_unarchived(event));
+    }
+
+    pub fn emit_thread_name_updated(&mut self, event: ThreadNameUpdatedEvent) {
+        self.push(ServerNotification::thread_name_updated(event));
+    }
+
+    pub fn emit_thread_goal_updated(&mut self, event: ThreadGoalUpdatedEvent) {
+        self.push(ServerNotification::thread_goal_updated(event));
+    }
+
+    pub fn emit_thread_goal_cleared(&mut self, event: ThreadGoalClearedEvent) {
+        self.push(ServerNotification::thread_goal_cleared(event));
+    }
+
+    pub fn emit_thread_token_usage_updated(&mut self, event: ThreadTokenUsageUpdatedEvent) {
+        self.push(ServerNotification::thread_token_usage_updated(event));
+    }
+
+    pub fn emit_thread_compacted(&mut self, event: ThreadCompactedEvent) {
+        self.push(ServerNotification::thread_compacted(event));
     }
 
     pub fn emit_turn_started(&mut self, event: TurnStartedEvent) {
@@ -5044,6 +5371,27 @@ fn invalid_request_response(id: Option<Value>, message: String) -> JsonRpcRespon
         message,
         ErrorCode::InvalidParams,
     )
+}
+
+fn history_import_unsupported() -> AppServerError {
+    AppServerError::invalid_request(
+        "thread_lifecycle",
+        "history import is not supported by dasclaw app-server yet",
+    )
+}
+
+fn token_usage_breakdown(usage: dasclaw_core::response_types::TokenUsage) -> TokenUsageBreakdown {
+    let input_tokens = u64::from(usage.input_tokens);
+    let output_tokens = u64::from(usage.output_tokens);
+    let cached_input_tokens = u64::from(usage.cache_creation_input_tokens)
+        .saturating_add(u64::from(usage.cache_read_input_tokens));
+    TokenUsageBreakdown {
+        total_tokens: input_tokens.saturating_add(output_tokens),
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        reasoning_output_tokens: 0,
+    }
 }
 
 fn method_not_found_response(id: Option<Value>, method: String) -> JsonRpcResponse {
@@ -5320,6 +5668,20 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::THREAD_START,
         method::THREAD_LIST,
         method::THREAD_READ,
+        method::THREAD_RESUME,
+        method::THREAD_FORK,
+        method::THREAD_ARCHIVE,
+        method::THREAD_UNARCHIVE,
+        method::THREAD_UNSUBSCRIBE,
+        method::THREAD_NAME_SET,
+        method::THREAD_METADATA_UPDATE,
+        method::THREAD_ROLLBACK,
+        method::THREAD_LOADED_LIST,
+        method::THREAD_INJECT_ITEMS,
+        method::THREAD_GOAL_SET,
+        method::THREAD_GOAL_GET,
+        method::THREAD_GOAL_CLEAR,
+        method::THREAD_COMPACT_START,
         method::TURN_START,
         method::TURN_INTERRUPT,
         method::THREAD_TURNS_LIST,
@@ -5378,7 +5740,9 @@ fn unix_timestamp_string() -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::fs;
     use std::io::Cursor;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -7293,6 +7657,71 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_rejects_when_pending_turn_cancel_cannot_persist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("threads.json");
+        let mut server = AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge))
+            .with_thread_snapshot_path(path.clone())
+            .expect("persistent server");
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+        replace_file_with_directory(&path);
+
+        let shutdown = server.shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::Test),
+            timeout_ms: None,
+        });
+
+        assert!(!shutdown.accepted);
+        assert_eq!(shutdown.lifecycle.state, LifecycleState::Degraded);
+        let notifications = server.drain_notifications();
+        assert_eq!(notifications[0].method, "error");
+        assert_eq!(notifications[0].params["code"], "SERVICE_DEGRADED");
+        assert_eq!(notifications[1].method, "lifecycle/changed");
+        assert_eq!(notifications[1].params["lifecycle"]["state"], "degraded");
+        assert_eq!(
+            server
+                .list_turns_for_test(TestTurnsSnapshotParams {
+                    thread_id: thread.thread.id
+                })
+                .expect("turn list")
+                .turns[0]
+                .status,
+            TurnStatus::Pending
+        );
+    }
+
+    #[test]
     fn server_info_exposes_protocol_version() {
         let server = AppServer::new();
         let info = server.server_info();
@@ -8115,6 +8544,8 @@ mod tests {
             matrix.health.methods,
             matrix.session.methods,
             matrix.model_provider.methods,
+            matrix.thread_lifecycle.methods,
+            matrix.thread_goal.methods,
             matrix.logs.methods,
         ]
         .concat();
@@ -8475,6 +8906,83 @@ mod tests {
     }
 
     #[test]
+    fn app_server_thread_snapshot_reload_projects_thread_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("threads.json");
+        let snapshot = serde_json::json!({
+            "version": 1,
+            "nextThreadId": 2,
+            "nextTurnId": 1,
+            "threads": [
+                {
+                    "threadId": "thread_1",
+                    "title": "Loaded",
+                    "workspaceRoot": "/tmp/workspace",
+                    "sandbox": null,
+                    "permissionProfile": null,
+                    "forkedFromId": "thread_0",
+                    "ephemeral": false,
+                    "archived": false,
+                    "subscribed": true,
+                    "path": "/state/thread_1",
+                    "createdAt": 11,
+                    "updatedAt": 22,
+                    "gitInfo": {
+                        "sha": "abc123",
+                        "branch": "main",
+                        "originUrl": null
+                    },
+                    "goal": null,
+                    "compactedTurnId": null,
+                    "tokenUsage": null
+                }
+            ],
+            "turns": []
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot JSON"),
+        )
+        .expect("write snapshot");
+
+        let mut server = AppServer::new()
+            .with_thread_snapshot_path(path)
+            .expect("load thread snapshot");
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+
+        let response = server
+            .thread_read(ThreadReadParams {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/read should load persisted thread");
+        let thread = response.thread;
+        assert_eq!(thread.id, "thread_1");
+        assert_eq!(thread.forked_from_id.as_deref(), Some("thread_0"));
+        assert!(!thread.ephemeral);
+        assert_eq!(thread.created_at, 11);
+        assert_eq!(thread.updated_at, 22);
+        assert_eq!(thread.path.as_deref(), Some("/state/thread_1"));
+        assert_eq!(thread.cwd, "/tmp/workspace");
+        assert_eq!(thread.name.as_deref(), Some("Loaded"));
+        assert_eq!(
+            thread.git_info.expect("git info").sha.as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
     fn json_rpc_thread_read_rejects_unknown_thread() {
         let mut server = initialized_server();
         let response = server
@@ -8487,6 +8995,577 @@ mod tests {
         assert_eq!(value["error"]["code"], -32602);
         assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
         assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn thread_archive_unarchive_and_name_emit_notifications() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let name = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"name","method":"thread/name/set","params":{"threadId":"thread_1","name":"  Ship R4  "}}"#,
+            )
+            .expect("thread/name/set should return a response");
+        let archive = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"archive","method":"thread/archive","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/archive should return a response");
+        let unarchive = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"unarchive","method":"thread/unarchive","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/unarchive should return a response");
+
+        let name_value: Value = serde_json::from_str(&name).expect("name response JSON");
+        let archive_value: Value = serde_json::from_str(&archive).expect("archive response JSON");
+        let unarchive_value: Value =
+            serde_json::from_str(&unarchive).expect("unarchive response JSON");
+        assert_eq!(name_value["result"], serde_json::json!({}));
+        assert_eq!(archive_value["result"], serde_json::json!({}));
+        assert_eq!(unarchive_value["result"]["thread"]["name"], "Ship R4");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/name/updated"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["threadName"] == "Ship R4"
+        }));
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/archived" && line["params"]["threadId"] == "thread_1"
+        }));
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/unarchived" && line["params"]["threadId"] == "thread_1"
+        }));
+    }
+
+    #[test]
+    fn thread_resume_rejects_missing_history_and_path_mismatch_but_loads_existing_id() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let missing = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"missing","method":"thread/resume","params":{"threadId":"missing"}}"#,
+            )
+            .expect("thread/resume missing should return a response");
+        let history = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"history","method":"thread/resume","params":{"threadId":"thread_1","history":[{"role":"user"}]}}"#,
+            )
+            .expect("thread/resume history import should return a response");
+        let path = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"path","method":"thread/resume","params":{"threadId":"thread_1","path":"/other/thread.json"}}"#,
+            )
+            .expect("thread/resume path mismatch should return a response");
+        let success = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"resume","method":"thread/resume","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/resume should return a response");
+
+        let missing_value: Value = serde_json::from_str(&missing).expect("missing response JSON");
+        let history_value: Value = serde_json::from_str(&history).expect("history response JSON");
+        let path_value: Value = serde_json::from_str(&path).expect("path response JSON");
+        let success_value: Value = serde_json::from_str(&success).expect("success response JSON");
+        assert_eq!(missing_value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(
+            history_value["error"]["message"],
+            "history import is not supported by dasclaw app-server yet"
+        );
+        assert_eq!(
+            path_value["error"]["message"],
+            "history import is not supported by dasclaw app-server yet"
+        );
+        assert_eq!(success_value["result"]["thread"]["id"], "thread_1");
+        assert_eq!(success_value["result"]["modelProvider"], "openai");
+        assert_eq!(success_value["result"]["cwd"], "/workspace");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/status/changed"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["status"]["type"] == "idle"
+        }));
+    }
+
+    #[test]
+    fn thread_fork_sets_forked_from_id_and_clones_turns_unless_excluded() {
+        let mut server = initialized_server();
+        let source = create_completed_thread_with_turns(&mut server, 2);
+        server.drain_json_rpc_notifications();
+
+        let cloned = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"fork","method":"thread/fork","params":{{"threadId":"{source}","ephemeral":true}}}}"#
+            ))
+            .expect("thread/fork should return a response");
+        let excluded = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"fork-empty","method":"thread/fork","params":{{"threadId":"{source}","excludeTurns":true}}}}"#
+            ))
+            .expect("thread/fork exclude turns should return a response");
+
+        let cloned_value: Value = serde_json::from_str(&cloned).expect("fork response JSON");
+        let excluded_value: Value =
+            serde_json::from_str(&excluded).expect("fork exclude response JSON");
+        assert_eq!(cloned_value["result"]["thread"]["id"], "thread_2");
+        assert_eq!(cloned_value["result"]["thread"]["forkedFromId"], source);
+        assert_eq!(cloned_value["result"]["thread"]["ephemeral"], true);
+        assert_eq!(
+            cloned_value["result"]["thread"]["turns"]
+                .as_array()
+                .expect("turns array")
+                .len(),
+            2
+        );
+        assert_eq!(excluded_value["result"]["thread"]["id"], "thread_3");
+        assert_eq!(excluded_value["result"]["thread"]["forkedFromId"], source);
+        assert_eq!(
+            excluded_value["result"]["thread"]["turns"]
+                .as_array()
+                .expect("turns array")
+                .len(),
+            0
+        );
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/started" && line["params"]["thread"]["id"] == "thread_2"
+        }));
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/started" && line["params"]["thread"]["id"] == "thread_3"
+        }));
+    }
+
+    #[test]
+    fn thread_fork_rejects_source_with_pending_turns() {
+        let mut server = initialized_server();
+        let source = create_completed_thread_with_turns(&mut server, 1);
+        let pending_id = server.threads.next_turn_id();
+        server
+            .threads
+            .record_started_turn(&source, pending_id)
+            .expect("turn should be recorded");
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"fork","method":"thread/fork","params":{{"threadId":"{source}"}}}}"#
+            ))
+            .expect("thread/fork should return a response");
+        let value: Value = serde_json::from_str(&response).expect("fork response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("pending turns")
+        );
+    }
+
+    #[test]
+    fn thread_unsubscribe_returns_unsubscribed_then_not_subscribed_and_not_loaded() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"resume","method":"thread/resume","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/resume should return a response");
+        server.drain_json_rpc_notifications();
+
+        let first = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"first","method":"thread/unsubscribe","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/unsubscribe should return a response");
+        let second = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"second","method":"thread/unsubscribe","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/unsubscribe should return a response");
+        let missing = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"missing","method":"thread/unsubscribe","params":{"threadId":"missing"}}"#,
+            )
+            .expect("thread/unsubscribe should return a response");
+
+        let first_value: Value = serde_json::from_str(&first).expect("first response JSON");
+        let second_value: Value = serde_json::from_str(&second).expect("second response JSON");
+        let missing_value: Value = serde_json::from_str(&missing).expect("missing response JSON");
+        assert_eq!(first_value["result"]["status"], "unsubscribed");
+        assert_eq!(second_value["result"]["status"], "notSubscribed");
+        assert_eq!(missing_value["result"]["status"], "notLoaded");
+    }
+
+    #[test]
+    fn thread_rollback_rejects_pending_removes_terminal_turns_and_validates_count() {
+        let mut server = initialized_server();
+        let thread_id = create_completed_thread_with_turns(&mut server, 2);
+        let pending_id = server.threads.next_turn_id();
+        server
+            .threads
+            .record_started_turn(&thread_id, pending_id)
+            .expect("record pending turn");
+
+        let pending = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"pending","method":"thread/rollback","params":{{"threadId":"{thread_id}","numTurns":1}}}}"#
+            ))
+            .expect("thread/rollback pending should return a response");
+        let pending_value: Value = serde_json::from_str(&pending).expect("pending response JSON");
+        assert_eq!(pending_value["error"]["data"]["code"], "INVALID_PARAMS");
+
+        let pending_id = server
+            .threads
+            .list_turns(&thread_id)
+            .last()
+            .expect("pending turn")
+            .turn_id
+            .clone();
+        server
+            .threads
+            .cancel_turn(&thread_id, &pending_id)
+            .expect("cancel pending turn");
+        let zero = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"zero","method":"thread/rollback","params":{{"threadId":"{thread_id}","numTurns":0}}}}"#
+            ))
+            .expect("thread/rollback zero should return a response");
+        let success = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"success","method":"thread/rollback","params":{{"threadId":"{thread_id}","numTurns":2}}}}"#
+            ))
+            .expect("thread/rollback should return a response");
+
+        let zero_value: Value = serde_json::from_str(&zero).expect("zero response JSON");
+        let success_value: Value = serde_json::from_str(&success).expect("success response JSON");
+        assert_eq!(zero_value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(
+            success_value["result"]["thread"]["turns"]
+                .as_array()
+                .expect("turns array")
+                .len(),
+            1
+        );
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/status/changed" && line["params"]["threadId"] == thread_id
+        }));
+    }
+
+    #[test]
+    fn thread_loaded_list_paginates_subscribed_non_archived_ids_in_creation_order() {
+        let mut server = initialized_server();
+        for cwd in ["/one", "/two", "/three"] {
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{{"cwd":"{cwd}"}}}}"#
+                ))
+                .expect("thread/start should return a response");
+        }
+        for thread_id in ["thread_1", "thread_2", "thread_3"] {
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"resume","method":"thread/resume","params":{{"threadId":"{thread_id}"}}}}"#
+                ))
+                .expect("thread/resume should return a response");
+        }
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"archive","method":"thread/archive","params":{"threadId":"thread_2"}}"#,
+            )
+            .expect("thread/archive should return a response");
+
+        let first = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"loaded","method":"thread/loaded/list","params":{"limit":1}}"#,
+            )
+            .expect("thread/loaded/list should return a response");
+        let first_value: Value = serde_json::from_str(&first).expect("first response JSON");
+        let cursor = first_value["result"]["nextCursor"]
+            .as_str()
+            .expect("next cursor");
+        let second = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"loaded2","method":"thread/loaded/list","params":{{"cursor":"{cursor}","limit":5}}}}"#
+            ))
+            .expect("thread/loaded/list should return a response");
+        let zero = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"zero","method":"thread/loaded/list","params":{"limit":0}}"#,
+            )
+            .expect("thread/loaded/list zero should return a response");
+
+        let second_value: Value = serde_json::from_str(&second).expect("second response JSON");
+        let zero_value: Value = serde_json::from_str(&zero).expect("zero response JSON");
+        assert_eq!(
+            first_value["result"]["data"],
+            serde_json::json!(["thread_1"])
+        );
+        assert_eq!(
+            second_value["result"]["data"],
+            serde_json::json!(["thread_3"])
+        );
+        assert_eq!(
+            second_value["result"]["nextCursor"],
+            serde_json::Value::Null
+        );
+        assert_eq!(zero_value["error"]["data"]["code"], "INVALID_PARAMS");
+    }
+
+    #[test]
+    fn thread_inject_items_rejects_missing_thread_and_appends_without_executing() {
+        let mut server = initialized_server();
+        let missing = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"missing","method":"thread/inject_items","params":{"threadId":"missing","items":[{"type":"agentMessage","text":"ghost"}]}}"#,
+            )
+            .expect("thread/inject_items missing should return a response");
+        let missing_value: Value = serde_json::from_str(&missing).expect("missing response JSON");
+        assert_eq!(missing_value["error"]["data"]["code"], "INVALID_PARAMS");
+
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        let first = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"inject1","method":"thread/inject_items","params":{"threadId":"thread_1","items":[{"type":"agentMessage","text":"seed"}]}}"#,
+            )
+            .expect("thread/inject_items should return a response");
+        let second = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"inject2","method":"thread/inject_items","params":{"threadId":"thread_1","items":[{"type":"reasoning","summary":["note"]}]}}"#,
+            )
+            .expect("thread/inject_items append should return a response");
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"read","method":"thread/read","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/read should return a response");
+
+        let first_value: Value = serde_json::from_str(&first).expect("first response JSON");
+        let second_value: Value = serde_json::from_str(&second).expect("second response JSON");
+        let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
+        assert_eq!(first_value["result"], serde_json::json!({}));
+        assert_eq!(second_value["result"], serde_json::json!({}));
+        let turns = read_value["result"]["thread"]["turns"]
+            .as_array()
+            .expect("turns array");
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["items"][0]["type"], "agentMessage");
+        assert_eq!(turns[0]["items"][0]["text"], "seed");
+        assert_eq!(turns[0]["items"][1]["type"], "reasoning");
+        assert_eq!(turns[0]["items"][1]["summary"], serde_json::json!(["note"]));
+    }
+
+    #[test]
+    fn thread_goal_set_get_and_clear_persist_and_emit_notifications() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let set = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"set","method":"thread/goal/set","params":{"threadId":"thread_1","objective":" Ship R4 ","status":"budgetLimited","tokenBudget":5000}}"#,
+            )
+            .expect("thread/goal/set should return a response");
+        let get = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"get","method":"thread/goal/get","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/goal/get should return a response");
+        let clear = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"clear","method":"thread/goal/clear","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/goal/clear should return a response");
+        let after_clear = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"after","method":"thread/goal/get","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/goal/get after clear should return a response");
+
+        let set_value: Value = serde_json::from_str(&set).expect("set response JSON");
+        let get_value: Value = serde_json::from_str(&get).expect("get response JSON");
+        let clear_value: Value = serde_json::from_str(&clear).expect("clear response JSON");
+        let after_clear_value: Value =
+            serde_json::from_str(&after_clear).expect("after clear response JSON");
+        assert_eq!(set_value["result"]["goal"]["objective"], "Ship R4");
+        assert_eq!(set_value["result"]["goal"]["status"], "budgetLimited");
+        assert_eq!(set_value["result"]["goal"]["tokenBudget"], 5000);
+        assert_eq!(get_value["result"]["goal"], set_value["result"]["goal"]);
+        assert_eq!(clear_value["result"], serde_json::json!({}));
+        assert_eq!(after_clear_value["result"]["goal"], serde_json::Value::Null);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/goal/updated"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["goal"]["objective"] == "Ship R4"
+        }));
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/goal/cleared" && line["params"]["threadId"] == "thread_1"
+        }));
+    }
+
+    #[test]
+    fn thread_token_usage_update_accumulates_and_emits_nonzero_usage() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        server.runtime_turn_updates.token_usage_updated(
+            thread.thread_id.clone(),
+            start.turn.id.clone(),
+            TokenUsage {
+                input_tokens: 6,
+                output_tokens: 4,
+                cache_creation_input_tokens: 1,
+                cache_read_input_tokens: 2,
+            },
+        );
+        server.runtime_turn_updates.token_usage_updated(
+            thread.thread_id.clone(),
+            start.turn.id.clone(),
+            TokenUsage {
+                input_tokens: 3,
+                output_tokens: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 1,
+            },
+        );
+
+        let notifications = server.drain_notifications();
+        let usage_events = notifications
+            .iter()
+            .filter(|notification| notification.method == "thread/tokenUsage/updated")
+            .collect::<Vec<_>>();
+        assert_eq!(usage_events.len(), 2);
+        assert_eq!(
+            usage_events[0].params["tokenUsage"]["last"]["inputTokens"],
+            6
+        );
+        assert_eq!(
+            usage_events[0].params["tokenUsage"]["last"]["cachedInputTokens"],
+            3
+        );
+        assert_eq!(
+            usage_events[0].params["tokenUsage"]["last"]["totalTokens"],
+            10
+        );
+        assert_eq!(
+            usage_events[1].params["tokenUsage"]["total"]["inputTokens"],
+            9
+        );
+        assert_eq!(
+            usage_events[1].params["tokenUsage"]["total"]["cachedInputTokens"],
+            4
+        );
+        assert_eq!(
+            usage_events[1].params["tokenUsage"]["total"]["outputTokens"],
+            6
+        );
+    }
+
+    #[test]
+    fn thread_compact_start_is_capability_unavailable_without_runtime_owner() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"compact","method":"thread/compact/start","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/compact/start should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("compact response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert_ne!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+        assert!(
+            !json_rpc_values(server.drain_json_rpc_notifications())
+                .iter()
+                .any(|line| line["method"] == "thread/compacted")
+        );
+    }
+
+    #[test]
+    fn thread_compact_start_records_compacted_turn_when_runtime_supports_it() {
+        let bridge = Arc::new(CompactRuntimeBridge);
+        let mut server = initialized_server_with_bridge(bridge);
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"compact","method":"thread/compact/start","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/compact/start should return a response");
+        let value: Value = serde_json::from_str(&response).expect("compact response JSON");
+
+        assert_eq!(value["result"], serde_json::json!({}));
+        assert_eq!(
+            server
+                .threads
+                .summary("thread_1")
+                .expect("thread summary")
+                .compacted_turn_id
+                .as_deref(),
+            Some("turn_compacted")
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/compacted"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["turnId"] == "turn_compacted"
+        }));
     }
 
     #[test]
@@ -8820,6 +9899,66 @@ mod tests {
             })
             .expect("turn/list should still work after fail-safe rejection");
         assert!(turns.turns.is_empty());
+    }
+
+    #[test]
+    fn turn_start_reports_pending_cancel_persist_failure_after_runtime_start_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("threads.json");
+        let bridge = Arc::new(SnapshotBlockingRuntimeBridge {
+            snapshot_path: path.clone(),
+        });
+        let mut server = AppServer::with_runtime_bridge(bridge)
+            .with_thread_snapshot_path(path)
+            .expect("persistent server");
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_notifications();
+
+        let error = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("hello runtime".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect_err("runtime and rollback persistence failures should be reported");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::ServiceDegraded);
+                assert_eq!(data.capability.as_deref(), Some("thread_lifecycle"));
+                assert!(data.message.contains("runtime start failed"));
+                assert!(data.message.contains("failed to cancel pending turn"));
+            }
+        }
+        let turns = server
+            .list_turns_for_test(TestTurnsSnapshotParams {
+                thread_id: thread.thread.id,
+            })
+            .expect("turn/list should still work");
+        assert_eq!(turns.turns[0].status, TurnStatus::Pending);
     }
 
     #[test]
@@ -9807,14 +10946,70 @@ mod tests {
             .expect("turn should start");
 
         let updates = wait_for_runtime_updates(&updates);
-        assert_eq!(updates.len(), 2, "expected delta + completion: {updates:?}");
+        assert_eq!(
+            updates.len(),
+            3,
+            "expected delta + usage + completion: {updates:?}"
+        );
         assert!(matches!(
             &updates[0].outcome,
             RuntimeTurnOutcome::Delta { delta } if delta == "invoke bridge path"
         ));
         assert!(matches!(
             &updates[1].outcome,
+            RuntimeTurnOutcome::TokenUsageUpdated { usage } if *usage == TokenUsage::default()
+        ));
+        assert!(matches!(
+            &updates[2].outcome,
             RuntimeTurnOutcome::Completed { output } if output == "invoke bridge path"
+        ));
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_forwards_nonzero_completed_usage_before_completion() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_usage(
+                    "usage bridge path",
+                    TokenUsage {
+                        input_tokens: 8,
+                        output_tokens: 5,
+                        cache_creation_input_tokens: 2,
+                        cache_read_input_tokens: 3,
+                    },
+                ),
+            ])));
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext::empty(),
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let updates = wait_for_runtime_updates(&updates);
+        assert!(matches!(
+            &updates[0].outcome,
+            RuntimeTurnOutcome::Delta { delta } if delta == "usage bridge path"
+        ));
+        assert!(matches!(
+            &updates[1].outcome,
+            RuntimeTurnOutcome::TokenUsageUpdated { usage }
+                if usage.input_tokens == 8
+                    && usage.output_tokens == 5
+                    && usage.cache_creation_input_tokens == 2
+                    && usage.cache_read_input_tokens == 3
+        ));
+        assert!(matches!(
+            &updates[2].outcome,
+            RuntimeTurnOutcome::Completed { output } if output == "usage bridge path"
         ));
     }
 
@@ -12485,6 +13680,35 @@ mod tests {
         initialized_server_with_bridge(Arc::new(NoopRuntimeBridge))
     }
 
+    fn create_completed_thread_with_turns(server: &mut AppServer, count: usize) -> String {
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: Some("/workspace".to_string()),
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let thread_id = thread.thread.id;
+        for index in 0..count {
+            let turn_id = server.threads.next_turn_id();
+            server
+                .threads
+                .record_started_turn(&thread_id, turn_id.clone())
+                .expect("turn should be recorded");
+            server
+                .threads
+                .apply_runtime_turn_update(RuntimeTurnUpdate {
+                    thread_id: thread_id.clone(),
+                    turn_id,
+                    outcome: RuntimeTurnOutcome::Completed {
+                        output: format!("turn {index}"),
+                    },
+                })
+                .expect("turn should complete");
+        }
+        thread_id
+    }
+
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
         initialized_server_with_bridge_and_capabilities(bridge, Vec::new())
     }
@@ -12589,6 +13813,15 @@ mod tests {
 
     fn json_rpc_values(lines: Vec<String>) -> Vec<Value> {
         lines.into_iter().map(json_rpc_value).collect()
+    }
+
+    fn replace_file_with_directory(path: &Path) {
+        if path.is_file() {
+            fs::remove_file(path).expect("remove snapshot file");
+        } else if path.is_dir() {
+            fs::remove_dir_all(path).expect("remove snapshot directory");
+        }
+        fs::create_dir(path).expect("create blocking snapshot directory");
     }
 
     fn text_input(text: impl Into<String>) -> Vec<dasclaw_app_server_protocol::UserInput> {
@@ -12790,9 +14023,13 @@ mod tests {
     }
 
     fn text_output(text: &str) -> RespondOutput {
+        text_output_with_usage(text, TokenUsage::default())
+    }
+
+    fn text_output_with_usage(text: &str, usage: TokenUsage) -> RespondOutput {
         RespondOutput {
             result: RespondResult::Text(text.to_string()),
-            usage: TokenUsage::default(),
+            usage,
             finish_reason: FinishReason::Stop,
             metadata: ResponseMetadata::default(),
         }
@@ -13005,6 +14242,7 @@ mod tests {
                 file_change_approval: true,
                 file_change_events: true,
                 auto_approval_review: true,
+                thread_compact: false,
             }
         }
 
@@ -13048,6 +14286,7 @@ mod tests {
                 file_change_approval: true,
                 file_change_events: true,
                 auto_approval_review: true,
+                thread_compact: false,
             }
         }
 
@@ -13272,6 +14511,61 @@ mod tests {
         fn shutdown(&self) {}
     }
 
+    #[derive(Debug)]
+    struct SnapshotBlockingRuntimeBridge {
+        snapshot_path: PathBuf,
+    }
+
+    #[derive(Debug)]
+    struct CompactRuntimeBridge;
+
+    impl RuntimeBridge for CompactRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                thread_compact: true,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn compact_thread(
+            &self,
+            _request: RuntimeThreadCompactRequest,
+        ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
+            Ok(RuntimeThreadCompactResult {
+                turn_id: "turn_compacted".to_string(),
+            })
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    impl RuntimeBridge for SnapshotBlockingRuntimeBridge {
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            replace_file_with_directory(&self.snapshot_path);
+            Err(RuntimeBridgeError::fatal("runtime start failed"))
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
     impl RuntimeBridge for RecordingRuntimeBridge {
         fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
             if let Some(completion) = self.completion.lock().expect("completion lock").clone() {
@@ -13399,6 +14693,13 @@ mod tests {
                     request.thread_id.clone(),
                     request.turn_id.clone(),
                     update,
+                );
+            }
+            RuntimeTurnOutcome::TokenUsageUpdated { usage } => {
+                request.updates.token_usage_updated(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    usage,
                 );
             }
             RuntimeTurnOutcome::Completed { output } => {
