@@ -9568,6 +9568,39 @@ mod tests {
     }
 
     #[test]
+    fn real_runtime_bridge_rejects_file_and_user_input_resolution_until_runtime_owner_exists() {
+        let bridge = DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(
+            vec![text_output("done")],
+        )));
+
+        let user_input = bridge.resolve_server_request(RuntimeServerRequestResolution {
+            request_id: "input_1".to_string(),
+            payload: RuntimeServerRequestResponse::ToolUserInput(ToolRequestUserInputResponse {
+                answers: std::collections::HashMap::new(),
+            }),
+        });
+        assert!(user_input.is_err());
+        assert!(
+            user_input
+                .unwrap_err()
+                .to_string()
+                .contains("does not support this server request response kind")
+        );
+
+        let file_change = bridge.resolve_server_request(RuntimeServerRequestResolution {
+            request_id: "file_1".to_string(),
+            payload: RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Accept),
+        });
+        assert!(file_change.is_err());
+        assert!(
+            file_change
+                .unwrap_err()
+                .to_string()
+                .contains("does not support this server request response kind")
+        );
+    }
+
+    #[test]
     fn agent_runtime_bridge_waits_for_client_dynamic_tool_response() {
         let bridge =
             DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
