@@ -2,17 +2,17 @@ use std::fmt;
 use std::sync::Arc;
 
 use dasclaw_app_server_protocol::{
-    AppServerP5Availability, AppServerServiceAvailability, CommandExecAvailability,
-    CommandExecOutputDeltaNotification, CommandExecParams, CommandExecResizeParams,
-    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
-    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
-    FsChangedNotification, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
-    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
-    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
-    FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
-    FsWriteFileParams, FsWriteFileResponse, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
-    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
+    AppServerP5Availability, AppServerR6Availability, AppServerServiceAvailability,
+    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
+    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+    CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
+    CommandExecWriteResponse, FsChangedNotification, FsCopyParams, FsCopyResponse,
+    FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse,
+    FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse,
+    FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams,
+    FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams, JobListResponse,
+    JobReadParams, JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+    LogEntryEvent, McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
     McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
     McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
@@ -253,6 +253,7 @@ impl AppServerServices {
                 filesystem: self.filesystem.is_ready(),
                 command,
             },
+            r6: AppServerR6Availability::default(),
         }
     }
 

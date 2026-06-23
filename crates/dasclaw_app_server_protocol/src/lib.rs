@@ -907,7 +907,7 @@ impl CapabilityMatrix {
                     method::CONFIG_VALUE_WRITE,
                     method::CONFIG_BATCH_WRITE,
                 ],
-                &[event::CONFIG_WARNING],
+                &[],
             );
         }
         if availability.r6.repo {
@@ -6897,6 +6897,42 @@ mod tests {
                 .mcp
                 .methods
                 .contains(&method::MCP_SERVER_OAUTH_LOGIN.to_string())
+        );
+    }
+
+    #[test]
+    fn r6_config_warning_is_advertised_only_by_warnings_capability() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
+                r6: AppServerR6Availability {
+                    config: true,
+                    warnings: true,
+                    ..AppServerR6Availability::default()
+                },
+                ..AppServerServiceAvailability::default()
+            });
+
+        assert_eq!(matrix.config.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.config.methods,
+            vec![
+                method::CONFIG_READ.to_string(),
+                method::CONFIG_VALUE_WRITE.to_string(),
+                method::CONFIG_BATCH_WRITE.to_string(),
+            ]
+        );
+        assert!(
+            !matrix
+                .config
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
+        );
+        assert_eq!(matrix.warnings.status, CapabilityStatus::Implemented);
+        assert!(
+            matrix
+                .warnings
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
         );
     }
 
