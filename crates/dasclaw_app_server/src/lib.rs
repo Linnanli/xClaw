@@ -6415,6 +6415,126 @@ mod tests {
     }
 
     #[test]
+    fn get_conversation_summary_returns_rollout_path_thread_card_shape() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let snapshot_path = temp.path().join("threads.json");
+        let rollout_path = temp.path().join("rollout.jsonl");
+        let rollout_path = rollout_path.to_string_lossy();
+        let mut server = initialized_server_with_thread_snapshot(
+            temp.path(),
+            &snapshot_path,
+            serde_json::json!({
+                "version": 1,
+                "nextThreadId": 2,
+                "nextTurnId": 1,
+                "threads": [{
+                    "threadId": "thread_1",
+                    "title": "Loaded conversation",
+                    "workspaceRoot": "/workspace",
+                    "sandbox": null,
+                    "permissionProfile": null,
+                    "forkedFromId": null,
+                    "ephemeral": false,
+                    "archived": false,
+                    "subscribed": false,
+                    "path": rollout_path.as_ref(),
+                    "createdAt": 11,
+                    "updatedAt": 22,
+                    "gitInfo": {
+                        "sha": "abc123",
+                        "branch": "main",
+                        "originUrl": "https://example.invalid/repo.git"
+                    },
+                    "goal": null,
+                    "compactedTurnId": null,
+                    "tokenUsage": null
+                }],
+                "turns": []
+            }),
+        );
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"rolloutPath":{}}}}}"#,
+                method::GET_CONVERSATION_SUMMARY,
+                serde_json::to_string(rollout_path.as_ref()).expect("rollout path json")
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+        let summary = &value["result"]["summary"];
+
+        assert_eq!(summary["conversationId"], "thread_1");
+        assert_eq!(summary["path"], rollout_path.as_ref());
+        assert_eq!(summary["preview"], "Loaded conversation");
+        assert_eq!(summary["timestamp"], "11");
+        assert_eq!(summary["updatedAt"], "22");
+        assert_eq!(summary["modelProvider"], "openai");
+        assert_eq!(summary["cwd"], "/workspace");
+        assert_eq!(summary["cliVersion"], SERVER_VERSION);
+        assert_eq!(summary["source"], "unknown");
+        assert_eq!(summary["gitInfo"]["sha"], "abc123");
+        assert_eq!(summary["gitInfo"]["branch"], "main");
+        assert_eq!(
+            summary["gitInfo"]["originUrl"],
+            "https://example.invalid/repo.git"
+        );
+    }
+
+    #[test]
+    fn get_conversation_summary_rejects_unknown_conversation_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"missing"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn get_conversation_summary_rejects_unknown_rollout_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"rolloutPath":"/tmp/missing.jsonl"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn get_conversation_summary_requires_initialized_server() {
+        let mut server = AppServer::new();
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"thread_1"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
     fn config_read_rejects_cwd_outside_root() {
         let root = tempfile::tempdir().expect("root tempdir");
         let outside = tempfile::tempdir().expect("outside tempdir");
@@ -14511,6 +14631,39 @@ mod tests {
             app_services::AppServerServices::real_with_root_for_tests(root.to_path_buf());
         let mut server =
             AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_notifications();
+        server
+    }
+
+    fn initialized_server_with_thread_snapshot(
+        root: &std::path::Path,
+        snapshot_path: &std::path::Path,
+        snapshot: serde_json::Value,
+    ) -> AppServer {
+        fs::write(
+            snapshot_path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot json"),
+        )
+        .expect("write thread snapshot");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(root.to_path_buf());
+        let mut server = AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge))
+            .with_app_services(services)
+            .with_thread_snapshot_path(snapshot_path)
+            .expect("thread snapshot should load");
         server
             .initialize(InitializeParams {
                 client: ClientInfo {
