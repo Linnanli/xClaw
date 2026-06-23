@@ -6382,6 +6382,32 @@ mod tests {
         collected
     }
 
+    fn wait_for_agent_runtime_bridge_turn_cleanup(
+        bridge: &DasclawAgentRuntimeBridge,
+        turn_id: &str,
+    ) {
+        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < cleanup_deadline {
+            let still_in_flight = bridge
+                .in_flight
+                .lock()
+                .expect("runtime turn registry should not be poisoned")
+                .contains_key(turn_id);
+            if !still_in_flight {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !bridge
+                .in_flight
+                .lock()
+                .expect("runtime turn registry should not be poisoned")
+                .contains_key(turn_id),
+            "runtime turn thread should clean up after completion"
+        );
+    }
+
     fn run_async_test<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -9833,26 +9859,7 @@ mod tests {
             }),
             "real bridge runtime wait should exit after malformed server response: {after_cancel:?}"
         );
-        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < cleanup_deadline {
-            let still_in_flight = bridge
-                .in_flight
-                .lock()
-                .expect("runtime turn registry should not be poisoned")
-                .contains_key(&turn.turn.id);
-            if !still_in_flight {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            !bridge
-                .in_flight
-                .lock()
-                .expect("runtime turn registry should not be poisoned")
-                .contains_key(&turn.turn.id),
-            "malformed dynamic tool response should let the runtime turn thread clean up"
-        );
+        wait_for_agent_runtime_bridge_turn_cleanup(&bridge, &turn.turn.id);
 
         let error = bridge
             .resolve_server_request(RuntimeServerRequestResolution {
@@ -10143,6 +10150,7 @@ mod tests {
             }),
             "permissions approval should let the turn complete: {after_approval:?}"
         );
+        wait_for_agent_runtime_bridge_turn_cleanup(&bridge, "turn_1");
         assert_eq!(executor.call_count_blocking(), 1);
     }
 
