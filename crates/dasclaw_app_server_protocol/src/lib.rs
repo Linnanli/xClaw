@@ -2110,74 +2110,69 @@ pub struct ConfigRequirementsReadResponse {
     pub allowed_sandbox_modes: Vec<SandboxMode>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigReadParams {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub keys: Vec<String>,
+    pub include_layers: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    #[serde(default)]
-    pub include_layers: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigReadResponse {
     pub config: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub layers: Vec<ConfigLayer>,
+    pub origins: std::collections::BTreeMap<String, ConfigLayerMetadata>,
+    pub layers: Option<Vec<ConfigLayer>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigLayerMetadata {
-    pub id: String,
-    pub source: ConfigLayerSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub readonly: bool,
+    pub name: ConfigLayerSource,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigLayer {
-    pub metadata: ConfigLayerMetadata,
-    pub values: serde_json::Value,
+    pub name: ConfigLayerSource,
+    pub version: String,
+    pub config: serde_json::Value,
+    pub disabled_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ConfigLayerSource {
-    Defaults,
-    System,
-    User,
-    Workspace,
-    Environment,
-    Runtime,
+    System { file: String },
+    User { file: String },
+    Project { dot_dasclaw_folder: String },
+    SessionFlags,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigValueWriteParams {
-    pub key: String,
+    pub key_path: String,
     pub value: serde_json::Value,
+    pub merge_strategy: MergeStrategy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
+    pub file_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layer: Option<ConfigLayerSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_strategy: Option<MergeStrategy>,
+    pub expected_version: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MergeStrategy {
     Replace,
-    MergeObjects,
-    Append,
-    Remove,
+    Upsert,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2185,107 +2180,92 @@ pub enum MergeStrategy {
 pub struct ConfigBatchWriteParams {
     pub edits: Vec<ConfigEdit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reload_user_config: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigEdit {
-    pub key: String,
+    pub key_path: String,
     pub value: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layer: Option<ConfigLayerSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_strategy: Option<MergeStrategy>,
+    pub merge_strategy: MergeStrategy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigWriteResponse {
     pub config: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<ConfigWarningNotification>,
+    pub version: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(default)]
-    pub include_untracked: bool,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteResponse {
+    pub sha: String,
     pub diff: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git_info: Option<CodexGitInfo>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FuzzyFileSearchParams {
     pub query: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub roots: Vec<String>,
+    pub cancellation_token: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FuzzyFileSearchResponse {
-    pub results: Vec<FuzzyFileSearchResult>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub files: Vec<FuzzyFileSearchResult>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FuzzyFileSearchResult {
+    pub root: String,
     pub path: String,
-    pub score: i64,
-    pub match_type: MatchType,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ranges: Vec<TextRange>,
+    pub match_type: FuzzyFileSearchMatchType,
+    pub file_name: String,
+    pub score: f64,
+    pub indices: Option<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum MatchType {
-    FileName,
-    Path,
-    Contents,
+#[serde(rename_all = "lowercase")]
+pub enum FuzzyFileSearchMatchType {
+    File,
+    Directory,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionUpdatedNotification {
     pub session_id: String,
-    pub results: Vec<FuzzyFileSearchResult>,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionCompletedNotification {
     pub session_id: String,
-    pub results: Vec<FuzzyFileSearchResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GetConversationSummaryParams {
-    pub thread_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub enum GetConversationSummaryParams {
+    RolloutPath { rollout_path: String },
+    ConversationId { conversation_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2297,195 +2277,169 @@ pub struct GetConversationSummaryResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
-    pub thread_id: String,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub turns: Vec<CodexTurn>,
+    pub conversation_id: String,
+    pub path: String,
+    pub preview: String,
+    pub timestamp: Option<String>,
+    pub updated_at: Option<String>,
+    pub model_provider: String,
+    pub cwd: String,
+    pub cli_version: String,
+    pub source: CodexSessionSource,
+    pub git_info: Option<CodexGitInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewStartParams {
+    pub thread_id: String,
     pub target: ReviewTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<ReviewDelivery>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ReviewTarget {
-    Thread {
-        thread_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
-    },
-    GitDiff {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-        diff: String,
-    },
-    Files {
-        paths: Vec<String>,
-    },
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReviewDelivery {
-    Notification,
-    Thread {
-        thread_id: String,
-    },
-    Webhook {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        headers: Option<serde_json::Value>,
-    },
+    Inline,
+    Detached,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewStartResponse {
-    pub review_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub turn: CodexTurn,
+    pub review_thread_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelReroutedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub from_model: String,
     pub to_model: String,
     pub reason: ModelRerouteReason,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelRerouteReason {
-    Unavailable,
-    Policy,
-    Capacity,
-    UserPreference,
-    Fallback,
+    HighRiskCyberActivity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelVerificationNotification {
-    pub verification: ModelVerification,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub verifications: Vec<ModelVerification>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelVerification {
-    pub model: String,
-    pub verified: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+pub enum ModelVerification {
+    TrustedAccessForCyber,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookStartedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
     pub run: HookRunSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
     pub run: HookRunSummary,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output: Vec<HookOutputEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookRunSummary {
-    pub run_id: String,
-    pub event: HookEventName,
-    pub status: HookRunStatus,
-    pub execution_mode: HookExecutionMode,
+    pub id: String,
+    pub event_name: HookEventName,
     pub handler_type: HookHandlerType,
+    pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
+    pub source_path: String,
     pub source: HookSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_order: u64,
+    pub status: HookRunStatus,
+    pub status_message: Option<String>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
     pub duration_ms: Option<u64>,
+    pub entries: Vec<HookOutputEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HookEventName {
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
     SessionStart,
     UserPromptSubmit,
-    PreToolUse,
-    PostToolUse,
-    Notification,
     Stop,
-    SubagentStop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum HookExecutionMode {
-    Blocking,
+    Sync,
     Async,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum HookHandlerType {
     Command,
-    Script,
-    Builtin,
+    Prompt,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookScope {
+    Thread,
+    Turn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum HookScope {
+pub enum HookSource {
+    System,
     User,
     Project,
-    Workspace,
-    Runtime,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HookSource {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
+    Mdm,
+    SessionFlags,
+    LegacyManagedConfigFile,
+    LegacyManagedConfigMdm,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum HookRunStatus {
-    Started,
+    Running,
     Completed,
     Failed,
-    Skipped,
-    TimedOut,
+    Blocked,
+    Stopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2496,59 +2450,54 @@ pub struct HookOutputEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum HookOutputEntryKind {
-    Stdout,
-    Stderr,
-    Message,
+    Warning,
+    Stop,
+    Feedback,
+    Context,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WarningNotification {
+    pub thread_id: Option<String>,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub range: Option<TextRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardianWarningNotification {
+    pub thread_id: String,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub range: Option<TextRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigWarningNotification {
-    pub message: String,
+    pub summary: String,
+    pub details: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
+    pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<TextRange>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextRange {
-    pub start: u32,
-    pub end: u32,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeprecationNoticeNotification {
-    pub message: String,
-    pub deprecated: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub removal_version: Option<String>,
+    pub summary: String,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -4607,6 +4556,264 @@ mod tests {
         ] {
             assert!(events.contains(event), "missing R6 event {event}");
         }
+    }
+
+    #[test]
+    fn r6_core_dtos_serialize_with_codex_wire_shapes() {
+        let config_response = ConfigReadResponse {
+            config: serde_json::json!({"model": "gpt-5.5"}),
+            origins: std::collections::BTreeMap::from([(
+                "model".to_string(),
+                ConfigLayerMetadata {
+                    name: ConfigLayerSource::User {
+                        file: "/home/user/.dasclaw/config.json".to_string(),
+                    },
+                    version: "v1".to_string(),
+                },
+            )]),
+            layers: Some(vec![ConfigLayer {
+                name: ConfigLayerSource::Project {
+                    dot_dasclaw_folder: "/repo/.dasclaw".to_string(),
+                },
+                version: "v2".to_string(),
+                config: serde_json::json!({"sandbox": "workspace-write"}),
+                disabled_reason: None,
+            }]),
+        };
+        assert_eq!(
+            serde_json::to_value(config_response).expect("config response should serialize"),
+            serde_json::json!({
+                "config": {"model": "gpt-5.5"},
+                "origins": {
+                    "model": {
+                        "name": {"type": "user", "file": "/home/user/.dasclaw/config.json"},
+                        "version": "v1"
+                    }
+                },
+                "layers": [{
+                    "name": {
+                        "type": "project",
+                        "dotDasclawFolder": "/repo/.dasclaw"
+                    },
+                    "version": "v2",
+                    "config": {"sandbox": "workspace-write"},
+                    "disabledReason": null
+                }]
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(GitDiffToRemoteParams {
+                cwd: "/repo".to_string(),
+            })
+            .expect("git diff params should serialize"),
+            serde_json::json!({"cwd": "/repo"})
+        );
+        assert_eq!(
+            serde_json::to_value(GitDiffToRemoteResponse {
+                sha: "abc123".to_string(),
+                diff: "diff --git a/file b/file".to_string(),
+            })
+            .expect("git diff response should serialize"),
+            serde_json::json!({"sha": "abc123", "diff": "diff --git a/file b/file"})
+        );
+
+        let search_response = FuzzyFileSearchResponse {
+            files: vec![FuzzyFileSearchResult {
+                root: "/repo".to_string(),
+                path: "src/lib.rs".to_string(),
+                match_type: FuzzyFileSearchMatchType::File,
+                file_name: "lib.rs".to_string(),
+                score: 0.92,
+                indices: Some(vec![0, 4]),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(FuzzyFileSearchParams {
+                query: "lib".to_string(),
+                roots: vec!["/repo".to_string()],
+                cancellation_token: Some("cancel-1".to_string()),
+            })
+            .expect("search params should serialize"),
+            serde_json::json!({
+                "query": "lib",
+                "roots": ["/repo"],
+                "cancellationToken": "cancel-1"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(search_response).expect("search response should serialize"),
+            serde_json::json!({
+                "files": [{
+                    "root": "/repo",
+                    "path": "src/lib.rs",
+                    "matchType": "file",
+                    "fileName": "lib.rs",
+                    "score": 0.92,
+                    "indices": [0, 4]
+                }]
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(GetConversationSummaryParams::RolloutPath {
+                rollout_path: "/tmp/rollout.jsonl".to_string(),
+            })
+            .expect("summary params should serialize"),
+            serde_json::json!({"rolloutPath": "/tmp/rollout.jsonl"})
+        );
+        assert_eq!(
+            serde_json::to_value(GetConversationSummaryParams::ConversationId {
+                conversation_id: "conv-1".to_string(),
+            })
+            .expect("summary params should serialize"),
+            serde_json::json!({"conversationId": "conv-1"})
+        );
+
+        let review_turn = CodexTurn::in_progress("turn-review");
+        assert_eq!(
+            serde_json::to_value(ReviewStartParams {
+                thread_id: "thread-1".to_string(),
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect("review params should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "target": {"type": "baseBranch", "branch": "main"},
+                "delivery": "inline"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewStartResponse {
+                turn: review_turn,
+                review_thread_id: "review-thread-1".to_string(),
+            })
+            .expect("review response should serialize"),
+            serde_json::json!({
+                "turn": {
+                    "id": "turn-review",
+                    "items": [],
+                    "status": "inProgress",
+                    "error": null,
+                    "startedAt": null,
+                    "completedAt": null,
+                    "durationMs": null
+                },
+                "reviewThreadId": "review-thread-1"
+            })
+        );
+    }
+
+    #[test]
+    fn r6_model_hook_and_warning_dtos_serialize_with_codex_wire_shapes() {
+        assert_eq!(
+            serde_json::to_value(ModelVerificationNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                verifications: vec![ModelVerification::TrustedAccessForCyber],
+            })
+            .expect("model verification should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "verifications": ["trustedAccessForCyber"]
+            })
+        );
+
+        let hook = HookStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: HookRunSummary {
+                id: "hook-run-1".to_string(),
+                event_name: HookEventName::PreToolUse,
+                handler_type: HookHandlerType::Command,
+                execution_mode: HookExecutionMode::Sync,
+                scope: HookScope::Turn,
+                source_path: "/tmp/hook.sh".to_string(),
+                source: HookSource::Project,
+                display_order: 1,
+                status: HookRunStatus::Running,
+                status_message: None,
+                started_at: 1,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                entries: vec![HookOutputEntry {
+                    kind: HookOutputEntryKind::Warning,
+                    text: "check this".to_string(),
+                }],
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(hook).expect("hook started should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "run": {
+                    "id": "hook-run-1",
+                    "eventName": "preToolUse",
+                    "handlerType": "command",
+                    "executionMode": "sync",
+                    "scope": "turn",
+                    "sourcePath": "/tmp/hook.sh",
+                    "source": "project",
+                    "displayOrder": 1,
+                    "status": "running",
+                    "statusMessage": null,
+                    "startedAt": 1,
+                    "completedAt": 2,
+                    "durationMs": 1,
+                    "entries": [{"kind": "warning", "text": "check this"}]
+                }
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(WarningNotification {
+                thread_id: None,
+                message: "config file ignored".to_string(),
+            })
+            .expect("warning should serialize"),
+            serde_json::json!({"threadId": null, "message": "config file ignored"})
+        );
+        assert_eq!(
+            serde_json::to_value(ConfigWarningNotification {
+                summary: "unsupported config key".to_string(),
+                details: Some("experimental.foo is ignored".to_string()),
+                path: Some("/tmp/config.json".to_string()),
+                range: Some(TextRange {
+                    start_line: 1,
+                    start_column: 2,
+                    end_line: 1,
+                    end_column: 9,
+                }),
+            })
+            .expect("config warning should serialize"),
+            serde_json::json!({
+                "summary": "unsupported config key",
+                "details": "experimental.foo is ignored",
+                "path": "/tmp/config.json",
+                "range": {
+                    "startLine": 1,
+                    "startColumn": 2,
+                    "endLine": 1,
+                    "endColumn": 9
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(DeprecationNoticeNotification {
+                summary: "old key is deprecated".to_string(),
+                details: Some("use newKey".to_string()),
+            })
+            .expect("deprecation notice should serialize"),
+            serde_json::json!({
+                "summary": "old key is deprecated",
+                "details": "use newKey"
+            })
+        );
     }
 
     #[test]
