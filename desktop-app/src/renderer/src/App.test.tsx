@@ -562,6 +562,7 @@ describe('App composer', () => {
     })
 
     expect(runtimeState.respondToServerRequest).toHaveBeenCalledWith(request, {
+      decision: 'approve',
       permissions: ['net:fetch'],
       scope: 'turn',
       strictAutoReview: true

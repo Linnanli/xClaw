@@ -123,6 +123,7 @@ function renderRequestBody(
               onClick={() =>
                 void runAction('allowTurn', () =>
                   onRespond(request, {
+                    decision: 'approve',
                     permissions: request.params.permissions,
                     scope: 'turn',
                     strictAutoReview: true
@@ -140,6 +141,7 @@ function renderRequestBody(
               onClick={() =>
                 void runAction('allowSession', () =>
                   onRespond(request, {
+                    decision: 'approve',
                     permissions: request.params.permissions,
                     scope: 'session',
                     strictAutoReview: true

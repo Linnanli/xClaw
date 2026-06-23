@@ -107,6 +107,7 @@ describe('server request queue helpers', () => {
       decision: 'decline'
     })
     expect(failClosedServerRequestResponse('item/permissions/requestApproval')).toEqual({
+      decision: 'reject',
       permissions: {},
       scope: 'turn',
       strictAutoReview: true

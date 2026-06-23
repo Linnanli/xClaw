@@ -506,7 +506,7 @@ describe('useDasclawAssistantRuntime', () => {
     expect(latestRuntime?.serverRequests).toEqual([])
   })
 
-  it('accepts permissions responses with only permissions', async () => {
+  it('rejects permissions responses without explicit decision', async () => {
     act(() => {
       root.render(createElement(RuntimeProbe))
     })
@@ -514,17 +514,19 @@ describe('useDasclawAssistantRuntime', () => {
     const request = permissionsApprovalRequest('permissions_1')
     const response = {
       permissions: {}
-    } satisfies AppServerServerRequestResponse<'item/permissions/requestApproval'>
+    } as AppServerServerRequestResponse
     await act(async () => {
       notificationListener?.(request)
     })
 
     await act(async () => {
-      await latestRuntime?.respondToServerRequest(request, response)
+      await expect(
+        latestRuntime?.respondToServerRequest(request as AppServerServerRequest, response)
+      ).rejects.toThrow('server request response does not match request method')
     })
 
-    expect(respondServerRequestMock).toHaveBeenCalledWith('permissions_1', response)
-    expect(latestRuntime?.serverRequests).toEqual([])
+    expect(respondServerRequestMock).not.toHaveBeenCalled()
+    expect(latestRuntime?.serverRequests).toEqual([request])
   })
 
   it('accepts permissions responses with array permissions and review scope', async () => {
@@ -534,6 +536,7 @@ describe('useDasclawAssistantRuntime', () => {
 
     const request = permissionsApprovalRequest('permissions_1')
     const response = {
+      decision: 'approve',
       permissions: ['net:fetch'],
       scope: 'turn',
       strictAutoReview: true

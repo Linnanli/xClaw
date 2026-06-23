@@ -136,7 +136,10 @@ export type AppServerFileChangeApprovalResponse = {
   decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
 }
 
+export type AppServerPermissionsApprovalDecision = 'approve' | 'reject'
+
 export type AppServerPermissionsApprovalResponse = {
+  decision: AppServerPermissionsApprovalDecision
   permissions: unknown
   scope?: 'turn' | 'session'
   strictAutoReview?: boolean

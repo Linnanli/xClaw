@@ -342,6 +342,7 @@ function isFileChangeApprovalResponse(response: Record<string, unknown>): boolea
 
 function isPermissionsApprovalResponse(response: Record<string, unknown>): boolean {
   return (
+    (response.decision === 'approve' || response.decision === 'reject') &&
     isJsonContainer(response.permissions) &&
     isOptionalPermissionScope(response.scope) &&
     isOptionalBoolean(response.strictAutoReview)

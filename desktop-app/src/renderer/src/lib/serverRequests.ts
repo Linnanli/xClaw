@@ -33,7 +33,12 @@ const failClosedResponses: AppServerServerRequestResponseByMethod = {
   },
   'item/tool/requestUserInput': { answers: {} },
   'item/fileChange/requestApproval': { decision: 'decline' },
-  'item/permissions/requestApproval': { permissions: {}, scope: 'turn', strictAutoReview: true },
+  'item/permissions/requestApproval': {
+    decision: 'reject',
+    permissions: {},
+    scope: 'turn',
+    strictAutoReview: true
+  },
   'item/commandExecution/requestApproval': {
     decision: {
       kind: 'reject',
