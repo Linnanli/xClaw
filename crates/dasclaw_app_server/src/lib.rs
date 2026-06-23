@@ -9595,9 +9595,10 @@ mod tests {
 
     #[test]
     fn real_runtime_bridge_rejects_file_and_user_input_resolution_until_runtime_owner_exists() {
-        let bridge = DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(
-            vec![text_output("done")],
-        )));
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output("done"),
+            ])));
 
         let user_input = bridge.resolve_server_request(RuntimeServerRequestResolution {
             request_id: "input_1".to_string(),
