@@ -8,6 +8,7 @@
 
 pub mod app_services;
 pub mod command_service;
+pub mod config_service;
 pub mod fs_service;
 pub mod job_service;
 pub mod log_service;
@@ -36,20 +37,22 @@ use dasclaw_app_server_protocol::{
     CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
     CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
-    CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem, DynamicToolCallParams,
-    DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent, FileChangeApprovalDecision,
-    FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
-    FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
-    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
-    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
-    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
-    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, GuardianApprovalReview,
-    HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
-    ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest,
-    JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
-    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigBatchWriteParams,
+    ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse, ConfigValueWriteParams,
+    ConfigWriteResponse, DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem,
+    DynamicToolCallParams, DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent,
+    FileChangeApprovalDecision, FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent,
+    FileChangeRequestApprovalParams, FileChangeRequestApprovalResponse, FileUpdateChange,
+    FsChangedNotification, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
+    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
+    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
+    FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
+    FsWriteFileParams, FsWriteFileResponse, GuardianApprovalReview, HealthCheckParams,
+    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
     McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
@@ -880,6 +883,30 @@ impl AppServer {
         Ok(ConfigRequirementsReadResponse {
             allowed_sandbox_modes: vec![SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite],
         })
+    }
+
+    pub fn config_read(
+        &self,
+        params: ConfigReadParams,
+    ) -> Result<ConfigReadResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.read(params)
+    }
+
+    pub fn config_value_write(
+        &self,
+        params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.write_value(params)
+    }
+
+    pub fn config_batch_write(
+        &self,
+        params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.write_batch(params)
     }
 
     fn create_thread_record(
@@ -1891,6 +1918,21 @@ impl AppServer {
                     self.config_requirements_read()
                 })
             }
+            method::CONFIG_READ => {
+                route_with_params(request.id, request.params, |params: ConfigReadParams| {
+                    self.config_read(params)
+                })
+            }
+            method::CONFIG_VALUE_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: ConfigValueWriteParams| self.config_value_write(params),
+            ),
+            method::CONFIG_BATCH_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: ConfigBatchWriteParams| self.config_batch_write(params),
+            ),
             method::HEALTH_CHECK => {
                 route_with_optional_params(request.id, request.params, |params| {
                     Ok(self.health_check(params))
@@ -5669,6 +5711,9 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::INITIALIZE,
         method::PROTOCOL_SCHEMA,
         method::CONFIG_REQUIREMENTS_READ,
+        method::CONFIG_READ,
+        method::CONFIG_VALUE_WRITE,
+        method::CONFIG_BATCH_WRITE,
         method::HEALTH_CHECK,
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
@@ -6094,6 +6139,45 @@ mod tests {
         let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
         assert_eq!(read_value["result"]["dataBase64"], "dGVzdA==");
         assert_eq!(exec_value["result"]["stdout"], "test");
+    }
+
+    #[test]
+    fn config_read_returns_redacted_config_and_layers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":10,"method":"config/read","params":{"includeLayers":true}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], serde_json::Value::Null);
+        assert!(
+            !value["result"]["layers"]
+                .as_array()
+                .expect("layers")
+                .is_empty()
+        );
+        assert!(!value.to_string().contains("api_key"));
+    }
+
+    #[test]
+    fn config_write_rejects_key_outside_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":11,"method":"config/value/write","params":{"keyPath":"api_key","value":"secret","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("not writable")
+        );
     }
 
     #[test]
@@ -13766,6 +13850,28 @@ mod tests {
 
     fn initialized_server() -> AppServer {
         initialized_server_with_bridge(Arc::new(NoopRuntimeBridge))
+    }
+
+    fn initialized_server_with_root(root: &std::path::Path) -> AppServer {
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(root.to_path_buf());
+        let mut server =
+            AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_notifications();
+        server
     }
 
     fn create_completed_thread_with_turns(server: &mut AppServer, count: usize) -> String {

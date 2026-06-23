@@ -6,22 +6,25 @@ use dasclaw_app_server_protocol::{
     CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
     CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
     CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
-    CommandExecWriteResponse, FsChangedNotification, FsCopyParams, FsCopyResponse,
-    FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse,
-    FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse,
-    FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams,
-    FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams, JobListResponse,
-    JobReadParams, JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse,
-    LogEntryEvent, McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
-    McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
-    McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    CommandExecWriteResponse, ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse,
+    ConfigValueWriteParams, ConfigWriteResponse, FsChangedNotification, FsCopyParams,
+    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams,
+    JobListResponse, JobReadParams, JobReadResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+    McpServerReloadResponse, McpServerToolCallParams, McpServerToolCallResponse,
+    McpServiceAvailability, McpToolCallProgressNotification, ServiceHealth, ServiceName,
+    ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse,
 };
 use dasclaw_runtime::context::ContextManager;
 
 use crate::AppServerError;
 use crate::command_service::AppServerCommandExecService;
+use crate::config_service::AppServerConfigService;
 use crate::fs_service::AppServerFsService;
 use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
@@ -158,6 +161,23 @@ pub trait CommandExecService: Send + Sync {
     }
 }
 
+pub trait ConfigService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn read(&self, params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError>;
+    fn write_value(
+        &self,
+        params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError>;
+    fn write_batch(
+        &self,
+        params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError>;
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
@@ -166,6 +186,7 @@ pub struct AppServerServices {
     pub mcp: Arc<dyn McpService>,
     pub filesystem: Arc<dyn FsService>,
     pub command: Arc<dyn CommandExecService>,
+    pub config: Arc<dyn ConfigService>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -185,6 +206,7 @@ impl Default for AppServerServices {
             mcp: Arc::new(NoopMcpService),
             filesystem: Arc::new(NoopFsService),
             command: Arc::new(NoopCommandExecService),
+            config: Arc::new(NoopConfigService),
         }
     }
 }
@@ -200,7 +222,8 @@ impl AppServerServices {
             skills: Arc::new(AppServerSkillsService::new()),
             mcp: Arc::new(AppServerMcpService::default()),
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
-            command: Arc::new(AppServerCommandExecService::new(root)),
+            command: Arc::new(AppServerCommandExecService::new(root.clone())),
+            config: Arc::new(AppServerConfigService::new(root)),
         }
     }
 
@@ -212,6 +235,7 @@ impl AppServerServices {
             self.mcp.health(),
             self.filesystem.health(),
             self.command.health(),
+            self.config.health(),
         ]
     }
 
@@ -253,7 +277,25 @@ impl AppServerServices {
                 filesystem: self.filesystem.is_ready(),
                 command,
             },
-            r6: AppServerR6Availability::default(),
+            r6: AppServerR6Availability {
+                config: self.config.is_ready(),
+                ..AppServerR6Availability::default()
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn real_with_root_for_tests(root: std::path::PathBuf) -> Self {
+        Self {
+            logs: Arc::new(AppServerLogService::new()),
+            jobs: Arc::new(AppServerJobService::new(
+                Arc::new(ContextManager::default()),
+            )),
+            skills: Arc::new(AppServerSkillsService::new()),
+            mcp: Arc::new(AppServerMcpService::default()),
+            filesystem: Arc::new(AppServerFsService::new(root.clone())),
+            command: Arc::new(AppServerCommandExecService::new(root.clone())),
+            config: Arc::new(AppServerConfigService::new(root)),
         }
     }
 
@@ -273,6 +315,7 @@ impl AppServerServices {
             mcp: Arc::new(mcp),
             filesystem: Arc::new(filesystem),
             command: Arc::new(command),
+            config: Arc::new(NoopConfigService),
         }
     }
 }
@@ -283,6 +326,7 @@ struct NoopSkillsService;
 struct NoopMcpService;
 struct NoopFsService;
 struct NoopCommandExecService;
+struct NoopConfigService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -492,6 +536,37 @@ fn command_exec_not_wired<T>() -> Result<T, AppServerError> {
     Err(AppServerError::capability_unavailable(
         "command_exec",
         "command execution service is not wired",
+    ))
+}
+
+impl ConfigService for NoopConfigService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Config, "config service is not wired")
+    }
+
+    fn read(&self, _params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError> {
+        config_not_wired()
+    }
+
+    fn write_value(
+        &self,
+        _params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        config_not_wired()
+    }
+
+    fn write_batch(
+        &self,
+        _params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        config_not_wired()
+    }
+}
+
+fn config_not_wired<T>() -> Result<T, AppServerError> {
+    Err(AppServerError::capability_unavailable(
+        "config",
+        "config service is not wired",
     ))
 }
 
