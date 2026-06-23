@@ -564,7 +564,7 @@ function failClosedServerRequestResponse(method: string): AppServerServerRequest
     return { decision: 'decline' }
   }
   if (method === 'item/permissions/requestApproval') {
-    return { permissions: {}, scope: 'turn', strictAutoReview: true }
+    return { decision: 'reject', permissions: {}, scope: 'turn', strictAutoReview: true }
   }
   return {
     decision: {

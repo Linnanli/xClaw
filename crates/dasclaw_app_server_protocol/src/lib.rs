@@ -2115,9 +2115,17 @@ pub enum PermissionGrantScope {
     Session,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionsApprovalDecision {
+    Approve,
+    Reject,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionsRequestApprovalResponse {
+    pub decision: PermissionsApprovalDecision,
     pub permissions: serde_json::Value,
     #[serde(default)]
     pub scope: PermissionGrantScope,
@@ -4762,6 +4770,7 @@ mod tests {
                 .expect("file change response should deserialize");
         let permissions: PermissionsRequestApprovalResponse =
             serde_json::from_value(serde_json::json!({
+                "decision": "approve",
                 "permissions": {"network":{"allow":["example.test"]}},
                 "scope": "session",
                 "strictAutoReview": true
@@ -4769,9 +4778,14 @@ mod tests {
             .expect("permissions response should deserialize");
         let default_permissions: PermissionsRequestApprovalResponse =
             serde_json::from_value(serde_json::json!({
+                "decision": "reject",
                 "permissions": {}
             }))
             .expect("permissions response should default missing optional fields");
+        let missing_decision_permissions =
+            serde_json::from_value::<PermissionsRequestApprovalResponse>(serde_json::json!({
+                "permissions": {}
+            }));
 
         assert_eq!(
             dynamic.content_items,
@@ -4787,14 +4801,24 @@ mod tests {
             file_change.decision,
             FileChangeApprovalDecision::AcceptForSession
         );
+        assert_eq!(permissions.decision, PermissionsApprovalDecision::Approve);
         assert_eq!(permissions.scope, PermissionGrantScope::Session);
         assert_eq!(permissions.strict_auto_review, Some(true));
+        assert!(
+            missing_decision_permissions.is_err(),
+            "permissions response must not default a missing decision"
+        );
+        assert_eq!(
+            default_permissions.decision,
+            PermissionsApprovalDecision::Reject
+        );
         assert_eq!(default_permissions.scope, PermissionGrantScope::Turn);
         assert_eq!(default_permissions.strict_auto_review, None);
         assert_eq!(
             serde_json::to_value(default_permissions)
                 .expect("default permissions response should serialize"),
             serde_json::json!({
+                "decision": "reject",
                 "permissions": {},
                 "scope": "turn"
             })

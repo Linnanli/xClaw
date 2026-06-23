@@ -56,17 +56,17 @@ use dasclaw_app_server_protocol::{
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, ProtocolSchemaResponse,
-    ProtocolVersion, ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode,
-    ServerInfo, ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent,
-    ServiceHealth, ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse,
-    SkillsChangedNotification, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse, ThreadListParams, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
-    ThreadTurnsListParams, ThreadTurnsListResponse, ToolRequestUserInputParams,
-    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnCompletedEvent,
-    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, TurnStatus,
+    PermissionsApprovalDecision, PermissionsRequestApprovalParams,
+    PermissionsRequestApprovalResponse, ProtocolSchemaResponse, ProtocolVersion,
+    ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
+    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
+    ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
+    ToolRequestUserInputParams, ToolRequestUserInputQuestion, ToolRequestUserInputResponse,
+    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
+    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
@@ -406,6 +406,8 @@ fn approval_decision_to_runtime(
     }
 }
 
+const PERMISSIONS_REQUEST_REJECTED_REASON: &str = "permissions request rejected";
+
 fn failed_runtime_server_request_response(
     kind: PendingServerRequestKind,
     reason: &str,
@@ -461,16 +463,15 @@ fn server_request_resolution_outcome(
         RuntimeServerRequestResponse::ToolUserInput(_) => {
             (ServerRequestResolutionOutcome::Approved, None)
         }
-        RuntimeServerRequestResponse::Permissions(response) => {
-            if response.permissions.is_null() {
-                (
-                    ServerRequestResolutionOutcome::Rejected,
-                    Some("permissions request denied".to_string()),
-                )
-            } else {
+        RuntimeServerRequestResponse::Permissions(response) => match response.decision {
+            PermissionsApprovalDecision::Approve => {
                 (ServerRequestResolutionOutcome::Approved, None)
             }
-        }
+            PermissionsApprovalDecision::Reject => (
+                ServerRequestResolutionOutcome::Rejected,
+                Some(PERMISSIONS_REQUEST_REJECTED_REASON.to_string()),
+            ),
+        },
         RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::Accept)
         | RuntimeServerRequestResponse::FileChange(FileChangeApprovalDecision::AcceptForSession) => {
             (ServerRequestResolutionOutcome::Approved, None)
@@ -3164,6 +3165,7 @@ impl PendingRuntimeClientRequest {
             }
             Self::Permissions { sender, .. } => {
                 let _ = sender.send(PermissionsRequestApprovalResponse {
+                    decision: PermissionsApprovalDecision::Reject,
                     permissions: Value::Null,
                     scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
                     strict_auto_review: None,
@@ -3415,7 +3417,8 @@ impl RuntimeClientToolExecutor {
             .context
             .request_permissions(call, permissions, reason)
             .await;
-        let is_error = response.permissions.is_null();
+        let is_error = response.decision == PermissionsApprovalDecision::Reject
+            || response.permissions.is_null();
         json_tool_result(call, &response, is_error)
     }
 
@@ -3509,6 +3512,7 @@ fn failed_dynamic_tool_response(reason: &str) -> DynamicToolCallResponse {
 
 fn denied_permissions_response() -> PermissionsRequestApprovalResponse {
     PermissionsRequestApprovalResponse {
+        decision: PermissionsApprovalDecision::Reject,
         permissions: Value::Null,
         scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
         strict_auto_review: None,
@@ -4362,12 +4366,15 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     return Ok(());
                 }
 
-                let decision = if response.permissions.is_null() {
-                    dasclaw_runtime::ApprovalDecision::Reject {
-                        reason: Some("permissions request denied".to_string()),
+                let decision = match response.decision {
+                    PermissionsApprovalDecision::Approve => {
+                        dasclaw_runtime::ApprovalDecision::Approve
                     }
-                } else {
-                    dasclaw_runtime::ApprovalDecision::Approve
+                    PermissionsApprovalDecision::Reject => {
+                        dasclaw_runtime::ApprovalDecision::Reject {
+                            reason: Some(PERMISSIONS_REQUEST_REJECTED_REASON.to_string()),
+                        }
+                    }
                 };
                 self.resolve_approval(RuntimeApprovalDecision {
                     request_id: resolution.request_id,
@@ -7797,6 +7804,85 @@ mod tests {
     }
 
     #[test]
+    fn malformed_permissions_response_rejects_runtime_and_clears_pending_request() {
+        let bridge = Arc::new(R1RuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        server.insert_pending_server_request_for_test(
+            "permissions_1",
+            PendingServerRequestKind::PermissionsApproval,
+            "runtime_permissions_1",
+            "thread_1",
+            "turn_1",
+        );
+
+        let response = server.handle_json_rpc(
+            r#"{"jsonrpc":"2.0","id":"permissions_1","result":{"permissions":{}}}"#,
+        );
+
+        assert!(response.is_none());
+        assert!(matches!(
+            bridge.resolutions().as_slice(),
+            [RuntimeServerRequestResolution {
+                request_id,
+                payload: RuntimeServerRequestResponse::Permissions(response),
+            }] if request_id == "runtime_permissions_1"
+                && response.decision == PermissionsApprovalDecision::Reject
+        ));
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == "permissions_1"
+                    && notification.params["outcome"] == "failed"
+            }),
+            "malformed permissions response should resolve pending request as failed: {notifications:?}"
+        );
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+        let timeout_notifications = server.drain_notifications();
+        assert!(
+            !timeout_notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == "permissions_1"
+            }),
+            "cleared malformed permissions request must not timeout later: {timeout_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn expired_permissions_request_rejects_runtime_fail_safe() {
+        let bridge = Arc::new(R1RuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        server.insert_pending_server_request_for_test(
+            "permissions_1",
+            PendingServerRequestKind::PermissionsApproval,
+            "runtime_permissions_1",
+            "thread_1",
+            "turn_1",
+        );
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+
+        assert!(matches!(
+            bridge.resolutions().as_slice(),
+            [RuntimeServerRequestResolution {
+                request_id,
+                payload: RuntimeServerRequestResponse::Permissions(response),
+            }] if request_id == "runtime_permissions_1"
+                && response.decision == PermissionsApprovalDecision::Reject
+        ));
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == "permissions_1"
+                    && notification.params["outcome"] == "timed_out"
+            }),
+            "expired permissions request should emit timed_out serverRequest/resolved: {notifications:?}"
+        );
+    }
+
+    #[test]
     fn interrupt_turn_resolves_pending_approval_server_request_as_failed() {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
@@ -10100,6 +10186,7 @@ mod tests {
                 request_id: permissions_request.request_id,
                 payload: RuntimeServerRequestResponse::Permissions(
                     PermissionsRequestApprovalResponse {
+                        decision: PermissionsApprovalDecision::Approve,
                         permissions: serde_json::json!({"url": "https://example.test"}),
                         scope: dasclaw_app_server_protocol::PermissionGrantScope::Turn,
                         strict_auto_review: None,

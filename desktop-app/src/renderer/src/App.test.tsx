@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+import type {
+  AppServerDynamicToolCallResponse,
+  AppServerServerRequest
+} from '../../shared/appServerApi'
+
 type MockThreadMessageState = {
   message: {
     composer: {
@@ -34,12 +39,27 @@ const streamdownPropsState = vi.hoisted<{
   lastProps: null
 }))
 
+const runtimeState = vi.hoisted<{
+  rejectServerRequest: ReturnType<typeof vi.fn>
+  respondToServerRequest: ReturnType<typeof vi.fn>
+  serverRequests: AppServerServerRequest[]
+}>(() => ({
+  rejectServerRequest: vi.fn(),
+  respondToServerRequest: vi.fn(),
+  serverRequests: []
+}))
+
 function resetThreadMessageState(): void {
   threadMessageState.message.composer.isEditing = false
   threadMessageState.message.content = [{ type: 'text', text: '正在思考' }]
   threadMessageState.message.role = 'user'
   threadMessageState.message.status = { type: 'complete' }
   streamdownPropsState.lastProps = null
+  runtimeState.rejectServerRequest.mockReset()
+  runtimeState.rejectServerRequest.mockResolvedValue(undefined)
+  runtimeState.respondToServerRequest.mockReset()
+  runtimeState.respondToServerRequest.mockResolvedValue(undefined)
+  runtimeState.serverRequests = []
 }
 
 function setDesktopPlatform(platform: NodeJS.Platform): void {
@@ -81,7 +101,12 @@ vi.mock('./hooks/useDasclawAssistantRuntime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hooks/useDasclawAssistantRuntime')>()
   return {
     ...actual,
-    useDasclawAssistantRuntime: () => ({ runtime: {} })
+    useDasclawAssistantRuntime: () => ({
+      runtime: {},
+      serverRequests: runtimeState.serverRequests,
+      respondToServerRequest: runtimeState.respondToServerRequest,
+      rejectServerRequest: runtimeState.rejectServerRequest
+    })
   }
 })
 
@@ -325,6 +350,7 @@ describe('App composer', () => {
       root.unmount()
     })
     container.remove()
+    vi.unstubAllGlobals()
   })
 
   it('uses the Lexical composer input with mention and slash trigger popovers', () => {
@@ -491,4 +517,153 @@ describe('App composer', () => {
     expect(reasoning?.textContent).toContain('推理摘要')
     expect(reasoning?.textContent).toContain('正在整理上下文')
   })
+
+  it('does not render the server request panel when there is no queued request', () => {
+    act(() => {
+      root.render(<App />)
+    })
+
+    expect(container.querySelector('[data-slot="server-request-panel"]')).toBeNull()
+  })
+
+  it('responds to a file-change request when accepting file changes', async () => {
+    const request = fileChangeApprovalRequest('file-request-1')
+    runtimeState.serverRequests = [request]
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const accept = buttonWithText('Accept file changes')
+    expect(accept).not.toBeUndefined()
+
+    await act(async () => {
+      accept?.click()
+    })
+
+    expect(runtimeState.respondToServerRequest).toHaveBeenCalledWith(request, {
+      decision: 'accept'
+    })
+  })
+
+  it('responds to a permissions request when allowing once', async () => {
+    const request = permissionsApprovalRequest('permissions-request-1')
+    runtimeState.serverRequests = [request]
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const allow = buttonWithText('Allow once')
+    expect(allow).not.toBeUndefined()
+
+    await act(async () => {
+      allow?.click()
+    })
+
+    expect(runtimeState.respondToServerRequest).toHaveBeenCalledWith(request, {
+      decision: 'approve',
+      permissions: ['net:fetch'],
+      scope: 'turn',
+      strictAutoReview: true
+    })
+  })
+
+  it('runs a client tool request from the panel and responds with sanitized output', async () => {
+    const request = toolCallRequest('tool-request-1', {
+      url: 'https://example.test/page?token=secret#fragment'
+    })
+    const openExternalHttpUrl = vi.fn().mockResolvedValue(undefined)
+    runtimeState.serverRequests = [request]
+    window.desktopAppServer = {
+      checkHealth: vi.fn().mockResolvedValue({}),
+      getStatus: vi.fn().mockResolvedValue({}),
+      onNotification: vi.fn(() => vi.fn()),
+      onStatusChange: vi.fn(() => vi.fn()),
+      openExternalHttpUrl,
+      request: vi.fn().mockResolvedValue({ models: [] }),
+      respondServerRequest: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue({})
+    } as Window['desktopAppServer']
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const run = buttonWithText('Run client tool')
+    expect(run).not.toBeUndefined()
+
+    await act(async () => {
+      run?.click()
+    })
+
+    const response = {
+      success: true,
+      contentItems: [{ type: 'inputText', text: 'Opened URL' }]
+    } satisfies AppServerDynamicToolCallResponse
+    expect(openExternalHttpUrl).toHaveBeenCalledWith(
+      'https://example.test/page?token=secret#fragment'
+    )
+    expect(runtimeState.respondToServerRequest).toHaveBeenCalledWith(request, response)
+  })
 })
+
+function buttonWithText(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === text
+  )
+}
+
+function fileChangeApprovalRequest(
+  requestId: string
+): AppServerServerRequest<'item/fileChange/requestApproval'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/fileChange/requestApproval',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'file_1',
+      reason: 'modify src/App.tsx',
+      grantRoot: '/workspace'
+    }
+  }
+}
+
+function permissionsApprovalRequest(
+  requestId: string
+): AppServerServerRequest<'item/permissions/requestApproval'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/permissions/requestApproval',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'permission_1',
+      cwd: '/workspace',
+      reason: 'needs network',
+      permissions: ['net:fetch']
+    }
+  }
+}
+
+function toolCallRequest(
+  requestId: string,
+  args: unknown
+): AppServerServerRequest<'item/tool/call'> {
+  return {
+    hostId: 'local',
+    requestId,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      callId: 'call_1',
+      namespace: 'client',
+      tool: 'open_url',
+      arguments: args
+    }
+  }
+}

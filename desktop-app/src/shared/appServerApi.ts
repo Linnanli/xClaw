@@ -43,7 +43,7 @@ export type AppServerCommandApprovalParams = {
   toolName: string
   command?: string
   description: string
-  displayParameters?: unknown
+  displayParameters: unknown
   allowAlways: boolean
 }
 
@@ -128,17 +128,39 @@ export type AppServerDynamicToolCallResponse = {
   success: boolean
 }
 
+export type AppServerCommandApprovalResponse = {
+  decision: AppServerApprovalDecision
+}
+
+export type AppServerFileChangeApprovalResponse = {
+  decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+}
+
+export type AppServerPermissionsApprovalDecision = 'approve' | 'reject'
+
+export type AppServerPermissionsApprovalResponse = {
+  decision: AppServerPermissionsApprovalDecision
+  permissions: unknown
+  scope?: 'turn' | 'session'
+  strictAutoReview?: boolean
+}
+
 export type AppServerApprovalRespondParams = {
   requestId: string | number
   decision: AppServerApprovalDecision
 }
 
-export type AppServerServerRequestResponse =
-  | { decision: AppServerApprovalDecision }
-  | { decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel' }
-  | AppServerDynamicToolCallResponse
-  | AppServerToolUserInputResponse
-  | { permissions: unknown; scope?: 'turn' | 'session'; strictAutoReview?: boolean }
+export type AppServerServerRequestResponseByMethod = {
+  'item/commandExecution/requestApproval': AppServerCommandApprovalResponse
+  'item/permissions/requestApproval': AppServerPermissionsApprovalResponse
+  'item/fileChange/requestApproval': AppServerFileChangeApprovalResponse
+  'item/tool/requestUserInput': AppServerToolUserInputResponse
+  'item/tool/call': AppServerDynamicToolCallResponse
+}
+
+export type AppServerServerRequestResponse<
+  Method extends AppServerServerRequestMethod = AppServerServerRequestMethod
+> = AppServerServerRequestResponseByMethod[Method]
 
 export type AppServerGenericNotification = {
   hostId: string
@@ -186,6 +208,7 @@ export type DesktopAppServerApi = {
   stop(): Promise<AppServerStatus>
   getStatus(): Promise<AppServerStatus>
   checkHealth(): Promise<AppServerStatus>
+  openExternalHttpUrl(url: string): Promise<void>
   onStatusChange(callback: (status: AppServerStatus) => void): () => void
   onNotification(callback: (notification: AppServerNotification) => void): () => void
 }

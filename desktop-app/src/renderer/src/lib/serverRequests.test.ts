@@ -5,7 +5,10 @@ import {
   queueServerRequest,
   removeServerRequest
 } from './serverRequests'
-import type { AppServerServerRequest } from '../../../shared/appServerApi'
+import type {
+  AppServerServerRequest,
+  AppServerServerRequestResponse
+} from '../../../shared/appServerApi'
 
 describe('server request queue helpers', () => {
   it('queues a known tool user-input request without answering it', () => {
@@ -87,7 +90,11 @@ describe('server request queue helpers', () => {
   })
 
   it('builds method-specific fail-closed responses', () => {
-    expect(failClosedServerRequestResponse('item/commandExecution/requestApproval')).toEqual({
+    const commandResponse = failClosedServerRequestResponse(
+      'item/commandExecution/requestApproval'
+    ) satisfies AppServerServerRequestResponse<'item/commandExecution/requestApproval'>
+
+    expect(commandResponse).toEqual({
       decision: {
         kind: 'reject',
         data: { reason: 'approval request was not approved in the renderer' }
@@ -100,6 +107,7 @@ describe('server request queue helpers', () => {
       decision: 'decline'
     })
     expect(failClosedServerRequestResponse('item/permissions/requestApproval')).toEqual({
+      decision: 'reject',
       permissions: {},
       scope: 'turn',
       strictAutoReview: true
