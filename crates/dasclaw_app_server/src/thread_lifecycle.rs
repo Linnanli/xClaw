@@ -169,7 +169,9 @@ impl ThreadLifecycleHost {
             | RuntimeTurnOutcome::FileChangePatchUpdated { .. }
             | RuntimeTurnOutcome::AutoApprovalReviewStarted { .. }
             | RuntimeTurnOutcome::AutoApprovalReviewCompleted { .. }
-            | RuntimeTurnOutcome::TokenUsageUpdated { .. } => return Ok(None),
+            | RuntimeTurnOutcome::TokenUsageUpdated { .. }
+            | RuntimeTurnOutcome::ModelRerouted { .. }
+            | RuntimeTurnOutcome::ModelVerification { .. } => return Ok(None),
             RuntimeTurnOutcome::Completed { output } => (Some(output), None),
             RuntimeTurnOutcome::Failed { error } => (None, Some(error)),
         };

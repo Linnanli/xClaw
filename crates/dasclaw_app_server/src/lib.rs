@@ -62,8 +62,9 @@ use dasclaw_app_server_protocol::{
     McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
-    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    PermissionsApprovalDecision, PermissionsRequestApprovalParams,
+    ModelProviderSelectForNextTurnResponse, ModelRerouteReason, ModelReroutedNotification,
+    ModelVerification, ModelVerificationNotification, NotificationQueuePolicy,
+    NotificationsInitializedEvent, PermissionsApprovalDecision, PermissionsRequestApprovalParams,
     PermissionsRequestApprovalResponse, ProtocolSchemaResponse, ProtocolVersion,
     ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
     ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
@@ -3351,6 +3352,38 @@ impl AppServer {
                         );
                     }
                 }
+                RuntimeTurnOutcome::ModelRerouted {
+                    from_model,
+                    to_model,
+                    reason,
+                } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_model_rerouted(ModelReroutedNotification {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                from_model,
+                                to_model,
+                                reason,
+                            });
+                    }
+                }
+                RuntimeTurnOutcome::ModelVerification { verifications } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_model_verification(ModelVerificationNotification {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                verifications,
+                            });
+                    }
+                }
                 RuntimeTurnOutcome::TokenUsageUpdated { usage } => {
                     if self
                         .threads
@@ -4464,6 +4497,38 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn model_rerouted(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        from_model: String,
+        to_model: String,
+        reason: ModelRerouteReason,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ModelRerouted {
+                from_model,
+                to_model,
+                reason,
+            },
+        });
+    }
+
+    pub fn model_verification(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        verifications: Vec<ModelVerification>,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ModelVerification { verifications },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -4529,6 +4594,14 @@ pub enum RuntimeTurnOutcome {
     },
     TokenUsageUpdated {
         usage: dasclaw_core::response_types::TokenUsage,
+    },
+    ModelRerouted {
+        from_model: String,
+        to_model: String,
+        reason: ModelRerouteReason,
+    },
+    ModelVerification {
+        verifications: Vec<ModelVerification>,
     },
     Completed {
         output: String,
@@ -5419,6 +5492,14 @@ impl NotificationBus {
 
     pub fn emit_auto_approval_review_completed(&mut self, event: AutoApprovalReviewCompletedEvent) {
         self.push(ServerNotification::auto_approval_review_completed(event));
+    }
+
+    pub fn emit_model_rerouted(&mut self, event: ModelReroutedNotification) {
+        self.push(ServerNotification::model_rerouted(event));
+    }
+
+    pub fn emit_model_verification(&mut self, event: ModelVerificationNotification) {
+        self.push(ServerNotification::model_verification(event));
     }
 
     pub fn emit_log_entry(&mut self, event: LogEntryEvent) {
@@ -12020,6 +12101,119 @@ mod tests {
     }
 
     #[test]
+    fn runtime_model_verification_update_emits_notification() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("verify model".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_verification(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            vec![ModelVerification::TrustedAccessForCyber],
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["model/verification"]
+        );
+        assert_eq!(notifications[0]["params"]["threadId"], thread.thread_id);
+        assert_eq!(notifications[0]["params"]["turnId"], turn.turn.id);
+        assert_eq!(
+            notifications[0]["params"]["verifications"],
+            serde_json::json!(["trustedAccessForCyber"])
+        );
+    }
+
+    #[test]
+    fn runtime_model_reroute_update_emits_notification() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("reroute model".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_rerouted(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            "gpt-test".to_string(),
+            "gpt-next".to_string(),
+            ModelRerouteReason::HighRiskCyberActivity,
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(methods_from_values(&notifications), vec!["model/rerouted"]);
+        assert_eq!(notifications[0]["params"]["threadId"], thread.thread_id);
+        assert_eq!(notifications[0]["params"]["turnId"], turn.turn.id);
+        assert_eq!(notifications[0]["params"]["fromModel"], "gpt-test");
+        assert_eq!(notifications[0]["params"]["toModel"], "gpt-next");
+        assert_eq!(
+            notifications[0]["params"]["reason"],
+            "highRiskCyberActivity"
+        );
+    }
+
+    #[test]
+    fn runtime_model_update_ignores_stale_turn() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("complete before stale update".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+        server.runtime_turn_updates.complete(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            "done".to_string(),
+        );
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_rerouted(
+            thread.thread_id,
+            turn.turn.id,
+            "gpt-test".to_string(),
+            "gpt-next".to_string(),
+            ModelRerouteReason::HighRiskCyberActivity,
+        );
+
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
     fn interrupt_turn_invokes_runtime_bridge_before_recording_interrupted_turn() {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
@@ -16115,6 +16309,26 @@ mod tests {
                     request.thread_id.clone(),
                     request.turn_id.clone(),
                     usage,
+                );
+            }
+            RuntimeTurnOutcome::ModelRerouted {
+                from_model,
+                to_model,
+                reason,
+            } => {
+                request.updates.model_rerouted(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    from_model,
+                    to_model,
+                    reason,
+                );
+            }
+            RuntimeTurnOutcome::ModelVerification { verifications } => {
+                request.updates.model_verification(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    verifications,
                 );
             }
             RuntimeTurnOutcome::Completed { output } => {
