@@ -6144,6 +6144,18 @@ mod tests {
     #[test]
     fn config_read_returns_redacted_config_and_layers() {
         let temp = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(
+            temp.path(),
+            serde_json::json!({
+                "model": "gpt-test",
+                "api_key": "secret-api-key",
+                "private_key": "secret-private-key",
+                "provider": {
+                    "token": "secret-token",
+                    "name": "openai"
+                }
+            }),
+        );
         let mut server = initialized_server_with_root(temp.path());
         let response = server
             .handle_json_rpc(
@@ -6151,14 +6163,20 @@ mod tests {
             )
             .expect("response");
         let value: serde_json::Value = serde_json::from_str(&response).expect("json");
-        assert_eq!(value["result"]["config"]["model"], serde_json::Value::Null);
+        assert_eq!(value["result"]["config"]["model"], "gpt-test");
+        assert_eq!(value["result"]["config"]["api_key"], "<redacted>");
+        assert_eq!(value["result"]["config"]["private_key"], "<redacted>");
+        assert_eq!(value["result"]["config"]["provider"]["token"], "<redacted>");
+        assert_eq!(value["result"]["config"]["provider"]["name"], "openai");
         assert!(
             !value["result"]["layers"]
                 .as_array()
                 .expect("layers")
                 .is_empty()
         );
-        assert!(!value.to_string().contains("api_key"));
+        assert!(!value.to_string().contains("secret-api-key"));
+        assert!(!value.to_string().contains("secret-private-key"));
+        assert!(!value.to_string().contains("secret-token"));
     }
 
     #[test]
@@ -6177,6 +6195,111 @@ mod tests {
                 .as_str()
                 .expect("message")
                 .contains("not writable")
+        );
+    }
+
+    #[test]
+    fn config_write_rejects_nested_secret_key_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":12,"method":"config/value/write","params":{"keyPath":"model.api_key","value":"secret","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_batch_write_rejects_nested_secret_key_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":13,"method":"config/batchWrite","params":{"edits":[{"keyPath":"model.token","value":"secret","mergeStrategy":"replace"}]}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_read_uses_cwd_project_config_inside_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+        write_app_server_config(temp.path(), serde_json::json!({"model": "root-model"}));
+        write_app_server_config(&project, serde_json::json!({"model": "project-model"}));
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":14,"method":"config/read","params":{{"includeLayers":true,"cwd":{}}}}}"#,
+                serde_json::to_string(&project.to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], "project-model");
+        assert_eq!(
+            value["result"]["layers"][0]["config"]["model"],
+            "project-model"
+        );
+    }
+
+    #[test]
+    fn config_read_rejects_cwd_outside_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":15,"method":"config/read","params":{{"includeLayers":false,"cwd":{}}}}}"#,
+                serde_json::to_string(&outside.path().to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+    }
+
+    #[test]
+    fn config_write_rejects_file_path_outside_root_as_capability_unavailable() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let outside_file = outside.path().join("app-server-config.json");
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":16,"method":"config/value/write","params":{{"keyPath":"model","value":"gpt-test","mergeStrategy":"replace","filePath":{}}}}}"#,
+                serde_json::to_string(&outside_file.to_string_lossy()).expect("file path json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
         );
     }
 
@@ -13872,6 +13995,16 @@ mod tests {
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
         server
+    }
+
+    fn write_app_server_config(root: &Path, value: serde_json::Value) {
+        let dir = root.join(".dasclaw");
+        fs::create_dir_all(&dir).expect("config dir");
+        fs::write(
+            dir.join("app-server-config.json"),
+            serde_json::to_vec_pretty(&value).expect("config json"),
+        )
+        .expect("write config");
     }
 
     fn create_completed_thread_with_turns(server: &mut AppServer, count: usize) -> String {

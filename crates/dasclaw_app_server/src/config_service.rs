@@ -19,6 +19,7 @@ use crate::app_services::ConfigService;
 const CAPABILITY: &str = "config";
 const CONFIG_DIR: &str = ".dasclaw";
 const CONFIG_FILE: &str = "app-server-config.json";
+const REDACTED: &str = "<redacted>";
 const WRITABLE_CONFIG_KEYS: &[&str] = &[
     "model",
     "review_model",
@@ -62,7 +63,7 @@ impl AppServerConfigService {
                 ));
             }
             Some(path) => validate_path(path, Some(&self.root)).map_err(|error| {
-                AppServerError::invalid_request(
+                AppServerError::capability_unavailable(
                     CAPABILITY,
                     format!("config file path is outside service root: {error}"),
                 )
@@ -71,7 +72,7 @@ impl AppServerConfigService {
         };
 
         if !file.starts_with(&self.root) {
-            return Err(AppServerError::invalid_request(
+            return Err(AppServerError::capability_unavailable(
                 CAPABILITY,
                 "config file path is outside service root",
             ));
@@ -79,6 +80,57 @@ impl AppServerConfigService {
 
         Ok(file)
     }
+
+    fn resolve_cwd(&self, cwd: &str) -> Result<PathBuf, AppServerError> {
+        if cwd.trim().is_empty() {
+            return Err(AppServerError::invalid_request(
+                CAPABILITY,
+                "cwd must not be empty",
+            ));
+        }
+        let resolved = validate_path(cwd, Some(&self.root)).map_err(|error| {
+            AppServerError::capability_unavailable(
+                CAPABILITY,
+                format!("config cwd is outside service root: {error}"),
+            )
+        })?;
+        if !resolved.starts_with(&self.root) {
+            return Err(AppServerError::capability_unavailable(
+                CAPABILITY,
+                "config cwd is outside service root",
+            ));
+        }
+        Ok(resolved)
+    }
+
+    fn read_target(&self, cwd: Option<&str>) -> Result<ConfigReadTarget, AppServerError> {
+        match cwd {
+            Some(cwd) => {
+                let cwd = self.resolve_cwd(cwd)?;
+                Ok(ConfigReadTarget {
+                    file: cwd.join(CONFIG_DIR).join(CONFIG_FILE),
+                    source: ConfigLayerSource::Project {
+                        dot_dasclaw_folder: display_path(&cwd.join(CONFIG_DIR)),
+                    },
+                })
+            }
+            None => {
+                let file = self.resolve_file(None)?;
+                Ok(ConfigReadTarget {
+                    source: ConfigLayerSource::User {
+                        file: display_path(&file),
+                    },
+                    file,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConfigReadTarget {
+    file: PathBuf,
+    source: ConfigLayerSource,
 }
 
 impl ConfigService for AppServerConfigService {
@@ -92,18 +144,15 @@ impl ConfigService for AppServerConfigService {
     }
 
     fn read(&self, params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError> {
-        let file = self.resolve_file(None)?;
-        let config = read_json(&file)?;
+        let target = self.read_target(params.cwd.as_deref())?;
+        let config = read_json(&target.file)?;
         let version = version_for(&config);
         let redacted = redact_secrets(config);
-        let name = ConfigLayerSource::User {
-            file: display_path(&file),
-        };
 
-        let origins = origins_for(&redacted, name.clone(), version.clone());
+        let origins = origins_for(&redacted, target.source.clone(), version.clone());
         let layers = params.include_layers.then(|| {
             vec![ConfigLayer {
-                name,
+                name: target.source,
                 version,
                 config: redacted.clone(),
                 disabled_reason: None,
@@ -227,17 +276,23 @@ fn version_for(config: &Value) -> String {
 }
 
 fn ensure_writable_key(key_path: &str) -> Result<(), AppServerError> {
-    let mut parts = key_path.split('.');
-    let Some(first) = parts.next().filter(|part| !part.is_empty()) else {
+    let parts = key_path.split('.').collect::<Vec<_>>();
+    let Some(first) = parts.first().copied().filter(|part| !part.is_empty()) else {
         return Err(AppServerError::invalid_request(
             CAPABILITY,
             "config keyPath must not be empty",
         ));
     };
-    if parts.any(str::is_empty) {
+    if parts.iter().any(|part| part.is_empty()) {
         return Err(AppServerError::invalid_request(
             CAPABILITY,
             "config keyPath must not contain empty path segments",
+        ));
+    }
+    if is_secret_key(key_path) || parts.iter().any(|part| is_secret_key(part)) {
+        return Err(AppServerError::invalid_request(
+            CAPABILITY,
+            format!("secret config keyPath is not writable: {key_path}"),
         ));
     }
     if WRITABLE_CONFIG_KEYS.contains(&first) {
@@ -307,9 +362,12 @@ fn redact_secrets(value: Value) -> Value {
         Value::Object(object) => {
             let mut redacted = Map::new();
             for (key, value) in object {
-                if !is_secret_key(&key) {
-                    redacted.insert(key, redact_secrets(value));
-                }
+                let value = if is_secret_key(&key) {
+                    Value::String(REDACTED.to_string())
+                } else {
+                    redact_secrets(value)
+                };
+                redacted.insert(key, value);
             }
             Value::Object(redacted)
         }
@@ -320,8 +378,7 @@ fn redact_secrets(value: Value) -> Value {
 
 fn is_secret_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
-    normalized.contains("api_key")
-        || normalized.contains("apikey")
+    normalized.contains("key")
         || normalized.contains("secret")
         || normalized.contains("token")
         || normalized.contains("password")
