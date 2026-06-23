@@ -22,10 +22,6 @@ export interface ComposerContentInput {
   attachedFiles: ComposerFileAttachment[];
 }
 
-export interface ComposerImageErrorContext {
-  source: 'paste' | 'drop';
-}
-
 const MAX_BLOB_SIZE = 3.75 * 1024 * 1024;
 
 const normalizeImageMediaType = (mediaType: string): ComposerImageMediaType => {
@@ -200,7 +196,12 @@ export const buildImageDraftsFromClipboardItems = async (
       continue;
     }
 
-    newImages.push(await buildComposerImageFromBlob(file));
+    try {
+      newImages.push(await buildComposerImageFromBlob(file));
+    } catch {
+      // Keep processing remaining items if one image fails to decode/resize.
+      continue;
+    }
   }
 
   return newImages;
@@ -213,7 +214,12 @@ export const buildImageDraftsFromFiles = async (
   const newImages: ComposerImage[] = [];
 
   for (const file of imageFiles) {
-    newImages.push(await buildComposerImageFromBlob(file));
+    try {
+      newImages.push(await buildComposerImageFromBlob(file));
+    } catch {
+      // Keep processing remaining files if one image fails to decode/resize.
+      continue;
+    }
   }
 
   return newImages;
