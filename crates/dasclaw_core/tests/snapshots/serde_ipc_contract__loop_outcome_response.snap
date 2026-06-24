@@ -1,8 +1,22 @@
 ---
 source: crates/dasclaw_core/tests/serde_ipc_contract.rs
-expression: "LoopOutcome::Response(\"done\".into())"
+assertion_line: 302
+expression: "LoopOutcome::Response\n{\n    text: \"done\".into(), usage: TokenUsage::default(), metadata:\n    ResponseMetadata::default(),\n}"
 ---
 {
   "kind": "response",
-  "data": "done"
+  "data": {
+    "text": "done",
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "metadata": {
+      "anomaly": null,
+      "actualModel": null,
+      "modelVerifications": []
+    }
+  }
 }

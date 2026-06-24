@@ -9,14 +9,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use dasclaw_app_server_protocol::{
     ConfigBatchWriteParams, ConfigEdit, ConfigLayer, ConfigLayerMetadata, ConfigLayerSource,
-    ConfigReadParams, ConfigReadResponse, ConfigValueWriteParams, ConfigWriteResponse,
-    MergeStrategy, ServiceHealth, ServiceName,
+    ConfigReadParams, ConfigReadResponse, ConfigValueWriteParams, ConfigWarningNotification,
+    ConfigWriteResponse, DeprecationNoticeNotification, MergeStrategy, ServiceHealth, ServiceName,
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
 use serde_json::{Map, Value};
 
 use crate::AppServerError;
 use crate::app_services::ConfigService;
+use crate::hook_service::AppServerHookNotification;
 
 const CAPABILITY: &str = "config";
 const CONFIG_DIR: &str = ".dasclaw";
@@ -34,11 +35,21 @@ const WRITABLE_CONFIG_KEYS: &[&str] = &[
     "instructions",
     "developer_instructions",
 ];
+const DEPRECATED_CONFIG_KEYS: &[DeprecatedConfigKey] = &[DeprecatedConfigKey {
+    key: "experimental_instructions_file",
+    message: "experimental_instructions_file is deprecated; use project instructions discovery instead",
+}];
+
+struct DeprecatedConfigKey {
+    key: &'static str,
+    message: &'static str,
+}
 
 #[derive(Debug)]
 pub struct AppServerConfigService {
     root: PathBuf,
     lock: Mutex<()>,
+    notifications: Mutex<Vec<AppServerHookNotification>>,
 }
 
 impl AppServerConfigService {
@@ -49,6 +60,7 @@ impl AppServerConfigService {
         Self {
             root,
             lock: Mutex::new(()),
+            notifications: Mutex::new(Vec::new()),
         }
     }
 
@@ -131,6 +143,43 @@ impl AppServerConfigService {
             }
         }
     }
+
+    fn collect_notifications_for_config(&self, config: &Value, path: Option<String>) {
+        let Some(object) = config.as_object() else {
+            return;
+        };
+
+        let mut notifications = self
+            .notifications
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for key in object.keys() {
+            if let Some(deprecated) = deprecated_config_key(key) {
+                notifications.push(AppServerHookNotification::DeprecationNotice(
+                    DeprecationNoticeNotification {
+                        summary: deprecated.key.to_string(),
+                        details: Some(deprecated.message.to_string()),
+                    },
+                ));
+                continue;
+            }
+
+            if !WRITABLE_CONFIG_KEYS.contains(&key.as_str()) {
+                notifications.push(AppServerHookNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "unsupported config key".to_string(),
+                        details: Some(format!("key {key} is ignored by Dasclaw app-server")),
+                        path: path.clone(),
+                        range: None,
+                    },
+                ));
+            }
+        }
+    }
+
+    pub fn drain_config_warnings(&self) -> Vec<AppServerHookNotification> {
+        self.drain_config_notifications()
+    }
 }
 
 #[derive(Debug)]
@@ -156,6 +205,7 @@ impl ConfigService for AppServerConfigService {
             .unwrap_or_else(|poison| poison.into_inner());
         let target = self.read_target(params.cwd.as_deref())?;
         let config = read_json(&target.file)?;
+        self.collect_notifications_for_config(&config, Some(display_path(&target.file)));
         let version = version_for(&config);
         let redacted = redact_secrets(config);
 
@@ -202,6 +252,7 @@ impl ConfigService for AppServerConfigService {
             .unwrap_or_else(|poison| poison.into_inner());
         let file = self.resolve_file(params.file_path.as_deref())?;
         let mut config = read_json(&file)?;
+        self.collect_notifications_for_config(&config, Some(display_path(&file)));
         let current_version = version_for(&config);
 
         if params
@@ -228,6 +279,32 @@ impl ConfigService for AppServerConfigService {
             version,
         })
     }
+
+    fn collect_startup_notifications(&self) -> Vec<AppServerHookNotification> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let file = self.default_file();
+        if let Ok(config) = read_json(&file) {
+            self.collect_notifications_for_config(&config, Some(display_path(&file)));
+        }
+        self.drain_config_notifications()
+    }
+
+    fn drain_config_notifications(&self) -> Vec<AppServerHookNotification> {
+        let mut notifications = self
+            .notifications
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        std::mem::take(&mut *notifications)
+    }
+}
+
+fn deprecated_config_key(key: &str) -> Option<&'static DeprecatedConfigKey> {
+    DEPRECATED_CONFIG_KEYS
+        .iter()
+        .find(|deprecated| deprecated.key == key)
 }
 
 fn read_json(file: &Path) -> Result<Value, AppServerError> {

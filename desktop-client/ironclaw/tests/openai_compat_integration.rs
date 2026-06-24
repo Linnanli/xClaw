@@ -14,8 +14,8 @@ use ironclaw::channels::web::sse::SseManager;
 use ironclaw::channels::web::ws::WsConnectionTracker;
 use ironclaw::error::LlmError;
 use ironclaw::llm::{
-    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCompletionRequest,
-    ToolCompletionResponse,
+    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ResponseMetadata,
+    ToolCompletionRequest, ToolCompletionResponse,
 };
 
 const AUTH_TOKEN: &str = "test-openai-token";
@@ -90,6 +90,7 @@ impl LlmProvider for MockLlmProvider {
         if let Some(tool) = req.tools.first() {
             Ok(ToolCompletionResponse {
                 content: None,
+                reasoning: None,
                 tool_calls: vec![ironclaw::llm::ToolCall {
                     id: "call_mock_001".to_string(),
                     name: tool.name.clone(),
@@ -99,16 +100,19 @@ impl LlmProvider for MockLlmProvider {
                 input_tokens: 15,
                 output_tokens: 8,
                 finish_reason: FinishReason::ToolUse,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })
         } else {
             Ok(ToolCompletionResponse {
                 content: Some("No tools available".to_string()),
+                reasoning: None,
                 tool_calls: vec![],
                 input_tokens: 10,
                 output_tokens: 4,
                 finish_reason: FinishReason::Stop,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })
@@ -160,10 +164,12 @@ impl LlmProvider for FixedModelProvider {
     ) -> Result<ToolCompletionResponse, LlmError> {
         Ok(ToolCompletionResponse {
             content: Some("fixed response".to_string()),
+            reasoning: None,
             tool_calls: vec![],
             input_tokens: 10,
             output_tokens: 5,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })

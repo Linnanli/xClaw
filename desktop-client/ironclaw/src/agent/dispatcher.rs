@@ -13,7 +13,7 @@ use crate::agent::Agent;
 use crate::agent::session::{PendingApproval, Session, ThreadState};
 use crate::channels::IncomingMessage;
 use crate::error::Error;
-use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome, ModelCallMode};
 use dasclaw_runtime::context::JobContext;
 
 use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
@@ -352,6 +352,7 @@ impl Agent {
             responder,
             Some(dispatcher),
             Some(cancel_token.clone()),
+            ModelCallMode::Invoke,
             None,
         )
         .run(&mut reason_ctx, &loop_config, &hooks)
@@ -365,7 +366,7 @@ impl Agent {
         let outcome = outcome?;
 
         match outcome {
-            LoopOutcome::Response(text) => {
+            LoopOutcome::Response { text, .. } => {
                 // Strip internal "[Called tool ...]" text that can leak when
                 // provider flattening (e.g. NEAR AI) converts tool_calls to
                 // plain text and the LLM echoes it back. Previously this
@@ -678,8 +679,8 @@ mod tests {
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::error::Error;
     use crate::llm::{
-        CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCall,
-        ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
+        CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ResponseMetadata,
+        ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
     };
     use crate::safety::SafetyLayer;
     use crate::tools::ToolRegistry;
@@ -724,10 +725,12 @@ mod tests {
         ) -> Result<ToolCompletionResponse, crate::error::LlmError> {
             Ok(ToolCompletionResponse {
                 content: Some("ok".to_string()),
+                reasoning: None,
                 tool_calls: Vec::new(),
                 input_tokens: 0,
                 output_tokens: 0,
                 finish_reason: FinishReason::Stop,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })
@@ -1505,10 +1508,12 @@ mod tests {
                 // No tools = force_text mode; return text.
                 return Ok(ToolCompletionResponse {
                     content: Some("forced text response".to_string()),
+                    reasoning: None,
                     tool_calls: Vec::new(),
                     input_tokens: 0,
                     output_tokens: 5,
                     finish_reason: FinishReason::Stop,
+                    metadata: ResponseMetadata::default(),
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 });
@@ -1516,6 +1521,7 @@ mod tests {
             // Tools available: always call one.
             Ok(ToolCompletionResponse {
                 content: None,
+                reasoning: None,
                 tool_calls: vec![ToolCall {
                     id: crate::llm::generate_tool_call_id(0, 0),
                     name: "echo".to_string(),
@@ -1525,6 +1531,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 5,
                 finish_reason: FinishReason::ToolUse,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })
@@ -1659,10 +1666,12 @@ mod tests {
             if request.tools.is_empty() {
                 return Ok(ToolCompletionResponse {
                     content: Some("forced text".to_string()),
+                    reasoning: None,
                     tool_calls: Vec::new(),
                     input_tokens: 0,
                     output_tokens: 2,
                     finish_reason: FinishReason::Stop,
+                    metadata: ResponseMetadata::default(),
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 });
@@ -1670,6 +1679,7 @@ mod tests {
             // Always call a tool that does not exist in the registry.
             Ok(ToolCompletionResponse {
                 content: None,
+                reasoning: None,
                 tool_calls: vec![ToolCall {
                     id: crate::llm::generate_tool_call_id(0, 0),
                     name: "nonexistent_tool".to_string(),
@@ -1679,6 +1689,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 5,
                 finish_reason: FinishReason::ToolUse,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })

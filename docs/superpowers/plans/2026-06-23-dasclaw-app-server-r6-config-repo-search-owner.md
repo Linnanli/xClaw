@@ -12,6 +12,57 @@
 
 Independent review on 2026-06-24 found that the config, repo diff, fuzzy search, conversation summary, and review-start owner slices are implemented and tested, but the model and hook/warning notification slices are only protocol/drain wiring so far. `model/rerouted` / `model/verification` still need a real app-server producer and readiness advertisement before they can be marked complete. `hook/started` / `hook/completed` / warning events still need a real `dasclaw_hooks::HookRegistry` or warning source integration before they can be advertised as implemented. The gap matrix therefore strikes through only the completed R6 subitems and keeps those producer follow-ups open.
 
+## 2026-06-24 Execution Update After Producer Review
+
+Task 9 through Task 12 were implemented conservatively and then re-reviewed for fake readiness and client-bug masking:
+
+- Completed and advertised: config read/write/batch owner, read-only repo diff, path fuzzy search sessions, deterministic conversation summary, review-start routing, HookRegistry `beforeToolCall` -> app-server `preToolUse` started/completed notifications, and config/deprecation warning producers. Config/deprecation warnings are delivered both during initialize and after runtime `config/read` / `config/batchWrite` paths.
+- Implemented only as delivery, not advertised as real producers: `model/rerouted`, `model/verification`, generic `warning`, `guardianWarning`, and HookRegistry lifecycle points other than `preToolUse`.
+- Correctness correction: provider `actual_model` metadata is preserved, but app-server no longer infers `model/rerouted(reason=highRiskCyberActivity)` from a plain requested/actual model mismatch. A trustworthy reroute reason must come from a real provider/runtime source before readiness can advertise `model/rerouted`.
+- Correctness correction: startup sandbox `warning` is not advertised or emitted from a hard-coded `ReadOnly { network_access: false }` policy. It must be wired to the actual app-server sandbox policy before it can be marked complete.
+
+The R6 row in `docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md` is therefore intentionally partial, not fully struck through. This is deliberate: protocol shells and injected test queues do not count as completed producer capability.
+
+## 2026-06-24 Codex Producer Reference Supplement
+
+This supplement records the evidence gathered from `/Users/nallylin/Documents/code/x-claw/codex-cli-main` before extending the remaining R6 plan. The important distinction is producer versus delivery:
+
+- Delivery means app-server can turn an already-created internal event into a JSON-RPC notification.
+- Producer means real runtime, provider, hook, startup, or guardian code creates that event during normal product use.
+
+R6 currently has delivery for model/hook/warning notifications. The remaining work is the producer side.
+
+Verification evidence:
+
+| Level | Evidence | Result |
+|---|---|---|
+| Semantic | `semantic_search_nodes_tool` on `/Users/nallylin/Documents/code/x-claw/codex-cli-main` for "model rerouted verification hook started completed guardian warning config warning deprecation notice app server notification producer" | Hit Codex tests and serializers including `model_verification_emits_structured_event_without_reroute_or_warning`, `verify_model_rerouted_notification_serialization`, and `model_verification_emits_typed_notification_and_warning_v2`. |
+| Semantic | `semantic_search_nodes_tool` on `/Users/nallylin/Documents/code/x-claw/crates` for "dasclaw app server model reroute verification hook started completed warning config warning producer service health notification" | Hit weak/noisy Dasclaw matches only, so symbol and literal checks were required before making remaining-work claims. |
+| Symbol | LSP `document_symbols` for `crates/dasclaw_app_server/src/hook_service.rs` | `AppServerHookNotification` and `AppServerHookService` exist, but `health()` returns disabled with message `"hook notification producer is not wired"`. |
+| Symbol | LSP `document_symbols` for `crates/dasclaw_app_server/src/lib.rs` | `RuntimeTurnUpdateSink`, `RuntimeTurnOutcome::ModelRerouted`, and `RuntimeTurnOutcome::ModelVerification` exist as app-server update delivery plumbing. |
+| Literal | `rg` in Dasclaw app-server protocol | `model/rerouted`, `model/verification`, `hook/started`, `hook/completed`, `warning`, `guardianWarning`, `configWarning`, and `deprecationNotice` typed notifications and constructors already exist. |
+| Literal | `rg` in Dasclaw runtime/provider/core | Provider responses keep an actual response model in `MessageResponse`, but `ToolCompletionResponse`, `ResponseMetadata`, and `AgentRunOutput` drop it before app-server can compare requested model versus actual model. |
+
+Codex reference implementation:
+
+- `codex-rs/core/src/session/turn.rs` handles `ResponseEvent::ServerModel(server_model)` and `ResponseEvent::ModelVerifications(verifications)` during the real response stream.
+- `codex-rs/core/src/session/mod.rs` compares requested model versus server model in `maybe_warn_on_server_model_mismatch`, emits `EventMsg::ModelReroute`, and also emits a user-visible `Warning`.
+- `codex-rs/core/src/session/mod.rs` emits `EventMsg::ModelVerification` from the streamed verification data.
+- `codex-rs/core/src/hook_runtime.rs` emits `EventMsg::HookStarted` before hook execution and `EventMsg::HookCompleted` after actual hook results.
+- `codex-rs/core/src/guardian/review.rs` emits guardian warnings from real denial/timeout/review paths.
+- `codex-rs/app-server/src/bespoke_event_handling.rs` maps those core `EventMsg` values to app-server `ServerNotification` values. The app-server is a bridge for model, hook, warning, guardian warning, and deprecation events.
+- `codex-rs/app-server/src/lib.rs` and `codex-rs/app-server/src/message_processor.rs` collect startup/config warnings and send them during connection initialization. Codex config warnings are app-server startup/init producer work, not a core `EventMsg::ConfigWarning`.
+
+Dasclaw state after review:
+
+- `crates/dasclaw_app_server_protocol/src/lib.rs` has the R6 app-server notification methods, DTOs, schemas, and `ServerNotification` constructors.
+- `crates/dasclaw_app_server/src/lib.rs` has `RuntimeTurnUpdateSink` and drains model updates into JSON-RPC notifications only for active turns.
+- `crates/dasclaw_app_server/src/hook_service.rs` has an in-memory queue and drain path, but deliberately advertises disabled health because no real producer is wired.
+- `crates/dasclaw_llm_provider/src/providers/openai_compat.rs` normalizes a provider response model, and `crates/dasclaw_llm_provider/src/types.rs` stores it in `MessageResponse`.
+- `crates/dasclaw_runtime/src/llm_adapter.rs`, `crates/dasclaw_core/src/response_types.rs`, `crates/dasclaw_core/src/agentic_loop.rs`, and `crates/dasclaw_runtime/src/agent.rs` lose that model metadata before app-server sees the completed turn.
+
+Plan consequence: Task 7 and Task 8 below are historical delivery tasks. They are useful foundations, but R6 cannot be closed until Task 9 through Task 12 add real producers, readiness gates, and non-fake-only tests.
+
 ---
 
 ## Start Gate
@@ -23,7 +74,7 @@ Project 4-question gate:
 3. Cross-project/protocol reconciliation? Yes. It compares Dasclaw app-server with Codex app-server protocol shapes.
 4. Architecture reconciliation document? Yes. This is a plan for protocol gap R6.
 
-Required evidence was collected before this plan:
+Required evidence was collected before this plan. This table records the original pre-implementation state; the 2026-06-24 supplement above supersedes the model/hook/warning rows for the remaining producer work.
 
 | R6 area | Existing Dasclaw evidence | Missing app-server surface evidence | Plan consequence |
 |---|---|---|---|
@@ -2516,21 +2567,733 @@ git add crates/dasclaw_app_server/Cargo.toml crates/dasclaw_app_server/src/hook_
 git commit -m "feat(app-server): add R6 hook warning channels" -m "已检查 R6 app-server owner 是否已有，结论：底座存在于 fs/git/hooks/core/model 等 crate，R6 对外 app-server surface 仍需新增"
 ```
 
-## Task 9: Update Matrix And Run Full Local Gate
+## R6 Producer Completion Tasks
+
+Task 7 and Task 8 establish notification delivery. The tasks below complete the real producer side by following the Codex split:
+
+1. Runtime/provider/hook/guardian/startup code creates typed events from real execution.
+2. App-server bridges those events to JSON-RPC notifications.
+3. Capability readiness advertises only producers that are actually wired.
+
+## Task 9: Preserve Provider Model Metadata And Emit Real Model Events
 
 **Files:**
 
-- Modify: `docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md`
+- Modify: `crates/dasclaw_core/src/messages.rs`
+- Modify: `crates/dasclaw_core/src/response_types.rs`
+- Modify: `crates/dasclaw_core/src/agentic_loop.rs`
+- Modify: `crates/dasclaw_runtime/src/agent.rs`
+- Modify: `crates/dasclaw_runtime/src/llm_adapter.rs`
+- Modify: `crates/dasclaw_llm_provider/src/provider/codex_chatgpt.rs`
+- Modify: `crates/dasclaw_llm_provider/src/provider/openai_codex_provider.rs`
+- Modify: `crates/dasclaw_llm_provider/src/provider/reasoning.rs`
+- Modify: `crates/dasclaw_llm_provider/src/testing.rs`
+- Modify: `crates/dasclaw_app_server/src/lib.rs`
 
-- [ ] **Step 1: Update R6 row**
+- [ ] **Step 1: Add failing metadata preservation tests**
 
-Change the R6 row to say:
+Add unit tests that prove actual provider model metadata survives each boundary:
 
-```markdown
-| R6 | Config / repo tools / search owner | broad `config/read`、`config/value/write`、`config/batchWrite`；`gitDiffToRemote`；`fuzzyFileSearch` session；`getConversationSummary`；`review/start`；model reroute / verification；hooks warning channel | R6 app-server owner implemented with typed protocol, config allowlist policy, read-only repo service, path fuzzy search, deterministic conversation summary, review-start routing, model event delivery, and hook/warning notification drain. Existing Dasclaw git/search/hooks/core/model底座被复用，Codex product-only external-agent/feedback/experiment domains remain outside R6. | Method/event schema lists every R6 contract; service tests cover success and fail-closed errors; unsupported R7 domains stay explicit. |
+```rust
+#[test]
+fn tool_completion_response_carries_actual_model_metadata() {
+    let response = ToolCompletionResponse {
+        content: Some("done".to_string()),
+        reasoning: None,
+        tool_calls: Vec::new(),
+        input_tokens: 1,
+        output_tokens: 2,
+        finish_reason: FinishReason::Stop,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        metadata: ResponseMetadata {
+            anomaly: None,
+            actual_model: Some("gpt-5.2-codex".to_string()),
+            model_verifications: Vec::new(),
+        },
+    };
+
+    let output = map_to_respond_output(response);
+    assert_eq!(output.metadata.actual_model.as_deref(), Some("gpt-5.2-codex"));
+}
 ```
 
-- [ ] **Step 2: Run targeted tests**
+Add app-server bridge tests:
+
+```rust
+#[test]
+fn runtime_completed_event_does_not_infer_high_risk_reroute_from_actual_model_metadata() {
+    let mut server = initialized_server_with_responder_metadata(ResponseMetadata {
+        actual_model: Some("gpt-5.2-codex".to_string()),
+        ..ResponseMetadata::default()
+    });
+    start_turn(&mut server, "gpt-5.3-codex");
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+    assert_no_json_rpc_method(&notifications, "model/rerouted");
+}
+```
+
+Delivery-only app-server tests may still cover explicit runtime updates such as `runtime_model_reroute_update_emits_notification`, but those tests must stay out of producer-readiness evidence until a trusted reroute reason source exists.
+
+```rust
+#[test]
+fn runtime_completed_event_emits_model_verification_from_response_metadata() {
+    let mut server = initialized_server();
+    let request = runtime_turn_start_request_with_model("gpt-5.3-codex");
+    let metadata = ResponseMetadata {
+        anomaly: None,
+        actual_model: Some("gpt-5.3-codex".to_string()),
+        model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+    };
+
+    server.record_runtime_response_metadata(&request, &metadata);
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+    assert_json_rpc_methods(&notifications, vec!["model/verification"]);
+    assert_eq!(notifications[0]["params"]["verifications"], json!(["trustedAccessForCyber"]));
+}
+
+#[test]
+fn runtime_same_model_metadata_does_not_emit_reroute() {
+    let mut server = initialized_server();
+    let request = runtime_turn_start_request_with_model("gpt-5.3-codex");
+    let metadata = ResponseMetadata {
+        anomaly: None,
+        actual_model: Some("gpt-5.3-codex".to_string()),
+        model_verifications: Vec::new(),
+    };
+
+    server.record_runtime_response_metadata(&request, &metadata);
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+    assert_json_rpc_methods(&notifications, vec![]);
+}
+```
+
+- [ ] **Step 2: Extend core response metadata**
+
+In `crates/dasclaw_core/src/response_types.rs`, change `ResponseMetadata` from copy-only anomaly metadata into response metadata that can carry model facts:
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anomaly: Option<ResponseAnomaly>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_verifications: Vec<ResponseModelVerification>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResponseModelVerification {
+    TrustedAccessForCyber,
+}
+```
+
+Remove `Copy` from call sites that relied on `ResponseMetadata: Copy`; clone the metadata only where the same value must be reused.
+
+- [ ] **Step 3: Add metadata to tool completion responses**
+
+In `crates/dasclaw_core/src/messages.rs`, extend `ToolCompletionResponse`:
+
+```rust
+pub struct ToolCompletionResponse {
+    pub content: Option<String>,
+    pub reasoning: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub finish_reason: FinishReason,
+    pub cache_read_input_tokens: u32,
+    pub cache_creation_input_tokens: u32,
+    pub metadata: ResponseMetadata,
+}
+```
+
+Set `metadata: ResponseMetadata::default()` in existing test/fake providers first so the compile errors become an explicit checklist.
+
+- [ ] **Step 4: Populate actual model in real providers**
+
+When a provider response already knows the actual model, copy it into `ToolCompletionResponse.metadata.actual_model`.
+
+`crates/dasclaw_llm_provider/src/providers/openai_compat.rs` already normalizes `MessageResponse.model`. Keep that model when adapting into `ToolCompletionResponse`.
+
+For provider implementations that only have the configured model, set:
+
+```rust
+metadata: ResponseMetadata {
+    actual_model: Some(self.model.clone()),
+    ..ResponseMetadata::default()
+},
+```
+
+For test providers and provider wrappers such as failover/smart-routing/reasoning, preserve inner `response.metadata` instead of replacing it with default metadata.
+
+- [ ] **Step 5: Carry metadata through runtime output**
+
+In `crates/dasclaw_core/src/agentic_loop.rs`, return metadata from the default text responder:
+
+```rust
+TextAction::Return(LoopOutcome::Response {
+    text: text.to_string(),
+    usage,
+    metadata,
+})
+```
+
+If the existing enum still uses `LoopOutcome::Response(String)`, change it to a struct variant so the final response text, usage, and metadata travel together.
+
+In `crates/dasclaw_runtime/src/agent.rs`, extend `AgentRunOutput`:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRunOutput {
+    pub text: String,
+    pub usage: TokenUsage,
+    #[serde(default)]
+    pub metadata: ResponseMetadata,
+}
+```
+
+Update `map_outcome` so completed agent output keeps `metadata`.
+
+- [ ] **Step 6: Convert trusted response metadata into app-server runtime updates**
+
+Superseded implementation note: do **not** infer `model/rerouted` from `actual_model != requested_model`, and do **not** label a plain model mismatch as `HighRiskCyberActivity`. Provider `actual_model` is useful metadata, but a real `model/rerouted` producer also needs a trusted reroute reason from the provider/runtime path. Until that reason source exists, preserve `actual_model` without advertising or emitting `model/rerouted`.
+
+`model/verification` may be bridged only when `ResponseMetadata.model_verifications` is populated by a real upstream provider source. Hand-authored metadata in tests proves delivery only, not producer readiness.
+
+Add converter:
+
+```rust
+fn model_verification_from_core(value: ResponseModelVerification) -> ModelVerification {
+    match value {
+        ResponseModelVerification::TrustedAccessForCyber => ModelVerification::TrustedAccessForCyber,
+    }
+}
+```
+
+Call this helper when the runtime bridge receives the real completed output for a turn, before the turn is removed from the pending map. This mirrors Codex: the core/runtime observes the model facts, app-server only bridges them.
+
+- [ ] **Step 7: Keep model verification readiness honest**
+
+If no Dasclaw provider can populate `ResponseMetadata.model_verifications` from a real upstream response yet, keep `model/verification` protocol delivery implemented but mark the producer readiness as disabled with reason:
+
+```text
+model verification producer has no provider source wired
+```
+
+Do not use `push_test_runtime_outcome` or hand-authored tests as evidence of real model verification support. Test-only injection proves delivery, not producer readiness.
+
+- [ ] **Step 8: Run model producer tests**
+
+Run:
+
+```bash
+cargo nextest run -p dasclaw_core response_metadata_roundtrip
+cargo nextest run -p dasclaw_runtime agent_run_output_preserves_response_metadata
+cargo nextest run -p dasclaw_llm_provider tool_completion_response_carries_actual_model_metadata
+cargo nextest run -p dasclaw_app_server \
+  runtime_completed_event_does_not_infer_high_risk_reroute_from_actual_model_metadata \
+  runtime_completed_event_emits_model_verification_from_response_metadata \
+  runtime_same_model_metadata_does_not_emit_reroute
+cargo check -p dasclaw_core --tests
+cargo check -p dasclaw_runtime --tests
+cargo check -p dasclaw_llm_provider --tests
+cargo check -p dasclaw_app_server --tests
+```
+
+Expected:
+
+```text
+PASS actual model metadata survives provider -> core -> runtime without being mislabeled as high-risk reroute
+PASS reroute notification is emitted only from an explicit trusted reroute reason source
+PASS model verification readiness remains disabled when no provider source is wired
+```
+
+- [ ] **Step 9: Commit model producer**
+
+Run:
+
+```bash
+git add crates/dasclaw_core/src/messages.rs crates/dasclaw_core/src/response_types.rs crates/dasclaw_core/src/agentic_loop.rs crates/dasclaw_runtime/src/agent.rs crates/dasclaw_runtime/src/llm_adapter.rs crates/dasclaw_llm_provider/src/provider/codex_chatgpt.rs crates/dasclaw_llm_provider/src/provider/openai_codex_provider.rs crates/dasclaw_llm_provider/src/provider/reasoning.rs crates/dasclaw_llm_provider/src/testing.rs crates/dasclaw_app_server/src/lib.rs
+git commit -m "feat(app-server): produce R6 model events from response metadata" -m "已检查 R6 app-server owner 是否已有，结论：Codex 在 core/runtime 产生 model 事件再由 app-server 转发；Dasclaw 已有通知交付层但需贯通 provider 实际模型 metadata"
+```
+
+## Task 10: Wire HookRegistry Runs To Hook Notifications
+
+**Files:**
+
+- Modify: `crates/dasclaw_hooks/src/registry.rs`
+- Modify: `crates/dasclaw_hooks/src/lib.rs`
+- Modify: `crates/dasclaw_app_server/src/hook_service.rs`
+- Modify: `crates/dasclaw_app_server/src/app_services.rs`
+- Modify: `crates/dasclaw_app_server/src/lib.rs`
+- Modify: `crates/dasclaw_runtime/src/agent.rs`
+
+- [ ] **Step 1: Add failing HookRegistry observer tests**
+
+Add tests in `crates/dasclaw_hooks/src/registry.rs`:
+
+```rust
+#[tokio::test]
+async fn registry_observer_receives_started_and_completed_for_real_run() {
+    let observer = RecordingHookObserver::default();
+    let registry = HookRegistry::new().with_observer(Arc::new(observer.clone()));
+    registry.register(Box::new(TestHook::ok("lint"))).expect("register hook");
+
+    let outcome = registry.run(&test_event()).await.expect("hook run");
+
+    assert_eq!(outcome, HookOutcome::ok());
+    assert_eq!(observer.started_count(), 1);
+    assert_eq!(observer.completed_count(), 1);
+    assert_eq!(observer.completed()[0].status, HookObservedStatus::Completed);
+}
+
+#[tokio::test]
+async fn registry_observer_marks_reject_as_completed_rejected() {
+    let observer = RecordingHookObserver::default();
+    let registry = HookRegistry::new().with_observer(Arc::new(observer.clone()));
+    registry.register(Box::new(TestHook::reject("blocked"))).expect("register hook");
+
+    let outcome = registry.run(&test_event()).await.expect("hook run");
+
+    assert!(matches!(outcome, HookOutcome::Reject { .. }));
+    assert_eq!(observer.completed()[0].status, HookObservedStatus::Rejected);
+}
+```
+
+- [ ] **Step 2: Add a hook observer seam in `dasclaw_hooks`**
+
+Add observer types in `crates/dasclaw_hooks/src/registry.rs` and export them from `lib.rs`:
+
+```rust
+pub trait HookRunObserver: Send + Sync {
+    fn hook_started(&self, event: HookObservedRun);
+    fn hook_completed(&self, event: HookObservedRun);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookObservedRun {
+    pub id: String,
+    pub event_name: String,
+    pub hook_name: String,
+    pub status: HookObservedStatus,
+    pub status_message: Option<String>,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookObservedStatus {
+    Running,
+    Completed,
+    Rejected,
+    Failed,
+    TimedOut,
+}
+```
+
+`HookRegistry::run` must notify `hook_started` immediately before executing each matching hook and notify `hook_completed` after success, reject, failure, or timeout. Use monotonic run IDs that are deterministic in tests.
+
+- [ ] **Step 3: Convert observed runs into app-server notifications**
+
+In `crates/dasclaw_app_server/src/hook_service.rs`, add a ready constructor that carries a real producer identity:
+
+```rust
+pub struct AppServerHookService {
+    notifications: Mutex<Vec<AppServerHookNotification>>,
+    producer_wired: bool,
+}
+
+impl AppServerHookService {
+    pub fn unwired() -> Self {
+        Self {
+            notifications: Mutex::new(Vec::new()),
+            producer_wired: false,
+        }
+    }
+
+    pub fn wired() -> Self {
+        Self {
+            notifications: Mutex::new(Vec::new()),
+            producer_wired: true,
+        }
+    }
+}
+```
+
+Implement `HookRunObserver` for `AppServerHookService` or for a cloneable sink owned by it. Map:
+
+- `HookObservedStatus::Running` to `HookStartedNotification`.
+- `Completed`, `Rejected`, `Failed`, and `TimedOut` to `HookCompletedNotification`.
+
+Use existing protocol enums for `HookRunStatus`, `HookEventName`, `HookHandlerType`, `HookExecutionMode`, `HookScope`, and `HookOutputEntry`. If the current `HookEvent` does not expose an exact Codex-like value, use a deterministic Dasclaw value and document the mapping in the converter test.
+
+- [ ] **Step 4: Wire the observer into real runtime construction**
+
+In app-server service construction, create one hook service and pass its observer sink into the runtime/hook registry creation path:
+
+```rust
+let hook_service = Arc::new(AppServerHookService::wired());
+let hook_observer = hook_service.observer();
+
+let runtime = DasclawAgentRuntimeBridge::with_hook_observer(
+    existing_runtime_args,
+    hook_observer,
+);
+
+Self {
+    hooks: hook_service,
+    runtime,
+    ...
+}
+```
+
+Keep `AppServerHookService::unwired()` for no-op/test servers that do not have a real hook registry. Its health remains disabled:
+
+```rust
+ServiceHealth::disabled(ServiceName::Hooks, "hook notification producer is not wired")
+```
+
+- [ ] **Step 5: Add app-server producer tests**
+
+Add tests in `crates/dasclaw_app_server/src/lib.rs`:
+
+```rust
+#[test]
+fn real_hook_registry_run_produces_hook_notifications() {
+    let mut server = initialized_server_with_wired_hook_registry(sample_ok_hook());
+
+    server.run_hook_registry_for_test(sample_hook_event()).expect("hook run");
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+    assert_json_rpc_methods(&notifications, vec!["hook/started", "hook/completed"]);
+}
+
+#[test]
+fn unwired_hook_service_is_not_advertised_ready() {
+    let server = initialized_server_with_unwired_hook_service();
+
+    let capabilities = server.get_capabilities_for_test();
+
+    assert_eq!(capabilities.hooks.status, CapabilityStatus::Unavailable);
+    assert_eq!(
+        capabilities.hooks.reason.as_deref(),
+        Some("hook notification producer is not wired")
+    );
+}
+```
+
+- [ ] **Step 6: Run hook producer tests**
+
+Run:
+
+```bash
+cargo nextest run -p dasclaw_hooks \
+  registry_observer_receives_started_and_completed_for_real_run \
+  registry_observer_marks_reject_as_completed_rejected
+cargo nextest run -p dasclaw_app_server \
+  real_hook_registry_run_produces_hook_notifications \
+  unwired_hook_service_is_not_advertised_ready
+cargo check -p dasclaw_hooks --tests
+cargo check -p dasclaw_app_server --tests
+```
+
+Expected:
+
+```text
+PASS hook notifications are produced by HookRegistry::run, not by manually pushing fake queue entries
+PASS hook capability remains unavailable when the observer is not wired
+```
+
+- [ ] **Step 7: Commit hook producer**
+
+Run:
+
+```bash
+git add crates/dasclaw_hooks/src/registry.rs crates/dasclaw_hooks/src/lib.rs crates/dasclaw_app_server/src/hook_service.rs crates/dasclaw_app_server/src/app_services.rs crates/dasclaw_app_server/src/lib.rs crates/dasclaw_runtime/src/agent.rs
+git commit -m "feat(app-server): produce R6 hook notifications from HookRegistry" -m "已检查 R6 hook producer 是否已有，结论：Dasclaw 已有 HookRegistry::run 真实入口，但 app-server 之前只有队列 drain，没有注册表 observer"
+```
+
+## Task 11: Wire Startup, Config, Deprecation, And Guardian Warning Producers
+
+**Files:**
+
+- Modify: `crates/dasclaw_app_server/src/config_service.rs`
+- Modify: `crates/dasclaw_app_server/src/hook_service.rs`
+- Modify: `crates/dasclaw_app_server/src/app_services.rs`
+- Modify: `crates/dasclaw_app_server/src/lib.rs`
+- Modify: `crates/dasclaw_sandboxing/src/lib.rs`
+- Modify: `crates/dasclaw_core/src/context/memory.rs`
+
+- [ ] **Step 1: Add failing startup warning tests**
+
+Add tests in `crates/dasclaw_app_server/src/lib.rs`:
+
+```rust
+#[test]
+fn initialize_emits_config_warning_for_unsupported_config_key() {
+    let mut server = initialized_server_with_config_text(r#"
+        model = "gpt-5.3-codex"
+        experimental_instructions_file = "legacy.md"
+    "#);
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+    assert_json_rpc_methods(&notifications, vec!["deprecationNotice"]);
+    assert_eq!(notifications[0]["params"]["key"], "experimental_instructions_file");
+}
+
+#[test]
+fn initialize_emits_warning_for_missing_system_bwrap_when_sandbox_needs_it() {
+    let mut server = initialized_server_with_sandbox_bwrap_warning("sandbox requires bwrap");
+
+    let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+    assert_json_rpc_methods(&notifications, vec!["warning"]);
+    assert!(notifications[0]["params"]["message"].as_str().unwrap().contains("sandbox"));
+}
+```
+
+Add a config-source test:
+
+```rust
+#[test]
+fn config_service_collects_warning_for_unknown_writable_key() {
+    let service = AppServerConfigService::from_config_text_for_test(r#"unknown_key = true"#);
+
+    let warnings = service.drain_config_warnings();
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].summary, "unsupported config key");
+}
+```
+
+- [ ] **Step 2: Add a warning queue owned by app-server services**
+
+Keep the existing `AppServerHookNotification` enum as the shared app-server notification queue for R6 warnings, but rename the trait method to reflect that it drains hook and warning notifications:
+
+```rust
+pub trait HookNotificationService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn drain_notifications(&self) -> Vec<AppServerHookNotification>;
+}
+```
+
+Use `AppServerHookNotification::Warning`, `ConfigWarning`, `GuardianWarning`, and `DeprecationNotice` for non-hook producers until a dedicated warning service becomes worthwhile.
+
+- [ ] **Step 3: Produce config warnings from config parsing**
+
+In `crates/dasclaw_app_server/src/config_service.rs`, add:
+
+```rust
+pub fn drain_config_warnings(&self) -> Vec<AppServerHookNotification> {
+    self.config_warnings
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .drain(..)
+        .map(AppServerHookNotification::ConfigWarning)
+        .collect()
+}
+```
+
+When config read/write sees an unsupported, ignored, or invalid key that is non-fatal, push:
+
+```rust
+ConfigWarningNotification {
+    summary: "unsupported config key".to_string(),
+    details: Some(format!("key {key} is ignored by Dasclaw app-server")),
+    path,
+    range,
+}
+```
+
+Fatal config errors still return method errors; they are not downgraded into warnings.
+
+- [ ] **Step 4: Produce deprecation notices from explicit deprecated keys**
+
+Add a concrete deprecated-key table in config service:
+
+```rust
+const DEPRECATED_CONFIG_KEYS: &[DeprecatedConfigKey] = &[
+    DeprecatedConfigKey {
+        key: "experimental_instructions_file",
+        message: "experimental_instructions_file is deprecated; use project instructions discovery instead",
+        replacement: None,
+    },
+];
+
+struct DeprecatedConfigKey {
+    key: &'static str,
+    message: &'static str,
+    replacement: Option<&'static str>,
+}
+```
+
+When a deprecated key is present, push:
+
+```rust
+DeprecationNoticeNotification {
+    key: key.key.to_string(),
+    message: key.message.to_string(),
+    replacement: key.replacement.map(str::to_string),
+}
+```
+
+Do not invent deprecation notices for keys that are still supported.
+
+- [ ] **Step 5: Produce environment warnings from sandboxing**
+
+Use `dasclaw_sandboxing::system_bwrap_warning` when app-server initializes a sandbox mode that needs bwrap. Convert the returned string into:
+
+```rust
+WarningNotification {
+    thread_id: None,
+    message,
+}
+```
+
+This mirrors Codex startup warnings: the warning is produced during app-server initialization and delivered to the client through the normal notification drain.
+
+- [ ] **Step 6: Produce guardian warnings from real safety/memory warnings**
+
+Use existing Dasclaw warning-bearing structures first. `crates/dasclaw_core/src/context/memory.rs` already has `sanitization_warnings`. When app-server receives a guardian/safety review or memory sanitization warning through the runtime path, convert it to:
+
+```rust
+GuardianWarningNotification {
+    title: "guardian warning".to_string(),
+    message,
+}
+```
+
+If there is no guardian review runtime hook in this slice, keep `guardianWarning` delivery implemented but producer readiness disabled with reason:
+
+```text
+guardian warning producer has no runtime source wired
+```
+
+- [ ] **Step 7: Drain startup warnings during initialize**
+
+During app-server initialization, before returning capabilities, drain config/startup warnings into the notification queue:
+
+```rust
+self.app_services
+    .hooks
+    .push_many(self.app_services.config.drain_config_warnings());
+self.app_services
+    .hooks
+    .push_many(self.app_services.sandbox_startup_warnings());
+self.drain_service_updates();
+```
+
+Do not emit the same startup warning repeatedly on every capability read; startup warnings are one-shot until the underlying source changes.
+
+- [ ] **Step 8: Run warning producer tests**
+
+Run:
+
+```bash
+cargo nextest run -p dasclaw_app_server \
+  initialize_emits_config_warning_for_unsupported_config_key \
+  initialize_emits_warning_for_missing_system_bwrap_when_sandbox_needs_it \
+  config_service_collects_warning_for_unknown_writable_key
+cargo check -p dasclaw_app_server --tests
+```
+
+Expected:
+
+```text
+PASS configWarning, deprecationNotice, and warning are produced from real startup/config sources
+PASS guardianWarning remains disabled unless a real guardian source is wired
+```
+
+- [ ] **Step 9: Commit warning producers**
+
+Run:
+
+```bash
+git add crates/dasclaw_app_server/src/config_service.rs crates/dasclaw_app_server/src/hook_service.rs crates/dasclaw_app_server/src/app_services.rs crates/dasclaw_app_server/src/lib.rs crates/dasclaw_sandboxing/src/lib.rs crates/dasclaw_core/src/context/memory.rs
+git commit -m "feat(app-server): produce R6 startup and warning notifications" -m "已检查 R6 warning producer 是否已有，结论：Codex 启动/config warning 由 app-server 产生；Dasclaw 已有 system_bwrap_warning 和 config 服务，但之前未接通知 producer"
+```
+
+## Task 12: Add Producer Readiness Gates And Close R6 Matrix
+
+**Files:**
+
+- Modify: `crates/dasclaw_app_server_protocol/src/lib.rs`
+- Modify: `crates/dasclaw_app_server/src/app_services.rs`
+- Modify: `crates/dasclaw_app_server/src/lib.rs`
+- Modify: `docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md`
+
+- [ ] **Step 1: Split delivery readiness from producer readiness**
+
+Add R6 producer readiness fields without removing existing protocol availability:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBridgeFeatures {
+    ...
+    pub model_events: ServiceHealth,
+    pub hook_events: ServiceHealth,
+    pub warning_events: ServiceHealth,
+}
+```
+
+Advertise:
+
+- `model/rerouted`: ready only when provider actual-model metadata reaches runtime completion.
+- `model/verification`: ready only when at least one provider source populates `ResponseMetadata.model_verifications`.
+- `hook/started` and `hook/completed`: ready only when `HookRegistry` observer is wired.
+- `warning` and `configWarning`: ready when startup/config warning producers are wired.
+- `guardianWarning`: ready only when a real guardian/safety source is wired.
+- `deprecationNotice`: ready when deprecated config-key detection is wired.
+
+- [ ] **Step 2: Add fail-closed capability tests**
+
+Add tests:
+
+```rust
+#[test]
+fn capabilities_do_not_advertise_fake_only_model_verification() {
+    let server = initialized_server_without_model_verification_source();
+
+    let capabilities = server.get_capabilities_for_test();
+
+    assert_eq!(capabilities.runtime_bridge.model_events.status, ServiceStatus::Disabled);
+    assert_eq!(
+        capabilities.runtime_bridge.model_events.reason.as_deref(),
+        Some("model verification producer has no provider source wired")
+    );
+}
+
+#[test]
+fn capabilities_advertise_hooks_only_when_hook_registry_observer_is_wired() {
+    let unwired = initialized_server_with_unwired_hook_service();
+    assert_eq!(unwired.get_capabilities_for_test().runtime_bridge.hook_events.status, ServiceStatus::Disabled);
+
+    let wired = initialized_server_with_wired_hook_registry(sample_ok_hook());
+    assert_eq!(wired.get_capabilities_for_test().runtime_bridge.hook_events.status, ServiceStatus::Ready);
+}
+```
+
+- [ ] **Step 3: Update matrix only after producer tests pass**
+
+Current closeout rule: keep the R6 row partial unless every remaining producer has a real upstream source and readiness gate. Do not use protocol delivery, queue drain tests, or hand-authored runtime updates as completion evidence.
+
+Use the partial row shape while model reroute/model verification/generic warning/guardian warning or remaining hook lifecycle producers are still unwired:
+
+```markdown
+| R6 | Config / repo tools / search owner | ~~broad `config/read`、`config/value/write`、`config/batchWrite`~~；~~`gitDiffToRemote`~~；~~`fuzzyFileSearch` session~~；~~`getConversationSummary`~~；~~`review/start`~~；model reroute producer / model verification producer；~~HookRegistry `preToolUse` hook events~~ / remaining hook lifecycle events；~~config/deprecation warning producer~~ / `warning` startup producer / guardian warning producer | R6 app-server owner 已完成 config/repo/search/summary/review、`preToolUse` hook notifications 和 config/deprecation warnings；其余 producer 只保留协议/delivery，不能广告完成。 | 从剩余项移除前必须有真实 upstream source、capability readiness 和非 fake-only 测试。 |
+```
+
+- [ ] **Step 4: Run closeout gate**
 
 Run:
 
@@ -2538,6 +3301,12 @@ Run:
 cargo nextest run -p dasclaw_app_server_protocol
 cargo nextest run -p dasclaw_fs_tools fuzzy_path_search_matches_ordered_subsequence
 cargo nextest run -p dasclaw_git_tools
+cargo nextest run -p dasclaw_core response_metadata_roundtrip
+cargo nextest run -p dasclaw_runtime agent_run_output_preserves_response_metadata
+cargo nextest run -p dasclaw_llm_provider tool_completion_response_carries_actual_model_metadata
+cargo nextest run -p dasclaw_hooks \
+  registry_observer_receives_started_and_completed_for_real_run \
+  registry_observer_marks_reject_as_completed_rejected
 cargo nextest run -p dasclaw_app_server \
   config_read_returns_redacted_config_and_layers \
   config_write_rejects_key_outside_policy \
@@ -2549,45 +3318,43 @@ cargo nextest run -p dasclaw_app_server \
   runtime_model_verification_update_emits_notification \
   runtime_model_reroute_update_emits_notification \
   hook_service_events_drain_to_json_rpc_notifications \
-  warning_service_events_drain_to_json_rpc_notifications
-```
-
-Expected:
-
-```text
-PASS all listed tests
-```
-
-- [ ] **Step 3: Run local required checks**
-
-Run:
-
-```bash
+  warning_service_events_drain_to_json_rpc_notifications \
+  runtime_completed_event_does_not_infer_high_risk_reroute_from_actual_model_metadata \
+  runtime_completed_event_emits_model_verification_from_response_metadata \
+  runtime_same_model_metadata_does_not_emit_reroute \
+  real_hook_registry_run_produces_hook_notifications \
+  unwired_hook_service_is_not_advertised_ready \
+  initialize_emits_config_warning_for_unsupported_config_key \
+  initialize_emits_warning_for_missing_system_bwrap_when_sandbox_needs_it \
+  config_service_collects_warning_for_unknown_writable_key \
+  capabilities_do_not_advertise_fake_only_model_verification \
+  capabilities_advertise_hooks_only_when_hook_registry_observer_is_wired
 cargo check -p dasclaw_app_server_protocol --tests
+cargo check -p dasclaw_core --tests
+cargo check -p dasclaw_runtime --tests
+cargo check -p dasclaw_llm_provider --tests
+cargo check -p dasclaw_hooks --tests
 cargo check -p dasclaw_fs_tools --tests
 cargo check -p dasclaw_git_tools --tests
 cargo check -p dasclaw_app_server --tests
 cargo fmt --all
 python3.12 scripts/check_no_panics.py --base origin/xClaw
-cargo clippy --no-deps -p dasclaw_app_server_protocol --all-targets -- -D warnings
-cargo clippy --no-deps -p dasclaw_fs_tools --all-targets -- -D warnings
-cargo clippy --no-deps -p dasclaw_git_tools --all-targets -- -D warnings
-cargo clippy --no-deps -p dasclaw_app_server --all-targets -- -D warnings
 ```
 
 Expected:
 
 ```text
-0 errors in touched crates
+PASS producer readiness is truthful
+PASS fake-only notification injection is not used as completion evidence
 ```
 
-- [ ] **Step 4: Commit matrix and verification note**
+- [ ] **Step 5: Commit producer readiness and matrix**
 
 Run:
 
 ```bash
-git add docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md
-git commit -m "docs: mark app-server R6 owner plan complete" -m "已检查 R6 app-server owner 是否已有，结论：底座存在于 fs/git/hooks/core/model 等 crate，R6 对外 app-server surface 仍需新增"
+git add crates/dasclaw_app_server_protocol/src/lib.rs crates/dasclaw_app_server/src/app_services.rs crates/dasclaw_app_server/src/lib.rs docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md
+git commit -m "docs(app-server): close R6 producer readiness matrix" -m "已检查 R6 producer 是否已有，结论：Codex 真实 producer 在 core/runtime/hook/startup 路径，Dasclaw 需以 readiness gate 区分真实 producer 和测试注入 delivery"
 ```
 
 ## Self-Review
@@ -2599,9 +3366,12 @@ Spec coverage:
 - `fuzzyFileSearch` response and session notifications: Task 1 and Task 4.
 - `getConversationSummary`: Task 1 and Task 5.
 - `review/start`: Task 1 and Task 6.
-- model reroute / verification notifications: Task 1 and Task 7.
-- hooks warning channel: Task 1 and Task 8.
-- R6 matrix update and local verification: Task 9.
+- model reroute / verification delivery: Task 1 and Task 7.
+- hook/warning delivery: Task 1 and Task 8.
+- real model producer and readiness: Task 9 and Task 12.
+- real HookRegistry producer: Task 10 and Task 12.
+- real startup/config/deprecation/guardian warning producers: Task 11 and Task 12.
+- R6 matrix closeout and local verification: Task 12.
 
 Type consistency:
 
@@ -2609,7 +3379,7 @@ Type consistency:
 - `ConfigWriteResponse` is shared by value write and batch write.
 - `FuzzyFileSearchResult` is used by both response and session updated notification.
 - Review delivery defaults to inline in implementation.
-- Hook notification service uses one internal enum and maps to the ten R6 notification constructors.
+- Hook notification service uses one internal enum for hook/warning delivery, while producer readiness records whether the enum is backed by `HookRegistry`, startup/config warning, or guardian sources.
 
 Execution boundaries:
 
@@ -2618,5 +3388,5 @@ Execution boundaries:
 - Fuzzy search reuses Dasclaw traversal discipline and does not import Codex crates.
 - Conversation summary is deterministic and does not invoke an LLM.
 - Review start uses existing turn execution; it does not create a second review engine.
-- Model notification delivery does not invent high-risk classification policy.
-- Hook/warning drain does not merge event hooks with egress safety policy.
+- Model event completion depends on provider/runtime metadata; fake runtime update injection is delivery evidence only.
+- Hook/warning producer wiring keeps hook lifecycle, startup/config warnings, and guardian warnings as separate real sources with fail-closed readiness.

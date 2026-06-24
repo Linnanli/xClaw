@@ -840,6 +840,8 @@ impl AppServer {
         self.emit_lifecycle_changed(previous_state);
         self.emit_capabilities_changed(CapabilitiesChangedReason::Initialize);
         self.emit_codex_notifications_initialized(unavailable_requested_capabilities.clone());
+        self.app_services.collect_startup_notifications();
+        self.drain_service_updates();
 
         Ok(InitializeResponse {
             server: self.server.clone(),
@@ -1414,6 +1416,7 @@ impl AppServer {
                 reasoning_summary,
                 sandbox_context,
                 updates: self.runtime_turn_updates.clone(),
+                hook_registry: self.app_services.hook_registry.clone(),
             })
             .map_err(|error| {
                 if let Err(cancel_error) = self.threads.cancel_turn(&params.thread_id, &turn_id) {
@@ -2882,6 +2885,8 @@ impl AppServer {
         capabilities.mcp = service_baseline.mcp;
         let mut availability = self.app_services.availability();
         availability.r6.review = true;
+        availability.r6.model_reroutes = self.runtime_features.model_reroutes;
+        availability.r6.model_verifications = self.runtime_features.model_verifications;
         capabilities.with_app_services(availability)
     }
 
@@ -3733,6 +3738,8 @@ pub struct RuntimeBridgeFeatures {
     pub approval: bool,
     pub tools: bool,
     pub sandbox: bool,
+    pub model_reroutes: bool,
+    pub model_verifications: bool,
     pub dynamic_tool_call: bool,
     pub tool_user_input: bool,
     pub permissions_approval: bool,
@@ -3766,6 +3773,7 @@ pub struct RuntimeTurnStartRequest {
     pub reasoning_summary: ReasoningSummary,
     pub sandbox_context: RuntimeSandboxContext,
     pub updates: RuntimeTurnUpdateSink,
+    pub hook_registry: Option<Arc<dasclaw_hooks::HookRegistry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3938,6 +3946,7 @@ pub struct RuntimeClientRequestContext {
     cwd: PathBuf,
     updates: RuntimeTurnUpdateSink,
     pending_requests: PendingRuntimeClientRequests,
+    hook_registry: Option<Arc<dasclaw_hooks::HookRegistry>>,
 }
 
 impl RuntimeClientRequestContext {
@@ -4199,6 +4208,33 @@ impl RuntimeClientToolExecutor {
             }
         }
     }
+
+    async fn run_before_tool_call_hook(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<(), String> {
+        let Some(registry) = &self.context.hook_registry else {
+            return Ok(());
+        };
+
+        let event = dasclaw_hooks::HookEvent::ToolCall {
+            tool_name: call.name.clone(),
+            parameters: call.arguments.clone(),
+            user_id: "app-server".to_string(),
+            thread_id: Some(self.context.thread_id.clone()),
+            turn_id: Some(self.context.turn_id.clone()),
+            context: "chat".to_string(),
+        };
+
+        registry
+            .run(&event)
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                dasclaw_hooks::HookError::Rejected { reason } => reason,
+                other => other.to_string(),
+            })
+    }
 }
 
 #[async_trait::async_trait]
@@ -4207,6 +4243,10 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientToolExecutor {
         &self,
         call: &dasclaw_core::messages::ToolCall,
     ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        if let Err(reason) = self.run_before_tool_call_hook(call).await {
+            return Ok(error_tool_result(call, &reason));
+        }
+
         match classify_runtime_client_tool(&call.name) {
             RuntimeClientToolKind::DynamicTool { namespace, tool } => {
                 Ok(self.execute_dynamic_tool(call, namespace, tool).await)
@@ -4925,6 +4965,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             cwd: request.cwd.clone(),
             updates: request.updates.clone(),
             pending_requests: Arc::clone(&self.pending_client_requests),
+            hook_registry: request.hook_registry.clone(),
         };
         let agent = Arc::new((self.agent_factory)(
             token.clone(),
@@ -4959,6 +5000,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         let event_updates = updates.clone();
         let event_thread_id = thread_id.clone();
         let event_turn_id = turn_id.clone();
+        let requested_model = request.model_provider.model_id.clone();
         let model_call_mode = request.model_provider.model_call_mode;
         let event_bridge = bridge.clone();
         thread::Builder::new()
@@ -5105,6 +5147,13 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                 bridge.cleanup_runtime_turn(&runtime_cleanup_turn_id, &runtime_cleanup_agent);
                 match result {
                     Ok(output) => {
+                        emit_response_model_metadata(
+                            &updates,
+                            &thread_id,
+                            &turn_id,
+                            &requested_model,
+                            &output.metadata,
+                        );
                         updates.token_usage_updated(
                             thread_id.clone(),
                             turn_id.clone(),
@@ -5297,6 +5346,36 @@ fn redact_snapshot_secret(message: &str, snapshot: &RuntimeModelProviderSnapshot
     }
 
     message.replace(&snapshot.api_key, "<redacted>")
+}
+
+fn emit_response_model_metadata(
+    updates: &RuntimeTurnUpdateSink,
+    thread_id: &str,
+    turn_id: &str,
+    _requested_model: &str,
+    metadata: &dasclaw_core::response_types::ResponseMetadata,
+) {
+    if !metadata.model_verifications.is_empty() {
+        updates.model_verification(
+            thread_id.to_string(),
+            turn_id.to_string(),
+            metadata
+                .model_verifications
+                .iter()
+                .map(app_server_model_verification)
+                .collect(),
+        );
+    }
+}
+
+fn app_server_model_verification(
+    verification: &dasclaw_core::response_types::ResponseModelVerification,
+) -> ModelVerification {
+    match verification {
+        dasclaw_core::response_types::ResponseModelVerification::TrustedAccessForCyber => {
+            ModelVerification::TrustedAccessForCyber
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6153,7 +6232,7 @@ mod tests {
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
     use dasclaw_core::response_types::{
-        RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
+        RespondOutput, RespondResult, ResponseMetadata, ResponseModelVerification, TokenUsage,
     };
     use dasclaw_core::traits::HostError;
     use dasclaw_observability::{Observer, ObserverEvent};
@@ -6537,6 +6616,32 @@ mod tests {
         assert!(!value.to_string().contains("secret-api-key"));
         assert!(!value.to_string().contains("secret-private-key"));
         assert!(!value.to_string().contains("secret-token"));
+    }
+
+    #[test]
+    fn config_read_runtime_warning_drains_to_json_rpc_notification() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        write_app_server_config(temp.path(), serde_json::json!({"unknown_key": true}));
+
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":10,"method":"config/read","params":{"includeLayers":false}}"#,
+            )
+            .expect("response");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(methods_from_values(&notifications), vec!["configWarning"]);
+        assert_eq!(
+            notifications[0]["params"]["summary"],
+            "unsupported config key"
+        );
+        assert!(
+            notifications[0]["params"]["details"]
+                .as_str()
+                .expect("details")
+                .contains("unknown_key")
+        );
     }
 
     #[test]
@@ -12264,6 +12369,113 @@ mod tests {
     }
 
     #[test]
+    fn real_hook_registry_run_drains_to_json_rpc_notifications() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::passthrough(
+                    "audit",
+                    dasclaw_hooks::HookPoint::BeforeToolCall,
+                )))
+                .await;
+            registry
+                .run(&dasclaw_hooks::HookEvent::ToolCall {
+                    tool_name: "shell.exec".to_string(),
+                    parameters: serde_json::json!({"cmd": "pwd"}),
+                    user_id: "user-1".to_string(),
+                    thread_id: Some("thread-1".to_string()),
+                    turn_id: Some("turn-1".to_string()),
+                    context: "chat".to_string(),
+                })
+                .await
+                .expect("hook run");
+        });
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["hook/started", "hook/completed"]
+        );
+        assert_eq!(notifications[0]["params"]["threadId"], "thread-1");
+        assert_eq!(notifications[0]["params"]["turnId"], "turn-1");
+        assert_eq!(notifications[0]["params"]["run"]["eventName"], "preToolUse");
+        assert_eq!(
+            notifications[0]["params"]["run"]["sourcePath"],
+            "dasclaw://hook/audit"
+        );
+        assert_eq!(notifications[0]["params"]["run"]["status"], "running");
+        assert_eq!(notifications[1]["params"]["run"]["status"], "completed");
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_blocks_rejected_hook_before_fallback() {
+        let runtime = test_tokio_runtime();
+        let hook_service = Arc::new(hook_service::AppServerHookService::wired());
+        let observer: Arc<dyn dasclaw_hooks::HookRunObserver> = hook_service.clone();
+        let registry = Arc::new(dasclaw_hooks::HookRegistry::new().with_observer(observer));
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::rejecting(
+                    "policy",
+                    dasclaw_hooks::HookPoint::BeforeToolCall,
+                    "blocked by policy",
+                )))
+                .await;
+        });
+        let fallback = Arc::new(CountingExecutor::new());
+        let executor = RuntimeClientToolExecutor::new(
+            RuntimeClientRequestContext {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                cwd: PathBuf::from("."),
+                updates: RuntimeTurnUpdateSink::new(),
+                pending_requests: Arc::new(Mutex::new(HashMap::new())),
+                hook_registry: Some(registry),
+            },
+            Some(fallback.clone()),
+        );
+        let call = ToolCall {
+            id: "call-1".to_string(),
+            name: "shell.exec".to_string(),
+            arguments: serde_json::json!({"cmd": "pwd"}),
+            reasoning: None,
+        };
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("tool executor should return hook rejection as tool result")
+        });
+        let notifications =
+            app_services::HookNotificationService::drain_hook_notifications(&*hook_service);
+
+        assert!(result.is_error);
+        assert_eq!(result.content, "blocked by policy");
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert_eq!(notifications.len(), 2);
+        let AppServerHookNotification::Completed(completed) = &notifications[1] else {
+            panic!("second hook notification should be completed");
+        };
+        assert_eq!(completed.thread_id, "thread-1");
+        assert_eq!(completed.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(
+            completed.run.status_message.as_deref(),
+            Some("blocked by policy")
+        );
+        assert_eq!(completed.run.entries[0].kind, HookOutputEntryKind::Stop);
+    }
+
+    #[test]
     fn warning_service_events_drain_to_json_rpc_notifications() {
         let hook_service = hook_service::AppServerHookService::default();
         hook_service.push(AppServerHookNotification::Warning(WarningNotification {
@@ -12308,6 +12520,181 @@ mod tests {
         );
         assert_eq!(notifications[1]["params"]["path"], "/tmp/config.json");
         assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
+    fn initialize_emits_config_warning_and_deprecation_for_startup_config() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(
+            tempdir.path(),
+            serde_json::json!({
+                "model": "gpt-test",
+                "unknown_key": true,
+                "experimental_instructions_file": "legacy.md"
+            }),
+        );
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let mut server =
+            AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        let methods = methods_from_values(&notifications);
+        assert!(methods.contains(&"configWarning"));
+        assert!(methods.contains(&"deprecationNotice"));
+        let config_warning = notifications
+            .iter()
+            .find(|notification| notification["method"] == "configWarning")
+            .expect("config warning notification");
+        assert_eq!(
+            config_warning["params"]["summary"],
+            "unsupported config key"
+        );
+        assert!(
+            config_warning["params"]["details"]
+                .as_str()
+                .expect("details")
+                .contains("unknown_key")
+        );
+        let deprecation = notifications
+            .iter()
+            .find(|notification| notification["method"] == "deprecationNotice")
+            .expect("deprecation notice notification");
+        assert_eq!(
+            deprecation["params"]["summary"],
+            "experimental_instructions_file"
+        );
+    }
+
+    #[test]
+    fn config_service_collects_warning_for_unknown_config_key() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(tempdir.path(), serde_json::json!({"unknown_key": true}));
+        let service =
+            crate::config_service::AppServerConfigService::new(tempdir.path().to_path_buf());
+
+        app_services::ConfigService::read(
+            &service,
+            ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            },
+        )
+        .expect("config read should succeed");
+        let warnings = service.drain_config_warnings();
+
+        assert_eq!(warnings.len(), 1);
+        let AppServerHookNotification::ConfigWarning(warning) = &warnings[0] else {
+            panic!("expected config warning");
+        };
+        assert_eq!(warning.summary, "unsupported config key");
+        assert!(
+            warning
+                .details
+                .as_deref()
+                .expect("details")
+                .contains("unknown_key")
+        );
+    }
+
+    #[test]
+    fn capabilities_advertise_ready_r6_config_warning_producers_only() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(tempdir.path());
+
+        let capabilities = server.capabilities().capabilities;
+
+        assert_eq!(capabilities.hooks.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.warnings.status, CapabilityStatus::Implemented);
+        assert!(
+            capabilities
+                .warnings
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
+        );
+        assert!(
+            capabilities
+                .warnings
+                .events
+                .contains(&event::DEPRECATION_NOTICE.to_string())
+        );
+        assert!(
+            !capabilities
+                .warnings
+                .events
+                .contains(&event::WARNING.to_string())
+        );
+        assert!(
+            !capabilities
+                .warnings
+                .events
+                .contains(&event::GUARDIAN_WARNING.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_REROUTED.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_VERIFICATION.to_string())
+        );
+    }
+
+    #[test]
+    fn provider_runtime_bridge_does_not_advertise_model_events_without_trusted_reasons() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let mut server = AppServer::with_runtime_bridge(Arc::new(
+            DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
+        ))
+        .with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+
+        let capabilities = server.capabilities().capabilities;
+
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_REROUTED.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_VERIFICATION.to_string())
+        );
     }
 
     #[test]
@@ -12491,6 +12878,7 @@ mod tests {
                     reasoning_summary: ReasoningSummary::None,
                     sandbox_context: RuntimeSandboxContext::empty(),
                     updates: RuntimeTurnUpdateSink::new(),
+                    hook_registry: None,
                 })
                 .expect_err("test factory should stop before spawning");
             assert_eq!(error.message, "test factory stops before run");
@@ -12527,6 +12915,7 @@ mod tests {
                     ),
                 },
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("real runtime bridge must reject unenforced sandbox context");
 
@@ -12567,6 +12956,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::Concise,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("test factory should stop before spawning");
 
@@ -12642,6 +13032,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12691,6 +13082,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12711,6 +13103,127 @@ mod tests {
             &updates[2].outcome,
             RuntimeTurnOutcome::Completed { output } if output == "usage bridge path"
         ));
+    }
+
+    #[test]
+    fn runtime_completed_event_does_not_infer_high_risk_reroute_from_actual_model_metadata() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "actual model differs",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-next".to_string()),
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification["method"] != "model/rerouted"),
+            "actual_model alone should not emit high-risk model/rerouted: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_completed_event_emits_model_verification_from_response_metadata() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "verified",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-test".to_string()),
+                        model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        let verification = notifications
+            .iter()
+            .find(|notification| notification["method"] == "model/verification")
+            .expect("model/verification notification");
+
+        assert_eq!(verification["params"]["threadId"], thread.thread_id);
+        assert_eq!(verification["params"]["turnId"], turn.turn.id);
+        assert_eq!(
+            verification["params"]["verifications"],
+            serde_json::json!(["trustedAccessForCyber"])
+        );
+    }
+
+    #[test]
+    fn runtime_same_model_metadata_does_not_emit_reroute() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "same model",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-test".to_string()),
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification["method"] != "model/rerouted"),
+            "same-model metadata should not emit model/rerouted: {notifications:?}"
+        );
     }
 
     #[test]
@@ -12752,6 +13265,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12857,6 +13371,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12959,6 +13474,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13081,6 +13597,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13165,6 +13682,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13758,6 +14276,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13843,6 +14362,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13927,6 +14447,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13996,6 +14517,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("unknown api format should be rejected before spawning");
 
@@ -15603,6 +16125,59 @@ mod tests {
         }
     }
 
+    fn test_tokio_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime")
+    }
+
+    struct TestHook {
+        name: String,
+        points: Vec<dasclaw_hooks::HookPoint>,
+        rejection: Option<String>,
+    }
+
+    impl TestHook {
+        fn passthrough(name: &str, point: dasclaw_hooks::HookPoint) -> Self {
+            Self {
+                name: name.to_string(),
+                points: vec![point],
+                rejection: None,
+            }
+        }
+
+        fn rejecting(name: &str, point: dasclaw_hooks::HookPoint, reason: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                points: vec![point],
+                rejection: Some(reason.to_string()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_hooks::Hook for TestHook {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn hook_points(&self) -> &[dasclaw_hooks::HookPoint] {
+            &self.points
+        }
+
+        async fn execute(
+            &self,
+            _event: &dasclaw_hooks::HookEvent,
+            _ctx: &dasclaw_hooks::HookContext,
+        ) -> Result<dasclaw_hooks::HookOutcome, dasclaw_hooks::HookError> {
+            match &self.rejection {
+                Some(reason) => Ok(dasclaw_hooks::HookOutcome::reject(reason.clone())),
+                None => Ok(dasclaw_hooks::HookOutcome::ok()),
+            }
+        }
+    }
+
     fn replace_file_with_directory(path: &Path) {
         if path.is_file() {
             fs::remove_file(path).expect("remove snapshot file");
@@ -15838,6 +16413,15 @@ mod tests {
         }
     }
 
+    fn text_output_with_metadata(text: &str, metadata: ResponseMetadata) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::Text(text.to_string()),
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::Stop,
+            metadata,
+        }
+    }
+
     struct ScriptedResponder {
         script: tokio::sync::Mutex<Vec<RespondOutput>>,
     }
@@ -16046,6 +16630,7 @@ mod tests {
                 file_change_events: true,
                 auto_approval_review: true,
                 thread_compact: false,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 
@@ -16090,6 +16675,7 @@ mod tests {
                 file_change_events: true,
                 auto_approval_review: true,
                 thread_compact: false,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 

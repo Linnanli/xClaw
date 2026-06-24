@@ -24,7 +24,7 @@ use rust_decimal::Decimal;
 
 use crate::error::LlmError;
 use crate::llm::{
-    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCall,
+    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ResponseMetadata, ToolCall,
     ToolCompletionRequest, ToolCompletionResponse,
 };
 
@@ -135,10 +135,12 @@ impl LlmProvider for ScriptedLlm {
         match step {
             ScriptedStep::Text(t) => Ok(ToolCompletionResponse {
                 content: Some(t),
+                reasoning: None,
                 tool_calls: Vec::new(),
                 input_tokens: 100,
                 output_tokens: 50,
                 finish_reason: FinishReason::Stop,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             }),
@@ -147,10 +149,12 @@ impl LlmProvider for ScriptedLlm {
                 content,
             } => Ok(ToolCompletionResponse {
                 content,
+                reasoning: None,
                 tool_calls,
                 input_tokens: 100,
                 output_tokens: 50,
                 finish_reason: FinishReason::ToolUse,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             }),

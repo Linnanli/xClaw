@@ -22,6 +22,7 @@ use dasclaw_app_server_protocol::{
     ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
     SkillsListResponse,
 };
+use dasclaw_hooks::{HookRegistry, HookRunObserver};
 use dasclaw_runtime::context::ContextManager;
 
 use crate::AppServerError;
@@ -178,6 +179,14 @@ pub trait ConfigService: Send + Sync {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, AppServerError>;
 
+    fn collect_startup_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
+    }
+
+    fn drain_config_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
+    }
+
     fn is_ready(&self) -> bool {
         self.health().status == ServiceStatus::Ready
     }
@@ -214,6 +223,7 @@ pub trait SearchService: Send + Sync {
 pub trait HookNotificationService: Send + Sync {
     fn health(&self) -> ServiceHealth;
     fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification>;
+    fn push_hook_notifications(&self, _pending: Vec<AppServerHookNotification>) {}
 
     fn is_ready(&self) -> bool {
         self.health().status == ServiceStatus::Ready
@@ -232,6 +242,7 @@ pub struct AppServerServices {
     pub repo: Arc<dyn RepoService>,
     pub search: Arc<dyn SearchService>,
     pub hooks: Arc<dyn HookNotificationService>,
+    pub hook_registry: Option<Arc<HookRegistry>>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -255,6 +266,7 @@ impl Default for AppServerServices {
             repo: Arc::new(NoopRepoService),
             search: Arc::new(NoopSearchService),
             hooks: Arc::new(NoopHookService),
+            hook_registry: None,
         }
     }
 }
@@ -268,6 +280,9 @@ impl AppServerServices {
 
     fn real_with_root(root: PathBuf) -> Self {
         let manager = Arc::new(ContextManager::default());
+        let hook_service = Arc::new(AppServerHookService::wired());
+        let hook_observer: Arc<dyn HookRunObserver> = hook_service.clone();
+        let hook_registry = Arc::new(HookRegistry::new().with_observer(hook_observer));
         Self {
             logs: Arc::new(AppServerLogService::new()),
             jobs: Arc::new(AppServerJobService::new(manager)),
@@ -278,7 +293,8 @@ impl AppServerServices {
             config: Arc::new(AppServerConfigService::new(root.clone())),
             repo: Arc::new(AppServerRepoService::new(root.clone())),
             search: Arc::new(AppServerSearchService::new(root)),
-            hooks: Arc::new(AppServerHookService::default()),
+            hooks: hook_service,
+            hook_registry: Some(hook_registry),
         }
     }
 
@@ -320,7 +336,17 @@ impl AppServerServices {
     }
 
     pub fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
-        self.hooks.drain_hook_notifications()
+        let mut notifications = self.hooks.drain_hook_notifications();
+        notifications.extend(self.config.drain_config_notifications());
+        notifications
+    }
+
+    pub fn collect_startup_notifications(&self) {
+        let mut pending = self.config.collect_startup_notifications();
+        pending.extend(self.config.drain_config_notifications());
+        if !pending.is_empty() {
+            self.hooks.push_hook_notifications(pending);
+        }
     }
 
     pub fn availability(&self) -> AppServerServiceAvailability {
@@ -329,6 +355,9 @@ impl AppServerServices {
         } else {
             CommandExecAvailability::default()
         };
+
+        let hook_notifications_ready = self.hooks.is_ready();
+        let config_ready = self.config.is_ready();
 
         AppServerServiceAvailability {
             logs: self.logs.is_ready(),
@@ -344,11 +373,14 @@ impl AppServerServices {
                 command,
             },
             r6: AppServerR6Availability {
-                config: self.config.is_ready(),
+                config: config_ready,
                 repo: self.repo.is_ready(),
                 search: self.search.is_ready(),
-                hooks: self.hooks.is_ready(),
-                warnings: self.hooks.is_ready(),
+                hooks: hook_notifications_ready,
+                warnings: false,
+                config_warnings: config_ready && hook_notifications_ready,
+                deprecation_notices: config_ready && hook_notifications_ready,
+                guardian_warnings: false,
                 ..AppServerR6Availability::default()
             },
         }
@@ -379,6 +411,7 @@ impl AppServerServices {
             repo: Arc::new(NoopRepoService),
             search: Arc::new(NoopSearchService),
             hooks: Arc::new(NoopHookService),
+            hook_registry: None,
         }
     }
 }
@@ -676,6 +709,8 @@ impl HookNotificationService for NoopHookService {
     fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
         Vec::new()
     }
+
+    fn push_hook_notifications(&self, _pending: Vec<AppServerHookNotification>) {}
 }
 
 #[cfg(test)]

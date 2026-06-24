@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::error::WorkerError;
 use crate::llm::{
-    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, ToolCall,
+    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, ResponseMetadata, ToolCall,
     ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
 
@@ -76,6 +76,8 @@ pub struct ProxyToolCompletionResponse {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub finish_reason: String,
+    #[serde(default)]
+    pub metadata: ResponseMetadata,
     #[serde(default)]
     pub cache_read_input_tokens: u32,
     #[serde(default)]
@@ -262,10 +264,12 @@ impl WorkerHttpClient {
 
         Ok(ToolCompletionResponse {
             content: proxy_resp.content,
+            reasoning: None,
             tool_calls: proxy_resp.tool_calls,
             input_tokens: proxy_resp.input_tokens,
             output_tokens: proxy_resp.output_tokens,
             finish_reason: parse_finish_reason(&proxy_resp.finish_reason),
+            metadata: proxy_resp.metadata,
             cache_read_input_tokens: proxy_resp.cache_read_input_tokens,
             cache_creation_input_tokens: proxy_resp.cache_creation_input_tokens,
         })
@@ -422,6 +426,7 @@ fn parse_finish_reason(s: &str) -> FinishReason {
 mod tests {
     use super::*;
     use crate::testing::credentials::TEST_BEARER_TOKEN;
+    use dasclaw_core::response_types::ResponseModelVerification;
 
     #[test]
     fn test_url_construction() {
@@ -471,5 +476,54 @@ mod tests {
         assert_eq!(job.title, "Test");
         assert_eq!(job.description, "desc");
         assert!(job.project_dir.is_none());
+    }
+
+    #[test]
+    fn test_proxy_tool_completion_response_metadata_roundtrip() {
+        let response = ProxyToolCompletionResponse {
+            content: Some("done".to_string()),
+            tool_calls: Vec::new(),
+            input_tokens: 10,
+            output_tokens: 5,
+            finish_reason: "stop".to_string(),
+            metadata: ResponseMetadata {
+                actual_model: Some("gpt-5.5-cyber".to_string()),
+                model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+                ..ResponseMetadata::default()
+            },
+            cache_read_input_tokens: 1,
+            cache_creation_input_tokens: 2,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["metadata"]["actualModel"], "gpt-5.5-cyber");
+        assert_eq!(
+            json["metadata"]["modelVerifications"],
+            serde_json::json!(["trustedAccessForCyber"])
+        );
+
+        let roundtrip: ProxyToolCompletionResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            roundtrip.metadata.actual_model.as_deref(),
+            Some("gpt-5.5-cyber")
+        );
+        assert_eq!(
+            roundtrip.metadata.model_verifications,
+            vec![ResponseModelVerification::TrustedAccessForCyber]
+        );
+    }
+
+    #[test]
+    fn test_proxy_tool_completion_response_defaults_legacy_metadata() {
+        let legacy = serde_json::json!({
+            "content": "done",
+            "tool_calls": [],
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "finish_reason": "stop"
+        });
+
+        let response: ProxyToolCompletionResponse = serde_json::from_value(legacy).unwrap();
+        assert_eq!(response.metadata, ResponseMetadata::default());
     }
 }

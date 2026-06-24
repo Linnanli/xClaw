@@ -46,7 +46,7 @@ pub use contract::{
     no_safety_rule_in_event_hooks,
 };
 pub use hook::{Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome, HookPoint};
-pub use registry::HookRegistry;
+pub use registry::{HookObservedRun, HookObservedStatus, HookRegistry, HookRunObserver};
 
 // Reexport trait seams from `dasclaw_core` so external callers never have to
 // import both crates. The reexports are deliberately type-identity-preserving

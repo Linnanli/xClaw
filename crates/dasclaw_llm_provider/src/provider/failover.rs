@@ -445,6 +445,7 @@ mod tests {
                     input_tokens: 10,
                     output_tokens: 5,
                     finish_reason: FinishReason::Stop,
+                    metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 }))),
@@ -856,6 +857,7 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 5,
                 finish_reason: FinishReason::Stop,
+                metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })

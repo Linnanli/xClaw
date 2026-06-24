@@ -21,10 +21,11 @@ use crate::agent::session::{PendingApproval, Session};
 use crate::channels::{ChannelManager, IncomingMessage, StatusUpdate};
 use crate::config::AgentConfig;
 use crate::error::Error;
-use crate::llm::{ChatMessage, ReasoningContext};
+use crate::llm::{ChatMessage, ReasoningContext, ResponseMetadata};
 use crate::safety::SafetyLayer;
 use crate::tools::{ToolRegistry, redact_params};
 use dasclaw_core::agentic_loop::LoopOutcome;
+use dasclaw_core::response_types::TokenUsage;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::context::JobContext;
@@ -659,7 +660,11 @@ impl ToolDispatcher for DesktopDispatcher {
 
         // Return auth response after all results are recorded
         if let Some(instructions) = deferred_auth {
-            return Ok(Some(LoopOutcome::Response(instructions)));
+            return Ok(Some(LoopOutcome::Response {
+                text: instructions,
+                usage: TokenUsage::default(),
+                metadata: ResponseMetadata::default(),
+            }));
         }
 
         // Handle approval if a tool needed it

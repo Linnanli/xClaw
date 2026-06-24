@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::response_types::ResponseMetadata;
+
 /// Role in a conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -456,6 +458,8 @@ pub struct ToolCompletionResponse {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub finish_reason: FinishReason,
+    /// Provider metadata for the concrete response.
+    pub metadata: ResponseMetadata,
     /// Tokens read from the provider's server-side prompt cache (Anthropic).
     pub cache_read_input_tokens: u32,
     /// Tokens written to the provider's server-side prompt cache (Anthropic).

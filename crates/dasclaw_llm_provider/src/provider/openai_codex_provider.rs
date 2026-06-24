@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use dasclaw_core::messages::ReasoningSummary;
+use dasclaw_core::response_types::ResponseMetadata;
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -331,6 +332,10 @@ impl LlmProvider for OpenAiCodexProvider {
             input_tokens: parsed.input_tokens,
             output_tokens: parsed.output_tokens,
             finish_reason,
+            metadata: ResponseMetadata {
+                actual_model: parsed.actual_model,
+                ..ResponseMetadata::default()
+            },
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })
@@ -529,6 +534,7 @@ struct ParsedResponse {
     input_tokens: u32,
     output_tokens: u32,
     finish_reason: FinishReason,
+    actual_model: Option<String>,
 }
 
 /// SSE event data from the Responses API.
@@ -555,6 +561,7 @@ fn parse_sse_response(body: &str) -> Result<ParsedResponse, LlmError> {
     let mut input_tokens: u32 = 0;
     let mut output_tokens: u32 = 0;
     let mut finish_reason = FinishReason::Stop;
+    let mut actual_model: Option<String> = None;
     let mut active_function_calls: std::collections::HashMap<String, FunctionCallState> =
         std::collections::HashMap::new();
     let mut response_status: Option<String> = None;
@@ -726,6 +733,9 @@ fn parse_sse_response(body: &str) -> Result<ParsedResponse, LlmError> {
                     if let Some(status) = response.get("status").and_then(|s| s.as_str()) {
                         response_status = Some(status.to_string());
                     }
+                    if let Some(model) = response.get("model").and_then(|m| m.as_str()) {
+                        actual_model = Some(model.to_string());
+                    }
                 }
             }
 
@@ -801,6 +811,7 @@ fn parse_sse_response(body: &str) -> Result<ParsedResponse, LlmError> {
         input_tokens,
         output_tokens,
         finish_reason,
+        actual_model,
     })
 }
 
@@ -941,7 +952,19 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
         assert_eq!(parsed.input_tokens, 10);
         assert_eq!(parsed.output_tokens, 5);
         assert_eq!(parsed.finish_reason, FinishReason::Stop);
+        assert_eq!(parsed.actual_model, None);
         assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_sse_response_model_when_present() {
+        let sse_body = r#"data: {"type":"response.output_text.delta","delta":"Hello"}
+
+data: {"type":"response.completed","response":{"model":"gpt-5.5-cyber","status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}
+
+"#;
+        let parsed = parse_sse_response(sse_body).unwrap();
+        assert_eq!(parsed.actual_model.as_deref(), Some("gpt-5.5-cyber"));
     }
 
     #[test]

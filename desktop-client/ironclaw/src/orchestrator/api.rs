@@ -24,6 +24,7 @@ use crate::worker::api::{
     CompletionReport, CredentialResponse, JobDescription, ProxyCompletionRequest,
     ProxyCompletionResponse, ProxyToolCompletionRequest, ProxyToolCompletionResponse, StatusUpdate,
 };
+use dasclaw_core::messages::ReasoningSummary;
 use dasclaw_runtime::secrets::SecretsStore;
 use ironclaw_common::AppEvent;
 
@@ -183,6 +184,7 @@ async fn llm_complete_with_tools(
         temperature: req.temperature,
         stop_sequences: req.stop_sequences,
         tool_choice: req.tool_choice,
+        reasoning_summary: ReasoningSummary::None,
         metadata: std::collections::HashMap::new(),
     };
 
@@ -197,6 +199,7 @@ async fn llm_complete_with_tools(
         input_tokens: resp.input_tokens,
         output_tokens: resp.output_tokens,
         finish_reason: format_finish_reason(resp.finish_reason),
+        metadata: resp.metadata,
         cache_read_input_tokens: resp.cache_read_input_tokens,
         cache_creation_input_tokens: resp.cache_creation_input_tokens,
     }))

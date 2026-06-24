@@ -1805,10 +1805,12 @@ mod tests {
         ) -> Result<ToolCompletionResponse, crate::error::LlmError> {
             Ok(ToolCompletionResponse {
                 content: Some("ok".to_string()),
+                reasoning: None,
                 tool_calls: Vec::new(),
                 input_tokens: 0,
                 output_tokens: 0,
                 finish_reason: FinishReason::Stop,
+                metadata: crate::llm::ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })

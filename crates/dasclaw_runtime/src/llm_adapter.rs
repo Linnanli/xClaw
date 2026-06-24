@@ -37,7 +37,7 @@ use dasclaw_core::messages::{
     ReasoningSummary, ToolCompletionRequest, ToolCompletionResponse, sanitize_tool_messages,
 };
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
+use dasclaw_core::response_types::{RespondOutput, RespondResult, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_llm_provider::provider::provider::{LlmProvider, LlmStreamEvent};
 use dasclaw_llm_provider::provider::reasoning::clean_user_visible_response;
@@ -504,7 +504,7 @@ fn map_to_respond_output(response: ToolCompletionResponse) -> RespondOutput {
         result,
         usage,
         finish_reason: response.finish_reason,
-        metadata: ResponseMetadata::default(),
+        metadata: response.metadata,
     }
 }
 
@@ -529,6 +529,7 @@ mod tests {
     use dasclaw_core::messages::{
         ChatMessage, CompletionRequest, CompletionResponse, FinishReason, ToolCall, ToolDefinition,
     };
+    use dasclaw_core::response_types::{ResponseMetadata, ResponseModelVerification};
     use dasclaw_llm_provider::provider::error::LlmError;
     use dasclaw_llm_provider::provider::provider::{LlmProviderCapabilities, LlmStream};
     use rust_decimal::Decimal;
@@ -739,6 +740,7 @@ mod tests {
             input_tokens: 10,
             output_tokens: 20,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         }
@@ -757,6 +759,7 @@ mod tests {
             input_tokens: 5,
             output_tokens: 7,
             finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         }
@@ -777,6 +780,31 @@ mod tests {
         }
         assert_eq!(output.usage.input_tokens, 10);
         assert_eq!(output.usage.output_tokens, 20);
+    }
+
+    #[tokio::test]
+    async fn tool_completion_response_carries_actual_model_metadata() {
+        let mut response = text_response("hi there");
+        response.metadata = ResponseMetadata {
+            actual_model: Some("gpt-5.5-cyber".to_string()),
+            model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+            ..ResponseMetadata::default()
+        };
+        let provider = Arc::new(MockProvider::new(response));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hello"));
+
+        let output = responder.respond(&mut ctx).await.unwrap();
+
+        assert_eq!(
+            output.metadata.actual_model.as_deref(),
+            Some("gpt-5.5-cyber")
+        );
+        assert_eq!(
+            output.metadata.model_verifications,
+            vec![ResponseModelVerification::TrustedAccessForCyber]
+        );
     }
 
     #[tokio::test]

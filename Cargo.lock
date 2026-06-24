@@ -2795,6 +2795,7 @@ dependencies = [
  "dasclaw_core",
  "dasclaw_fs_tools",
  "dasclaw_git_tools",
+ "dasclaw_hooks",
  "dasclaw_llm_provider",
  "dasclaw_mcp",
  "dasclaw_observability",

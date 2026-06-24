@@ -52,6 +52,10 @@ pub enum HookEvent {
         tool_name: String,
         parameters: serde_json::Value,
         user_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         /// "chat" for interactive, or a job ID string for autonomous jobs.
         context: String,
     },

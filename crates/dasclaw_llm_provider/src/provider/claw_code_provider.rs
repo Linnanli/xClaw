@@ -25,6 +25,8 @@ use secrecy::ExposeSecret;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 
+use dasclaw_core::response_types::ResponseMetadata;
+
 use crate::provider::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
@@ -379,6 +381,7 @@ pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionRespo
     let finish_reason = map_finish_reason(resp.stop_reason.as_deref());
     let cache_read = resp.usage.cache_read_input_tokens;
     let cache_creation = resp.usage.cache_creation_input_tokens;
+    let actual_model = (!resp.model.is_empty()).then(|| resp.model.clone());
 
     ToolCompletionResponse {
         content: if text.is_empty() { None } else { Some(text) },
@@ -391,6 +394,10 @@ pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionRespo
         input_tokens: resp.usage.input_tokens,
         output_tokens: resp.usage.output_tokens,
         finish_reason,
+        metadata: ResponseMetadata {
+            actual_model,
+            ..ResponseMetadata::default()
+        },
         cache_read_input_tokens: cache_read,
         cache_creation_input_tokens: cache_creation,
     }

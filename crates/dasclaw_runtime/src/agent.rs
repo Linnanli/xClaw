@@ -818,9 +818,14 @@ fn map_outcome(
     ctx: &ReasoningContext,
 ) -> Result<AgentRunOutput, AgentError> {
     match outcome {
-        LoopOutcome::Response(text) => Ok(AgentRunOutput {
+        LoopOutcome::Response {
             text,
-            usage: final_assistant_usage(ctx),
+            usage,
+            metadata,
+        } => Ok(AgentRunOutput {
+            text,
+            usage: merge_final_usage(usage, ctx),
+            metadata,
         }),
         LoopOutcome::MaxIterations => Err(AgentError::MaxIterations(max_iterations)),
         LoopOutcome::Failure(reason) if reason == TOOLS_NOT_SUPPORTED_REASON => {
@@ -851,7 +856,11 @@ fn map_outcome(
     }
 }
 
-fn final_assistant_usage(ctx: &ReasoningContext) -> TokenUsage {
+fn merge_final_usage(usage: TokenUsage, ctx: &ReasoningContext) -> TokenUsage {
+    if usage != TokenUsage::default() {
+        return usage;
+    }
+
     ctx.messages
         .iter()
         .rev()
@@ -865,7 +874,7 @@ mod tests {
     use super::*;
     use dasclaw_core::messages::{FinishReason, ToolCall};
     use dasclaw_core::response_types::{
-        RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
+        RespondOutput, RespondResult, ResponseMetadata, ResponseModelVerification, TokenUsage,
     };
     use futures_util::StreamExt;
 
@@ -984,6 +993,29 @@ mod tests {
             .last()
             .expect("ctx should contain final assistant message");
         assert_eq!(last.usage, Some(usage));
+    }
+
+    #[tokio::test]
+    async fn agent_run_output_preserves_response_metadata() {
+        let metadata = ResponseMetadata {
+            actual_model: Some("gpt-5.5-cyber".to_string()),
+            model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+            ..ResponseMetadata::default()
+        };
+        let mut output = text_output("done");
+        output.metadata = metadata.clone();
+        let responder = ScriptedResponder::new(vec![output]);
+        let agent = Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build agent");
+
+        let out = agent
+            .invoke("ping", AgentRunOptions::invoke())
+            .await
+            .expect("invoke");
+
+        assert_eq!(out.metadata, metadata);
     }
 
     #[tokio::test]
@@ -1411,6 +1443,7 @@ mod tests {
             AgentEvent::Completed(AgentRunOutput {
                 text: "done".into(),
                 usage: TokenUsage::default(),
+                metadata: ResponseMetadata::default(),
             }),
         ];
         let json: Vec<String> = chunks

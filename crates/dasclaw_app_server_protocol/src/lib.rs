@@ -930,14 +930,15 @@ impl CapabilityMatrix {
                 &[],
             );
         }
-        if availability.r6.model_events {
+        let model_provider_event_names = model_provider_events(availability.r6);
+        if !model_provider_event_names.is_empty() {
             self.model_provider = Capability::implemented(
                 "model_provider",
                 &[
                     method::MODEL_LIST,
                     method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
                 ],
-                &[event::MODEL_REROUTED, event::MODEL_VERIFICATION],
+                &model_provider_event_names,
             );
         }
         if availability.r6.hooks {
@@ -947,17 +948,9 @@ impl CapabilityMatrix {
                 &[event::HOOK_STARTED, event::HOOK_COMPLETED],
             );
         }
-        if availability.r6.warnings {
-            self.warnings = Capability::implemented(
-                "warnings",
-                &[],
-                &[
-                    event::WARNING,
-                    event::GUARDIAN_WARNING,
-                    event::CONFIG_WARNING,
-                    event::DEPRECATION_NOTICE,
-                ],
-            );
+        let warning_event_names = warning_events(availability.r6);
+        if !warning_event_names.is_empty() {
+            self.warnings = Capability::implemented("warnings", &[], &warning_event_names);
         }
         self.with_p5_filesystem_command(availability.p5)
     }
@@ -999,6 +992,34 @@ fn declared_future_capability(id: &'static str) -> Capability {
     )
 }
 
+fn model_provider_events(availability: AppServerR6Availability) -> Vec<&'static str> {
+    let mut events = Vec::new();
+    if availability.model_events || availability.model_reroutes {
+        events.push(event::MODEL_REROUTED);
+    }
+    if availability.model_events || availability.model_verifications {
+        events.push(event::MODEL_VERIFICATION);
+    }
+    events
+}
+
+fn warning_events(availability: AppServerR6Availability) -> Vec<&'static str> {
+    let mut events = Vec::new();
+    if availability.warnings {
+        events.push(event::WARNING);
+    }
+    if availability.guardian_warnings {
+        events.push(event::GUARDIAN_WARNING);
+    }
+    if availability.config_warnings {
+        events.push(event::CONFIG_WARNING);
+    }
+    if availability.deprecation_notices {
+        events.push(event::DEPRECATION_NOTICE);
+    }
+    events
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AppServerServiceAvailability {
     pub logs: bool,
@@ -1022,8 +1043,13 @@ pub struct AppServerR6Availability {
     pub search: bool,
     pub review: bool,
     pub model_events: bool,
+    pub model_reroutes: bool,
+    pub model_verifications: bool,
     pub hooks: bool,
     pub warnings: bool,
+    pub config_warnings: bool,
+    pub deprecation_notices: bool,
+    pub guardian_warnings: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -6950,7 +6976,7 @@ mod tests {
             CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
                 r6: AppServerR6Availability {
                     config: true,
-                    warnings: true,
+                    config_warnings: true,
                     ..AppServerR6Availability::default()
                 },
                 ..AppServerServiceAvailability::default()

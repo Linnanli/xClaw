@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
+use dasclaw_core::response_types::ResponseMetadata;
+
 use crate::provider::config::GeminiOauthConfig;
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
@@ -2005,6 +2007,19 @@ impl GeminiOauthProvider {
             tool_calls,
         ))
     }
+
+    fn response_model_version(body: &serde_json::Value) -> Option<String> {
+        body.get("modelVersion")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                body.get("candidates")
+                    .and_then(|c| c.as_array())
+                    .and_then(|c| c.first())
+                    .and_then(|candidate| candidate.get("modelVersion"))
+                    .and_then(|v| v.as_str())
+            })
+            .map(str::to_string)
+    }
 }
 
 #[async_trait::async_trait]
@@ -2075,6 +2090,7 @@ impl LlmProvider for GeminiOauthProvider {
             &self.config.model,
         );
         let resp_json = self.send_request(&req_json).await?;
+        let actual_model = Self::response_model_version(&resp_json);
         let (response, tool_calls) = Self::from_gemini_response(resp_json)?;
 
         Ok(crate::provider::provider::ToolCompletionResponse {
@@ -2088,6 +2104,10 @@ impl LlmProvider for GeminiOauthProvider {
             input_tokens: response.input_tokens,
             output_tokens: response.output_tokens,
             tool_calls,
+            metadata: ResponseMetadata {
+                actual_model,
+                ..ResponseMetadata::default()
+            },
             cache_read_input_tokens: response.cache_read_input_tokens,
             cache_creation_input_tokens: response.cache_creation_input_tokens,
         })
@@ -2272,6 +2292,34 @@ mod tests {
         assert_eq!(resp.input_tokens, 10);
         assert_eq!(resp.output_tokens, 5);
         assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_response_model_version_prefers_model_version() {
+        let top_level = serde_json::json!({
+            "modelVersion": "gemini-actual-top",
+            "candidates": [{
+                "modelVersion": "gemini-actual-candidate"
+            }]
+        });
+        let candidate_level = serde_json::json!({
+            "candidates": [{
+                "modelVersion": "gemini-actual-candidate"
+            }]
+        });
+        let missing = serde_json::json!({
+            "candidates": [{}]
+        });
+
+        assert_eq!(
+            GeminiOauthProvider::response_model_version(&top_level).as_deref(),
+            Some("gemini-actual-top")
+        );
+        assert_eq!(
+            GeminiOauthProvider::response_model_version(&candidate_level).as_deref(),
+            Some("gemini-actual-candidate")
+        );
+        assert_eq!(GeminiOauthProvider::response_model_version(&missing), None);
     }
 
     #[test]

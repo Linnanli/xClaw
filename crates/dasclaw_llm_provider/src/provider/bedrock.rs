@@ -18,6 +18,7 @@ use aws_sdk_bedrockruntime::types::{
     ToolResultBlock, ToolResultContentBlock, ToolResultStatus, ToolSpecification, ToolUseBlock,
 };
 use aws_smithy_types::Document;
+use dasclaw_core::response_types::ResponseMetadata;
 use rust_decimal::Decimal;
 
 use crate::provider::config::BedrockConfig;
@@ -206,6 +207,10 @@ impl LlmProvider for BedrockProvider {
             input_tokens,
             output_tokens,
             finish_reason: map_stop_reason(response.stop_reason()),
+            metadata: ResponseMetadata {
+                actual_model: Some(model_id),
+                ..ResponseMetadata::default()
+            },
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
         })
@@ -979,6 +984,8 @@ mod tests {
                 name: Some("echo".to_string()),
                 tool_calls: None,
                 content_parts: Vec::new(),
+                tool_error: None,
+                usage: None,
             },
         ];
 

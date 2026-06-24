@@ -24,7 +24,7 @@
 //! [`RespondOutput`] values — it doesn't know an "LLM" exists.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -57,11 +57,15 @@ pub enum TextAction {
 }
 
 /// Final outcome of the agentic loop.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum LoopOutcome {
     /// Completed with a text response.
-    Response(String),
+    Response {
+        text: String,
+        usage: TokenUsage,
+        metadata: ResponseMetadata,
+    },
     /// Loop was stopped by a signal.
     Stopped,
     /// Max iterations exceeded.
@@ -70,6 +74,57 @@ pub enum LoopOutcome {
     Failure(String),
     /// A tool requires user approval before continuing (chat delegate only).
     NeedApproval(Box<PendingApproval>),
+}
+
+impl<'de> Deserialize<'de> for LoopOutcome {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        enum LoopOutcomeWire {
+            Response(ResponsePayload),
+            Stopped,
+            MaxIterations,
+            Failure(String),
+            NeedApproval(Box<PendingApproval>),
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ResponsePayload {
+            Current {
+                text: String,
+                #[serde(default)]
+                usage: TokenUsage,
+                #[serde(default)]
+                metadata: ResponseMetadata,
+            },
+            Legacy(String),
+        }
+
+        match LoopOutcomeWire::deserialize(deserializer)? {
+            LoopOutcomeWire::Response(ResponsePayload::Current {
+                text,
+                usage,
+                metadata,
+            }) => Ok(LoopOutcome::Response {
+                text,
+                usage,
+                metadata,
+            }),
+            LoopOutcomeWire::Response(ResponsePayload::Legacy(text)) => Ok(LoopOutcome::Response {
+                text,
+                usage: TokenUsage::default(),
+                metadata: ResponseMetadata::default(),
+            }),
+            LoopOutcomeWire::Stopped => Ok(LoopOutcome::Stopped),
+            LoopOutcomeWire::MaxIterations => Ok(LoopOutcome::MaxIterations),
+            LoopOutcomeWire::Failure(reason) => Ok(LoopOutcome::Failure(reason)),
+            LoopOutcomeWire::NeedApproval(pending) => Ok(LoopOutcome::NeedApproval(pending)),
+        }
+    }
 }
 
 /// Configuration for the agentic loop.
@@ -103,6 +158,9 @@ pub struct AgentRunOutput {
     /// Token usage for the LLM response that produced this final text.
     #[serde(default)]
     pub usage: TokenUsage,
+    /// Provider metadata for the LLM response that produced this final text.
+    #[serde(default)]
+    pub metadata: ResponseMetadata,
 }
 
 /// Provider call mode for the next model request.
@@ -334,13 +392,17 @@ pub trait AgentResponder: Send + Sync {
     async fn handle_text_response(
         &self,
         text: &str,
-        _metadata: ResponseMetadata,
+        metadata: ResponseMetadata,
         usage: TokenUsage,
         ctx: &mut ReasoningContext,
     ) -> TextAction {
         ctx.messages
             .push(ChatMessage::assistant(text).with_usage(usage));
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
+        TextAction::Return(LoopOutcome::Response {
+            text: text.to_string(),
+            usage,
+            metadata,
+        })
     }
 
     /// React to a tool-intent nudge being injected.
@@ -740,13 +802,17 @@ mod tests {
         async fn handle_text_response(
             &self,
             text: &str,
-            _metadata: ResponseMetadata,
-            _usage: TokenUsage,
+            metadata: ResponseMetadata,
+            usage: TokenUsage,
             _ctx: &mut ReasoningContext,
         ) -> TextAction {
             // Override the default (which appends + Returns) so the
             // assertion shape of the pre-W10 tests carries over unchanged.
-            TextAction::Return(LoopOutcome::Response(text.to_string()))
+            TextAction::Return(LoopOutcome::Response {
+                text: text.to_string(),
+                usage,
+                metadata,
+            })
         }
 
         async fn on_tool_intent_nudge(&self, _text: &str, _ctx: &mut ReasoningContext) {
@@ -800,7 +866,7 @@ mod tests {
             .expect("loop completes");
 
         match outcome {
-            LoopOutcome::Response(text) => assert_eq!(text, "Hello, world!"),
+            LoopOutcome::Response { text, .. } => assert_eq!(text, "Hello, world!"),
             other => panic!("expected LoopOutcome::Response, got {other:?}-ish"),
         }
         assert!(responder.iterations_seen.lock().await.is_empty());
@@ -836,7 +902,7 @@ mod tests {
         .expect("loop completes");
 
         match outcome {
-            LoopOutcome::Response(text) => assert_eq!(text, "Done!"),
+            LoopOutcome::Response { text, .. } => assert_eq!(text, "Done!"),
             other => panic!("expected LoopOutcome::Response, got {other:?}-ish"),
         }
         assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 1);
@@ -915,7 +981,7 @@ mod tests {
             .await
             .expect("loop completes");
 
-        assert!(matches!(outcome, LoopOutcome::Response(_)));
+        assert!(matches!(outcome, LoopOutcome::Response { .. }));
         assert!(
             ctx.messages
                 .iter()
@@ -937,6 +1003,7 @@ mod tests {
                     finish_reason: FinishReason::Stop,
                     metadata: ResponseMetadata {
                         anomaly: Some(ResponseAnomaly::EmptyToolCompletion),
+                        ..ResponseMetadata::default()
                     },
                 })
             }
@@ -1035,7 +1102,7 @@ mod tests {
             .await
             .expect("loop completes");
 
-        assert!(matches!(outcome, LoopOutcome::Response(_)));
+        assert!(matches!(outcome, LoopOutcome::Response { .. }));
         assert_eq!(responder.nudge_count.load(Ordering::SeqCst), 2);
         let nudge_messages = ctx
             .messages
@@ -1104,7 +1171,9 @@ mod tests {
         .expect("loop completes");
 
         assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 0);
-        assert!(matches!(outcome, LoopOutcome::Response(ref t) if t == "Summarized it."));
+        assert!(
+            matches!(outcome, LoopOutcome::Response { ref text, .. } if text == "Summarized it.")
+        );
         assert!(
             ctx.messages
                 .iter()
@@ -1161,7 +1230,7 @@ mod tests {
         .await
         .expect("loop completes");
 
-        assert!(matches!(outcome, LoopOutcome::Response(_)));
+        assert!(matches!(outcome, LoopOutcome::Response { .. }));
         assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(
             ctx.force_text,
@@ -1254,7 +1323,7 @@ mod tests {
         .expect("loop completes");
 
         match outcome {
-            LoopOutcome::Response(t) => assert_eq!(t, "ok"),
+            LoopOutcome::Response { text, .. } => assert_eq!(text, "ok"),
             other => panic!("expected Response, got {other:?}-ish"),
         }
     }
@@ -1325,11 +1394,15 @@ mod tests {
             async fn handle_text_response(
                 &self,
                 text: &str,
-                _: ResponseMetadata,
-                _: TokenUsage,
+                metadata: ResponseMetadata,
+                usage: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> TextAction {
-                TextAction::Return(LoopOutcome::Response(text.to_string()))
+                TextAction::Return(LoopOutcome::Response {
+                    text: text.to_string(),
+                    usage,
+                    metadata,
+                })
             }
         }
 
@@ -1347,9 +1420,9 @@ mod tests {
             .expect("loop completes");
 
         match outcome {
-            LoopOutcome::Response(t) => {
+            LoopOutcome::Response { text, .. } => {
                 assert_eq!(
-                    t, "raw completion [scanned]",
+                    text, "raw completion [scanned]",
                     "UserDisplay Redact must mutate the text before the responder returns"
                 );
             }
