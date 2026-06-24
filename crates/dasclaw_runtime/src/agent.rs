@@ -52,12 +52,14 @@ use std::{
 
 use async_trait::async_trait;
 pub(crate) use dasclaw_core::agentic_loop::TOOLS_NOT_SUPPORTED_REASON;
+use dasclaw_core::agentic_loop::{
+    AgentCallPolicy, AgenticLoopConfig, LoopOutcome, LoopSignal, TextAction,
+};
 pub use dasclaw_core::agentic_loop::{AgentEvent, AgentResponder, AgentRunOutput, ModelCallMode};
-use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{ChatMessage, Role, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::TokenUsage;
+use dasclaw_core::response_types::{RespondOutput, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -411,6 +413,8 @@ pub struct AgentConfig {
 /// and a configurable [`HookBundle`].
 pub struct Agent {
     responder: Arc<dyn AgentResponder>,
+    signal_tx: mpsc::UnboundedSender<LoopSignal>,
+    signal_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<LoopSignal>>>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     tool_lifecycle_observer: Arc<dyn ToolLifecycleObserver>,
@@ -447,6 +451,18 @@ impl Agent {
     #[must_use]
     pub fn cancel_handle(&self) -> Option<CancellationToken> {
         self.cancellation_token.clone()
+    }
+
+    /// Queue a user message for the next agentic-loop signal check.
+    ///
+    /// This is the runtime primitive used by app-server `turn/steer`:
+    /// it does not interrupt the in-flight provider call, but it injects
+    /// the message before the next LLM iteration when the loop reaches
+    /// [`AgentResponder::check_signals`].
+    pub fn inject_user_message(&self, message: impl Into<String>) -> Result<(), AgentSignalError> {
+        self.signal_tx
+            .send(LoopSignal::InjectMessage(message.into()))
+            .map_err(|_| AgentSignalError::Closed)
     }
 
     /// Reply to a pending [`AgentEvent::ApprovalNeeded`] event
@@ -567,8 +583,13 @@ impl Agent {
             )) as Arc<dyn ToolDispatcher>
         });
 
+        let responder = Arc::new(SignalAwareResponder {
+            inner: Arc::clone(&self.responder),
+            signal_rx: Arc::clone(&self.signal_rx),
+        });
+
         let agentic_loop = AgenticLoop::new(
-            Arc::clone(&self.responder),
+            responder,
             dispatcher,
             self.cancellation_token.clone(),
             options.model_call_mode,
@@ -636,6 +657,85 @@ impl Agent {
         });
 
         AgentRunStream::new(result_rx)
+    }
+}
+
+/// Errors returned when a host tries to steer an agent whose signal queue
+/// is no longer available.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AgentSignalError {
+    #[error("agent signal channel is closed")]
+    Closed,
+}
+
+struct SignalAwareResponder {
+    inner: Arc<dyn AgentResponder>,
+    signal_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<LoopSignal>>>,
+}
+
+#[async_trait]
+impl AgentResponder for SignalAwareResponder {
+    async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+        self.inner.respond(ctx).await
+    }
+
+    async fn respond_streaming(
+        &self,
+        ctx: &mut ReasoningContext,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<RespondOutput, HostError> {
+        self.inner.respond_streaming(ctx, event_tx).await
+    }
+
+    async fn respond_with_policy(
+        &self,
+        ctx: &mut ReasoningContext,
+        policy: AgentCallPolicy,
+    ) -> Result<RespondOutput, HostError> {
+        self.inner.respond_with_policy(ctx, policy).await
+    }
+
+    async fn check_signals(&self) -> LoopSignal {
+        match self.inner.check_signals().await {
+            LoopSignal::Continue => {}
+            signal => return signal,
+        }
+
+        let mut rx = self.signal_rx.lock().await;
+        match rx.try_recv() {
+            Ok(signal) => signal,
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                LoopSignal::Continue
+            }
+        }
+    }
+
+    async fn before_llm_call(
+        &self,
+        ctx: &mut ReasoningContext,
+        iteration: usize,
+    ) -> Option<LoopOutcome> {
+        self.inner.before_llm_call(ctx, iteration).await
+    }
+
+    async fn handle_text_response(
+        &self,
+        text: &str,
+        metadata: ResponseMetadata,
+        usage: TokenUsage,
+        ctx: &mut ReasoningContext,
+    ) -> TextAction {
+        self.inner
+            .handle_text_response(text, metadata, usage, ctx)
+            .await
+    }
+
+    async fn on_tool_intent_nudge(&self, text: &str, ctx: &mut ReasoningContext) {
+        self.inner.on_tool_intent_nudge(text, ctx).await;
+    }
+
+    async fn after_iteration(&self, iteration: usize) {
+        self.inner.after_iteration(iteration).await;
     }
 }
 
@@ -796,8 +896,11 @@ impl AgentBuilder {
         let approval_policy = self
             .approval_policy
             .unwrap_or_else(|| Arc::new(NoApprovalPolicy));
+        let (signal_tx, signal_rx) = mpsc::unbounded_channel();
         Ok(Agent {
             responder,
+            signal_tx,
+            signal_rx: Arc::new(tokio::sync::Mutex::new(signal_rx)),
             tool_executor: self.tool_executor,
             tool_output_sanitizer: self.tool_output_sanitizer,
             tool_lifecycle_observer: self
@@ -1120,6 +1223,117 @@ mod tests {
             .expect("build");
         let out = invoke_text(&agent, "hi").await.expect("run");
         assert_eq!(out, "done");
+    }
+
+    struct SteerSpy {
+        calls: tokio::sync::Mutex<usize>,
+        second_call_users: tokio::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AgentResponder for SteerSpy {
+        async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            let mut calls = self.calls.lock().await;
+            *calls += 1;
+            if *calls == 1 {
+                return Ok(tool_call_output_named("echo", "call_1"));
+            }
+
+            let users = ctx
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>();
+            *self.second_call_users.lock().await = users;
+            Ok(text_output("saw steer"))
+        }
+    }
+
+    struct BlockingExecutor {
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for BlockingExecutor {
+        async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+            self.release.notified().await;
+            Ok(ToolResult {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                content: "tool output".to_string(),
+                is_error: false,
+            })
+        }
+    }
+
+    async fn run_steered_agent(messages: &[&str]) -> Vec<String> {
+        let release_tool = Arc::new(tokio::sync::Notify::new());
+        let spy = Arc::new(SteerSpy {
+            calls: tokio::sync::Mutex::new(0),
+            second_call_users: tokio::sync::Mutex::new(Vec::new()),
+        });
+        let agent = Arc::new(
+            Agent::builder()
+                .responder_arc(spy.clone())
+                .tool_executor(BlockingExecutor {
+                    release: Arc::clone(&release_tool),
+                })
+                .build()
+                .expect("build"),
+        );
+
+        let mut stream = Arc::clone(&agent).stream("first prompt", AgentRunOptions::stream());
+        loop {
+            let event = stream
+                .next()
+                .await
+                .expect("stream should emit tool-call event")
+                .expect("event should be ok");
+            if matches!(event, AgentEvent::ToolCallStart { .. }) {
+                break;
+            }
+        }
+
+        for message in messages {
+            agent
+                .inject_user_message(*message)
+                .expect("steer injection should be accepted while stream is running");
+        }
+        release_tool.notify_one();
+
+        let mut completed = None;
+        while let Some(event) = stream.next().await {
+            if let AgentEvent::Completed(output) = event.expect("stream event should be ok") {
+                completed = Some(output.text);
+                break;
+            }
+        }
+
+        assert_eq!(completed.as_deref(), Some("saw steer"));
+        spy.second_call_users.lock().await.clone()
+    }
+
+    #[tokio::test]
+    async fn agent_inject_user_message_reaches_next_loop_iteration() {
+        let users = run_steered_agent(&["extra context"]).await;
+        assert_eq!(
+            users,
+            vec!["first prompt".to_string(), "extra context".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_inject_user_message_drains_multiple_messages_before_next_loop_iteration() {
+        let users = run_steered_agent(&["extra context one", "extra context two"]).await;
+        assert_eq!(
+            users,
+            vec![
+                "first prompt".to_string(),
+                "extra context one".to_string(),
+                "extra context two".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]

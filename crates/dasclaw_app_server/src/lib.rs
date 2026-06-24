@@ -4755,6 +4755,7 @@ impl DasclawAgentRuntimeBridge {
                 tool_user_input: true,
                 permissions_approval: true,
                 file_change_approval: true,
+                turn_steer: true,
                 ..RuntimeBridgeFeatures::default()
             },
         }
@@ -5199,6 +5200,24 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             })?;
 
         Ok(())
+    }
+
+    fn steer_turn(&self, request: RuntimeTurnSteerRequest) -> Result<(), RuntimeBridgeError> {
+        let active_agents = self
+            .active_agents
+            .lock()
+            .map_err(|_| RuntimeBridgeError::retryable("runtime agent registry lock poisoned"))?;
+        let Some(agent) = active_agents.get(&request.turn_id).cloned() else {
+            return Err(RuntimeBridgeError::retryable(format!(
+                "runtime turn is not active: {}",
+                request.turn_id
+            )));
+        };
+        drop(active_agents);
+
+        agent
+            .inject_user_message(request.prompt)
+            .map_err(|error| RuntimeBridgeError::retryable(error.to_string()))
     }
 
     fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError> {
@@ -6289,11 +6308,143 @@ mod tests {
     }
 
     #[test]
-    fn default_dasclaw_runtime_bridge_does_not_advertise_turn_steer_until_real_injection_exists() {
+    fn default_dasclaw_runtime_bridge_advertises_turn_steer_after_real_injection_exists() {
         let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
         assert!(
-            !bridge.features().turn_steer,
-            "default runtime bridge must stay fail-safe until it can inject input into a running turn"
+            bridge.features().turn_steer,
+            "default runtime bridge should advertise turn steer once it can inject input into a running turn"
+        );
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_steer_turn_injects_input_into_running_turn() {
+        struct SteerAwareResponder {
+            calls: Mutex<usize>,
+            second_call_users: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl dasclaw_runtime::AgentResponder for SteerAwareResponder {
+            async fn respond(
+                &self,
+                ctx: &mut ReasoningContext,
+            ) -> Result<RespondOutput, HostError> {
+                let mut calls = self.calls.lock().expect("calls lock");
+                *calls += 1;
+                if *calls == 1 {
+                    return Ok(tool_call_output("echo", "call_1"));
+                }
+
+                let users = ctx
+                    .messages
+                    .iter()
+                    .filter(|message| message.role == dasclaw_core::messages::Role::User)
+                    .map(|message| message.content.clone())
+                    .collect::<Vec<_>>();
+                *self
+                    .second_call_users
+                    .lock()
+                    .expect("second call users lock") = users;
+                Ok(text_output("steered answer"))
+            }
+        }
+
+        struct BlockingExecutor {
+            release: Arc<tokio::sync::Notify>,
+        }
+
+        #[async_trait::async_trait]
+        impl dasclaw_runtime::ToolExecutor for BlockingExecutor {
+            async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+                self.release.notified().await;
+                Ok(ToolResult {
+                    tool_call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content: "tool output".to_string(),
+                    is_error: false,
+                })
+            }
+        }
+
+        let second_call_users = Arc::new(Mutex::new(Vec::new()));
+        let release_tool = Arc::new(tokio::sync::Notify::new());
+        let users_for_factory = Arc::clone(&second_call_users);
+        let release_for_factory = Arc::clone(&release_tool);
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(move |token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(SteerAwareResponder {
+                    calls: Mutex::new(0),
+                    second_call_users: Arc::clone(&users_for_factory),
+                })
+                .tool_executor(BlockingExecutor {
+                    release: Arc::clone(&release_for_factory),
+                })
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_codex_v2_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("first prompt".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let tool_start = drain_until_method(
+            &mut server,
+            event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA,
+            Duration::from_secs(2),
+        );
+        assert!(
+            tool_start.iter().any(|notification| {
+                notification.method == event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA
+                    && notification.params["turnId"] == started.turn.id
+            }),
+            "runtime tool start should be observable before steering: {tool_start:?}"
+        );
+
+        server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: started.turn.id.clone(),
+                input: text_input("extra context one".to_string()),
+                responsesapi_client_metadata: None,
+            })
+            .expect("real runtime bridge should accept first turn/steer");
+        server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: started.turn.id.clone(),
+                input: text_input("extra context two".to_string()),
+                responsesapi_client_metadata: None,
+            })
+            .expect("real runtime bridge should accept second turn/steer");
+        release_tool.notify_one();
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == "turn/completed"),
+            "turn should complete after steered second iteration: {notifications:?}"
+        );
+        assert_eq!(
+            *second_call_users.lock().expect("second call users lock"),
+            vec![
+                "first prompt".to_string(),
+                "extra context one".to_string(),
+                "extra context two".to_string(),
+            ]
         );
     }
 

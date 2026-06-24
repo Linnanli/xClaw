@@ -56,7 +56,7 @@ Codex 参考落点：
 | 范围 | 状态 | 证据 / 边界 |
 |---|---|---|
 | 协议 DTO / schema / notification constructors | 已完成 | `TurnSteerParams`、`TurnPlanUpdatedEvent`、`TurnDiffUpdatedEvent`、`PlanDeltaEvent`、`RawResponseItemCompletedEvent` 已接入 protocol tests |
-| app-server route / fail-safe | 部分完成 | `turn/steer` route、active turn precondition、feature-disabled `CAPABILITY_UNAVAILABLE` 已受测；但真实 `DasclawAgentRuntimeBridge` 仍不声明 `turn_steer: true` |
+| app-server route / fail-safe | 部分完成 | 2026-06-24 复审当时：`turn/steer` route、active turn precondition、feature-disabled `CAPABILITY_UNAVAILABLE` 已受测；但真实 `DasclawAgentRuntimeBridge` 尚未声明可 steer |
 | runtime adapter 接收 R5 event 后转发 | 部分完成 | `LlmStreamEvent` -> `AgentEvent` 与 `AgentEvent` -> `ServerNotification` 受测；但测试主要使用 scripted provider / synthetic bridge |
 | 真实 provider producer | 未完成 | `claw_code_provider` / `codex_chatgpt` 真实解析路径仍只稳定产出 text / reasoning summary / tool call / completed 等旧事件，未稳定产出 R5 plan/diff/raw item/raw reasoning events |
 | 真实 turn steer 注入运行中 turn | 未完成 | trait 默认 `steer_turn` 仍 unsupported；真实 bridge 没有把 steer input 注入 running turn 的 API / test |
@@ -74,6 +74,23 @@ Codex 参考落点：
 - 不得把 `docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md` 的 R5 整体划掉，直到 Task 8-10 的真实 producer / steer 工作完成并通过验证。
 - 可以在 gap matrix 中拆分记录：`R5a protocol/router/adapter receive path` 已完成；`R5b real provider producer` 与 `R5c real turn steer injection` 未完成。
 - 所有新增测试必须至少包含一个非 scripted-provider 的 fixture/parser 级用例；只用 `ScriptedEventsProvider`、`ScriptedRuntimeResponder`、`SequencedRuntimeBridge` 的测试不能作为 R5 完成证据。
+
+## 0.2 2026-06-24 完成校准：R5 已按拆分项完成
+
+2026-06-24 继续执行后，R5c 已补齐真实 running-turn steer 注入路径：
+
+| 范围 | 状态 | 证据 / 边界 |
+|---|---|---|
+| R5a protocol/router/adapter receive path | 已完成 | schema、route、runtime adapter forwarding、app-server notification producer 已受测 |
+| R5b real provider producer | 范围完成 | `codex_chatgpt` / `claw_code_provider` fixture/parser 测试覆盖真实可消费的 raw reasoning / raw response item；plan/diff 仅在上游提供 `turn.plan.updated` / `turn.diff.updated` source event 时转发，不从普通文本合成，也不声明 Codex Responses SSE 原生 plan/diff parity |
+| R5c real turn steer injection | 已完成 | `Agent::inject_user_message` 将 steer 文本排入 agent signal queue；`DasclawAgentRuntimeBridge::steer_turn` 查找 active agent 并在下一轮 agentic-loop LLM 调用前按序注入 queued user messages；默认真实 bridge 声明 `turn_steer: true` |
+
+完成边界：
+
+- `turn/steer` 注入发生在下一次 agentic-loop signal check，不中断正在进行中的 provider call；同一窗口内多条 queued steer 会按序注入。
+- R5b 的 plan/diff 完成边界是 source-event forwarding，不代表 Codex Responses SSE 或 ClawCode upstream 本身已经提供正向 plan/diff 事件。
+- 不支持 `turn_steer` 的非真实 / 测试 bridge 仍保持 feature-gated fail-safe。
+- 完成证据不能使用 `RecordingRuntimeBridge::with_turn_steer()` 冒充；本轮新增真实 bridge 测试 `dasclaw_runtime_bridge_steer_turn_injects_input_into_running_turn`。
 
 ## 1. 范围
 
@@ -467,7 +484,7 @@ pub fn turn_steer(
 
 - [x] Green：为真实 `DasclawAgentRuntimeBridge` 做明确选择：
   - 若 `dasclaw_runtime::Agent` 已有运行中追加用户输入 API，则 `steer_turn` 调用该 API。
-  - 若没有，默认 `DasclawAgentRuntimeBridge` 不声明 `turn_steer`，route 保持 fail-safe；R5 不能把 `turn/steer` 从 gap matrix 删除线标完成，直到真实 bridge API 存在并通过测试。
+  - 若没有真实注入 API，默认 `DasclawAgentRuntimeBridge` 需保持 route fail-safe；R5 不能把 `turn/steer` 从 gap matrix 删除线标完成，直到真实 bridge API 存在并通过测试。
 
 - [x] Refactor：错误语义优先映射到现有 `AppServerError::invalid_request` / `capability_unavailable`，不要新增只用于测试的错误码。
 
@@ -851,6 +868,11 @@ match upstream_event_name {
 
 并在测试中断言 ordinary text 不会被伪造成 `PlanDelta` / `TurnPlanUpdated`。
 
+当前完成口径：
+
+- `codex_chatgpt`：Responses SSE fixture 覆盖 raw reasoning、raw response item；plan/diff 只覆盖 `turn.plan.updated` / `turn.diff.updated` source event forwarding。
+- `claw_code_provider`：fixture 覆盖 raw reasoning；ordinary text 不会被合成为 plan/diff。没有上游 plan/diff source event 时保持 explicit unsupported / no-synthesis。
+
 - [x] **Step 4: 运行 provider 级验证**
 
 ```bash
@@ -944,7 +966,7 @@ Expected:
 - If a real API exists, implement `DasclawAgentRuntimeBridge::steer_turn` against it.
 - If no real API exists, keep `turn_steer: false` for `DasclawAgentRuntimeBridge` and do not strike `turn/steer` in gap matrix.
 
-- [ ] **Step 2A: 如果真实 API 存在，补真实 steer test**
+- [x] **Step 2A: 如果真实 API 存在，补真实 steer test**
 
 ```rust
 #[test]
@@ -957,11 +979,13 @@ fn dasclaw_runtime_bridge_steer_turn_injects_input_into_running_turn() {
 
 - [x] **Step 2B: 如果真实 API 不存在，补文档与测试锁定 fail-safe**
 
+历史分支说明：Step 2B 曾用于锁定 fail-safe 边界；本轮新增 `Agent::inject_user_message` 后，真实 API 已存在，最终完成态以 Step 2A 为准。
+
 ```rust
 #[test]
-fn default_dasclaw_runtime_bridge_does_not_advertise_turn_steer_until_real_injection_exists() {
+fn default_dasclaw_runtime_bridge_advertises_turn_steer_after_real_injection_exists() {
     let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
-    assert!(!bridge.features().turn_steer);
+    assert!(bridge.features().turn_steer);
 }
 ```
 
@@ -969,7 +993,7 @@ fn default_dasclaw_runtime_bridge_does_not_advertise_turn_steer_until_real_injec
 
 Rules:
 
-- `turn/steer` 只有在 Step 2A 通过后才能加删除线。
+- `turn/steer` 已在 Step 2A 通过后加删除线。
 - 如果只完成 Step 2B，gap matrix 必须写成 `route/fail-safe done, real runtime injection pending`。
 - 不允许用 `RecordingRuntimeBridge::with_turn_steer()` 的测试作为真实 steer 完成证据。
 
@@ -994,7 +1018,7 @@ Rules:
 gap matrix 必须包含这句等价信息：
 
 ```markdown
-当前 R5 不得整体划掉：已完成 protocol/router/adapter receive path；真实 provider producer 与真实 turn steer injection 仍未完成，scripted provider / synthetic bridge 测试不能作为完成证据。
+当前 R5 已按拆分项完成：R5a protocol/router/adapter receive path、R5b real provider producer 的真实可消费事件范围、R5c real turn steer injection 均有非 scripted / 非 synthetic 完成证据；scripted provider / synthetic bridge 测试仍不能单独作为完成证据；R5b plan/diff 只声明 source-event forwarding，不声明缺失上游事件的完整 parity。
 ```
 
 - [x] **Step 3: 运行文档核验**

@@ -729,18 +729,24 @@ impl CodexChatGptProvider {
         false
     }
 
-    /// Remove keys with empty-string values from a JSON object.
+    /// Remove known optional time fields when the model fills them with
+    /// empty strings.
     ///
     /// gpt-5.2-codex fills optional tool parameters with `""` (e.g.
     /// `"timestamp": ""`). IronClaw's tool validation treats these as
-    /// invalid "non-empty input expected". Stripping them makes the
-    /// tool see only the actually-provided values.
+    /// invalid "non-empty input expected". Keep the workaround narrow so
+    /// other empty-string arguments still reach the tool's own validator.
     fn strip_empty_string_values(value: Value) -> Value {
         match value {
             Value::Object(map) => {
                 let cleaned: serde_json::Map<String, Value> = map
                     .into_iter()
-                    .filter(|(_, v)| !matches!(v, Value::String(s) if s.is_empty()))
+                    .filter(|(k, v)| {
+                        !matches!(
+                            (k.as_str(), v),
+                            ("timestamp" | "timestamp2", Value::String(s)) if s.is_empty()
+                        )
+                    })
                     .map(|(k, v)| (k, Self::strip_empty_string_values(v)))
                     .collect();
                 Value::Object(cleaned)
@@ -756,9 +762,8 @@ impl CodexChatGptProvider {
             .map(|tc| {
                 let args: Value =
                     serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!(tc.arguments));
-                // gpt-5.2-codex fills optional parameters with empty strings (e.g.
-                // `"timestamp": ""`), which IronClaw's tool validation rejects.
-                // Strip them so only actually-provided values reach the tool.
+                // Keep this compatibility shim narrow: only known optional time
+                // fields are removed when the model fills them with "".
                 let args = Self::strip_empty_string_values(args);
                 ToolCall {
                     id: tc.call_id,
@@ -1323,12 +1328,16 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
     fn test_strip_empty_string_values() {
         let input = json!({
             "format": "%Y-%m-%d",
+            "query": "",
             "operation": "now",
             "timestamp": "",
             "timestamp2": "",
         });
         let cleaned = CodexChatGptProvider::strip_empty_string_values(input);
-        assert_eq!(cleaned, json!({"format": "%Y-%m-%d", "operation": "now"}));
+        assert_eq!(
+            cleaned,
+            json!({"format": "%Y-%m-%d", "operation": "now", "query": ""})
+        );
     }
 
     fn spawn_delayed_responses_fixture_server() -> (String, std::sync::mpsc::Sender<()>) {

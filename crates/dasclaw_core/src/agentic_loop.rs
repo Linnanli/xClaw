@@ -466,19 +466,21 @@ pub async fn run_agentic_loop(
     let mut truncation_count: u32 = 0;
 
     for iteration in 1..=config.max_iterations {
-        // Check for external signals (stop, cancellation, user messages).
-        // A cancelled token always wins even if the responder would
-        // return `Continue`.
-        let signal = if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
-            LoopSignal::Stop
-        } else {
-            responder.check_signals().await
-        };
-        match signal {
-            LoopSignal::Continue => {}
-            LoopSignal::Stop => return Ok(LoopOutcome::Stopped),
-            LoopSignal::InjectMessage(msg) => {
-                reason_ctx.messages.push(ChatMessage::user(&msg));
+        // Drain queued external signals before the next LLM call. This keeps
+        // multiple turn/steer messages in order instead of acknowledging them
+        // and only injecting the first one.
+        loop {
+            let signal = if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
+                LoopSignal::Stop
+            } else {
+                responder.check_signals().await
+            };
+            match signal {
+                LoopSignal::Continue => break,
+                LoopSignal::Stop => return Ok(LoopOutcome::Stopped),
+                LoopSignal::InjectMessage(msg) => {
+                    reason_ctx.messages.push(ChatMessage::user(&msg));
+                }
             }
         }
 
