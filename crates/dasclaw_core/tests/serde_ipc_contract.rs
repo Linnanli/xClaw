@@ -14,7 +14,8 @@
 use dasclaw_core::agentic_loop::LoopOutcome;
 use dasclaw_core::messages::{FinishReason, ToolCall, ToolResult};
 use dasclaw_core::response_types::{
-    RespondOutput, RespondResult, ResponseAnomaly, ResponseMetadata, TokenUsage,
+    RespondOutput, RespondResult, ResponseAnomaly, ResponseMetadata, ResponseModelVerification,
+    TokenUsage,
 };
 use serde_json::json;
 
@@ -92,11 +93,42 @@ fn req_dasclaw_core_909_response_anomaly_roundtrip() {
 fn req_dasclaw_core_909_response_metadata_roundtrip() {
     let with = ResponseMetadata {
         anomaly: Some(ResponseAnomaly::EmptyTextResponse),
+        ..ResponseMetadata::default()
     };
     assert_eq!(roundtrip(&with), with);
 
     let without = ResponseMetadata::default();
     assert_eq!(roundtrip(&without), without);
+}
+
+#[test]
+fn response_metadata_roundtrip() {
+    let sample = ResponseMetadata {
+        anomaly: Some(ResponseAnomaly::EmptyTextResponse),
+        actual_model: Some("gpt-5.5-cyber".to_string()),
+        model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+    };
+
+    let json = serde_json::to_value(&sample).expect("serialize response metadata");
+    assert_eq!(json["actualModel"], "gpt-5.5-cyber");
+    assert_eq!(
+        json["modelVerifications"],
+        serde_json::json!(["trustedAccessForCyber"])
+    );
+    assert!(json.get("actual_model").is_none());
+    assert!(json.get("model_verifications").is_none());
+
+    assert_eq!(roundtrip(&sample), sample);
+}
+
+#[test]
+fn response_metadata_deserializes_legacy_anomaly_only_payload() {
+    let metadata: ResponseMetadata =
+        serde_json::from_value(json!({ "anomaly": null })).expect("deserialize legacy metadata");
+
+    assert_eq!(metadata.anomaly, None);
+    assert_eq!(metadata.actual_model, None);
+    assert!(metadata.model_verifications.is_empty());
 }
 
 // -------------------------------------------------------------------------
@@ -195,7 +227,11 @@ fn req_dasclaw_core_909_respond_output_roundtrip() {
 #[test]
 fn req_dasclaw_core_909_loop_outcome_simple_variants_roundtrip() {
     let samples = [
-        LoopOutcome::Response("hi".into()),
+        LoopOutcome::Response {
+            text: "hi".into(),
+            usage: TokenUsage::default(),
+            metadata: ResponseMetadata::default(),
+        },
         LoopOutcome::Stopped,
         LoopOutcome::MaxIterations,
         LoopOutcome::Failure("hook blocked".into()),
@@ -206,6 +242,30 @@ fn req_dasclaw_core_909_loop_outcome_simple_variants_roundtrip() {
         // Compare via re-serialization since LoopOutcome has no PartialEq.
         let again = serde_json::to_string(&back).expect("re-serialize");
         assert_eq!(json, again);
+    }
+}
+
+#[test]
+fn loop_outcome_response_deserializes_legacy_string_payload() {
+    let payload = json!({
+        "kind": "response",
+        "data": "done"
+    });
+
+    let outcome: LoopOutcome =
+        serde_json::from_value(payload).expect("deserialize legacy loop response");
+
+    match outcome {
+        LoopOutcome::Response {
+            text,
+            usage,
+            metadata,
+        } => {
+            assert_eq!(text, "done");
+            assert_eq!(usage, TokenUsage::default());
+            assert_eq!(metadata, ResponseMetadata::default());
+        }
+        other => panic!("unexpected variant: {other:?}"),
     }
 }
 
@@ -274,7 +334,11 @@ fn req_dasclaw_core_909_snapshot_respond_result_tool_calls() {
 fn req_dasclaw_core_909_snapshot_loop_outcome_response() {
     insta::assert_json_snapshot!(
         "loop_outcome_response",
-        LoopOutcome::Response("done".into())
+        LoopOutcome::Response {
+            text: "done".into(),
+            usage: TokenUsage::default(),
+            metadata: ResponseMetadata::default(),
+        }
     );
 }
 

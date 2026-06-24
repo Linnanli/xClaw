@@ -31,7 +31,7 @@ use crate::worker::autonomous_recovery::{
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
 use crate::worker::job_dispatcher::WorkerMessage;
-use dasclaw_core::agentic_loop::AgenticLoopConfig;
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, ModelCallMode};
 use dasclaw_core::intent::truncate_for_preview;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
@@ -486,13 +486,19 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         // No cancellation token — `JobResponder::check_signals` already
         // observes the `WorkerMessage::Stop` channel signal. No event
         // channel — events are streamed via `Worker::log_event` instead.
-        let outcome = AgenticLoop::new(Arc::new(responder), Some(Arc::new(dispatcher)), None, None)
-            .run(reason_ctx, &config, &hooks)
-            .await
-            .map_err(crate::agent::hook_bundle::host_err_to_error)?;
+        let outcome = AgenticLoop::new(
+            Arc::new(responder),
+            Some(Arc::new(dispatcher)),
+            None,
+            ModelCallMode::Invoke,
+            None,
+        )
+        .run(reason_ctx, &config, &hooks)
+        .await
+        .map_err(crate::agent::hook_bundle::host_err_to_error)?;
 
         match outcome {
-            LoopOutcome::Response(_) => {
+            LoopOutcome::Response { .. } => {
                 // Completion was already handled in handle_text_response via mark_completed
             }
             LoopOutcome::MaxIterations => {
@@ -1632,7 +1638,7 @@ impl AgentResponder for JobResponder {
     ) -> TextAction {
         let action = {
             let mut recovery = self.recovery_state.lock().await;
-            recovery.on_text_response(metadata, text)
+            recovery.on_text_response(metadata.clone(), text)
         };
 
         match action {
@@ -1693,7 +1699,11 @@ impl AgentResponder for JobResponder {
                     "Empty response after text output — treating as completion"
                 );
                 self.mark_completed_or_warn("empty text response").await;
-                return TextAction::Return(LoopOutcome::Response(String::new()));
+                return TextAction::Return(LoopOutcome::Response {
+                    text: String::new(),
+                    usage,
+                    metadata,
+                });
             }
             // No prior text response — this is likely a rate-limit backoff retry.
             return TextAction::Continue;
@@ -1735,7 +1745,11 @@ impl AgentResponder for JobResponder {
             }),
         );
 
-        TextAction::Return(LoopOutcome::Response(text))
+        TextAction::Return(LoopOutcome::Response {
+            text,
+            usage,
+            metadata,
+        })
     }
 
     async fn on_tool_intent_nudge(&self, text: &str, _reason_ctx: &mut ReasoningContext) {

@@ -22,11 +22,24 @@ pub enum ResponseAnomaly {
     EmptyTextResponse,
 }
 
+/// Provider-side verification signals attached to a response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResponseModelVerification {
+    TrustedAccessForCyber,
+}
+
 /// Metadata attached to `RespondOutput` so callers can react to malformed
 /// provider behavior without inferring it from fallback strings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseMetadata {
+    #[serde(default)]
     pub anomaly: Option<ResponseAnomaly>,
+    #[serde(default)]
+    pub actual_model: Option<String>,
+    #[serde(default)]
+    pub model_verifications: Vec<ResponseModelVerification>,
 }
 
 /// Result of a response with potential tool calls.

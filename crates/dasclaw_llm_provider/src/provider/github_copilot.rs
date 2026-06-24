@@ -18,6 +18,8 @@ use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
+use dasclaw_core::response_types::ResponseMetadata;
+
 use crate::provider::config::RegistryProviderConfig;
 use crate::provider::costs;
 use crate::provider::error::LlmError;
@@ -343,6 +345,10 @@ impl LlmProvider for GithubCopilotProvider {
                 .as_ref()
                 .map(|u| u.completion_tokens)
                 .unwrap_or(0),
+            metadata: ResponseMetadata {
+                actual_model: response.model,
+                ..ResponseMetadata::default()
+            },
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
         })
@@ -460,6 +466,8 @@ struct OpenAiFunction {
 
 #[derive(Debug, Deserialize)]
 struct OpenAiResponse {
+    #[serde(default)]
+    model: Option<String>,
     choices: Vec<OpenAiChoice>,
     #[serde(default)]
     usage: Option<OpenAiUsage>,
@@ -676,5 +684,27 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].name, "search");
         assert_eq!(tool_calls[0].arguments["q"], "test");
+    }
+
+    #[test]
+    fn test_openai_response_model_is_optional_actual_model_source() {
+        let with_model: OpenAiResponse = serde_json::from_value(serde_json::json!({
+            "model": "copilot-actual-model",
+            "choices": [{
+                "message": { "content": "ok" },
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(with_model.model.as_deref(), Some("copilot-actual-model"));
+
+        let without_model: OpenAiResponse = serde_json::from_value(serde_json::json!({
+            "choices": [{
+                "message": { "content": "ok" },
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(without_model.model, None);
     }
 }

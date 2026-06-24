@@ -104,6 +104,8 @@ fn all_six_events() -> Vec<HookEvent> {
             tool_name: "shell".into(),
             parameters: serde_json::json!({}),
             user_id: "u".into(),
+            thread_id: None,
+            turn_id: None,
             context: "chat".into(),
         },
         HookEvent::Outbound {
@@ -195,6 +197,8 @@ async fn req_hooks_60_per_hook_log_includes_hook_name_and_event_type() {
             tool_name: "shell".into(),
             parameters: serde_json::json!({"cmd": "ls"}),
             user_id: "u".into(),
+            thread_id: None,
+            turn_id: None,
             context: "chat".into(),
         })
         .await

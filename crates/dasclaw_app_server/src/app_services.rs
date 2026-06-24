@@ -1,31 +1,40 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dasclaw_app_server_protocol::{
-    AppServerP5Availability, AppServerServiceAvailability, CommandExecAvailability,
-    CommandExecOutputDeltaNotification, CommandExecParams, CommandExecResizeParams,
-    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
-    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
-    FsChangedNotification, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
-    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
-    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
-    FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
-    FsWriteFileParams, FsWriteFileResponse, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
-    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
-    McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
-    McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    AppServerP5Availability, AppServerR6Availability, AppServerServiceAvailability,
+    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
+    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+    CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
+    CommandExecWriteResponse, ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse,
+    ConfigValueWriteParams, ConfigWriteResponse, FsChangedNotification, FsCopyParams,
+    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse, JobListParams,
+    JobListResponse, JobReadParams, JobReadResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+    McpServerReloadResponse, McpServerToolCallParams, McpServerToolCallResponse,
+    McpServiceAvailability, McpToolCallProgressNotification, ServiceHealth, ServiceName,
+    ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse,
 };
+use dasclaw_hooks::{HookRegistry, HookRunObserver};
 use dasclaw_runtime::context::ContextManager;
 
 use crate::AppServerError;
 use crate::command_service::AppServerCommandExecService;
+use crate::config_service::AppServerConfigService;
 use crate::fs_service::AppServerFsService;
+use crate::hook_service::{AppServerHookNotification, AppServerHookService};
 use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
 use crate::mcp_service::AppServerMcpService;
+use crate::repo_service::AppServerRepoService;
+use crate::search_service::{AppServerSearchService, SearchNotification};
 use crate::skills_service::AppServerSkillsService;
 
 pub trait LogService: Send + Sync {
@@ -158,6 +167,69 @@ pub trait CommandExecService: Send + Sync {
     }
 }
 
+pub trait ConfigService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn read(&self, params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError>;
+    fn write_value(
+        &self,
+        params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError>;
+    fn write_batch(
+        &self,
+        params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError>;
+
+    fn collect_startup_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
+    }
+
+    fn drain_config_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
+pub trait RepoService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn git_diff_to_remote(
+        &self,
+        params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError>;
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
+pub trait SearchService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn fuzzy_file_search(
+        &self,
+        params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError>;
+
+    fn drain_search_events(&self) -> Vec<SearchNotification> {
+        Vec::new()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
+pub trait HookNotificationService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification>;
+    fn push_hook_notifications(&self, _pending: Vec<AppServerHookNotification>) {}
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
@@ -166,6 +238,11 @@ pub struct AppServerServices {
     pub mcp: Arc<dyn McpService>,
     pub filesystem: Arc<dyn FsService>,
     pub command: Arc<dyn CommandExecService>,
+    pub config: Arc<dyn ConfigService>,
+    pub repo: Arc<dyn RepoService>,
+    pub search: Arc<dyn SearchService>,
+    pub hooks: Arc<dyn HookNotificationService>,
+    pub hook_registry: Option<Arc<HookRegistry>>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -185,6 +262,11 @@ impl Default for AppServerServices {
             mcp: Arc::new(NoopMcpService),
             filesystem: Arc::new(NoopFsService),
             command: Arc::new(NoopCommandExecService),
+            config: Arc::new(NoopConfigService),
+            repo: Arc::new(NoopRepoService),
+            search: Arc::new(NoopSearchService),
+            hooks: Arc::new(NoopHookService),
+            hook_registry: None,
         }
     }
 }
@@ -192,15 +274,27 @@ impl Default for AppServerServices {
 impl AppServerServices {
     #[must_use]
     pub fn real() -> Self {
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::real_with_root(root)
+    }
+
+    fn real_with_root(root: PathBuf) -> Self {
         let manager = Arc::new(ContextManager::default());
-        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let hook_service = Arc::new(AppServerHookService::wired());
+        let hook_observer: Arc<dyn HookRunObserver> = hook_service.clone();
+        let hook_registry = Arc::new(HookRegistry::new().with_observer(hook_observer));
         Self {
             logs: Arc::new(AppServerLogService::new()),
             jobs: Arc::new(AppServerJobService::new(manager)),
             skills: Arc::new(AppServerSkillsService::new()),
             mcp: Arc::new(AppServerMcpService::default()),
             filesystem: Arc::new(AppServerFsService::new(root.clone())),
-            command: Arc::new(AppServerCommandExecService::new(root)),
+            command: Arc::new(AppServerCommandExecService::new(root.clone())),
+            config: Arc::new(AppServerConfigService::new(root.clone())),
+            repo: Arc::new(AppServerRepoService::new(root.clone())),
+            search: Arc::new(AppServerSearchService::new(root)),
+            hooks: hook_service,
+            hook_registry: Some(hook_registry),
         }
     }
 
@@ -212,6 +306,10 @@ impl AppServerServices {
             self.mcp.health(),
             self.filesystem.health(),
             self.command.health(),
+            self.config.health(),
+            self.repo.health(),
+            self.search.health(),
+            self.hooks.health(),
         ]
     }
 
@@ -233,12 +331,33 @@ impl AppServerServices {
         self.command.drain_output_delta_events()
     }
 
+    pub fn drain_search_events(&self) -> Vec<SearchNotification> {
+        self.search.drain_search_events()
+    }
+
+    pub fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
+        let mut notifications = self.hooks.drain_hook_notifications();
+        notifications.extend(self.config.drain_config_notifications());
+        notifications
+    }
+
+    pub fn collect_startup_notifications(&self) {
+        let mut pending = self.config.collect_startup_notifications();
+        pending.extend(self.config.drain_config_notifications());
+        if !pending.is_empty() {
+            self.hooks.push_hook_notifications(pending);
+        }
+    }
+
     pub fn availability(&self) -> AppServerServiceAvailability {
         let command = if self.command.is_ready() {
             self.command.availability()
         } else {
             CommandExecAvailability::default()
         };
+
+        let hook_notifications_ready = self.hooks.is_ready();
+        let config_ready = self.config.is_ready();
 
         AppServerServiceAvailability {
             logs: self.logs.is_ready(),
@@ -253,7 +372,23 @@ impl AppServerServices {
                 filesystem: self.filesystem.is_ready(),
                 command,
             },
+            r6: AppServerR6Availability {
+                config: config_ready,
+                repo: self.repo.is_ready(),
+                search: self.search.is_ready(),
+                hooks: hook_notifications_ready,
+                warnings: false,
+                config_warnings: config_ready && hook_notifications_ready,
+                deprecation_notices: config_ready && hook_notifications_ready,
+                guardian_warnings: false,
+                ..AppServerR6Availability::default()
+            },
         }
+    }
+
+    #[cfg(test)]
+    pub fn real_with_root_for_tests(root: PathBuf) -> Self {
+        Self::real_with_root(root)
     }
 
     #[cfg(test)]
@@ -272,6 +407,11 @@ impl AppServerServices {
             mcp: Arc::new(mcp),
             filesystem: Arc::new(filesystem),
             command: Arc::new(command),
+            config: Arc::new(NoopConfigService),
+            repo: Arc::new(NoopRepoService),
+            search: Arc::new(NoopSearchService),
+            hooks: Arc::new(NoopHookService),
+            hook_registry: None,
         }
     }
 }
@@ -282,6 +422,10 @@ struct NoopSkillsService;
 struct NoopMcpService;
 struct NoopFsService;
 struct NoopCommandExecService;
+struct NoopConfigService;
+struct NoopRepoService;
+struct NoopSearchService;
+struct NoopHookService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -492,6 +636,81 @@ fn command_exec_not_wired<T>() -> Result<T, AppServerError> {
         "command_exec",
         "command execution service is not wired",
     ))
+}
+
+impl ConfigService for NoopConfigService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Config, "config service is not wired")
+    }
+
+    fn read(&self, _params: ConfigReadParams) -> Result<ConfigReadResponse, AppServerError> {
+        config_not_wired()
+    }
+
+    fn write_value(
+        &self,
+        _params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        config_not_wired()
+    }
+
+    fn write_batch(
+        &self,
+        _params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        config_not_wired()
+    }
+}
+
+fn config_not_wired<T>() -> Result<T, AppServerError> {
+    Err(AppServerError::capability_unavailable(
+        "config",
+        "config service is not wired",
+    ))
+}
+
+impl RepoService for NoopRepoService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Repo, "repo service is not wired")
+    }
+
+    fn git_diff_to_remote(
+        &self,
+        _params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "repo",
+            "repo service is not wired",
+        ))
+    }
+}
+
+impl SearchService for NoopSearchService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Search, "search service is not wired")
+    }
+
+    fn fuzzy_file_search(
+        &self,
+        _params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "search",
+            "search service is not wired",
+        ))
+    }
+}
+
+impl HookNotificationService for NoopHookService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Hooks, "hook notification service is not wired")
+    }
+
+    fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {
+        Vec::new()
+    }
+
+    fn push_hook_notifications(&self, _pending: Vec<AppServerHookNotification>) {}
 }
 
 #[cfg(test)]

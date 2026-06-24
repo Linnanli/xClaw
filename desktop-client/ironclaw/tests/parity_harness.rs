@@ -27,7 +27,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use dasclaw_core::agentic_loop::AgenticLoopConfig;
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, ModelCallMode};
+use dasclaw_core::response_types::TokenUsage;
 use dasclaw_runtime::context::JobContext;
 use dasclaw_runtime::tool_dispatch::ToolDispatcher;
 use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome, TextAction};
@@ -118,9 +119,15 @@ impl ParityDelegate {
             job_ctx: self.job_ctx.clone(),
             tool_records: Arc::clone(&self.tool_records),
         });
-        AgenticLoop::new(responder, Some(dispatcher), None, None)
-            .run(ctx, config, hooks)
-            .await
+        AgenticLoop::new(
+            responder,
+            Some(dispatcher),
+            None,
+            ModelCallMode::Invoke,
+            None,
+        )
+        .run(ctx, config, hooks)
+        .await
     }
 }
 
@@ -154,7 +161,11 @@ impl AgentResponder for ParityResponder {
         _usage: dasclaw_core::TokenUsage,
         _reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
+        TextAction::Return(LoopOutcome::Response {
+            text: text.to_string(),
+            usage: TokenUsage::default(),
+            metadata: ResponseMetadata::default(),
+        })
     }
 }
 
@@ -565,7 +576,7 @@ async fn ps_001_text_only_response() {
     .await;
 
     match &result.outcome {
-        LoopOutcome::Response(text) => {
+        LoopOutcome::Response { text, .. } => {
             assert!(text.contains("parity harness"));
         }
         _ => panic!("expected Response variant"),
@@ -602,7 +613,7 @@ async fn ps_002_read_file_roundtrip() {
     assert!(result.tool_records[0].output.contains("alpha parity line"));
 
     match &result.outcome {
-        LoopOutcome::Response(text) => {
+        LoopOutcome::Response { text, .. } => {
             assert!(text.contains("alpha parity line"));
         }
         _ => panic!("expected Response variant"),
@@ -1473,7 +1484,7 @@ async fn ps_029_max_iterations_reached() {
     // Should hit MaxIterations, not Response
     match outcome {
         LoopOutcome::MaxIterations => {}
-        LoopOutcome::Response(_) => {
+        LoopOutcome::Response { .. } => {
             // Some implementations return a response at max_iterations
         }
         _ => panic!("expected MaxIterations or Response"),
@@ -1522,7 +1533,7 @@ async fn ps_030_token_usage_tracked() {
         .expect("loop ok");
 
     match outcome {
-        LoopOutcome::Response(text) => {
+        LoopOutcome::Response { text, .. } => {
             assert!(text.contains("token test") || text.contains("Response for token test"));
         }
         _ => panic!("expected Response"),

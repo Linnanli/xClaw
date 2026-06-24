@@ -24,6 +24,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
+use dasclaw_core::response_types::ResponseMetadata;
+
 use super::codex_auth;
 use crate::provider::error::LlmError;
 
@@ -709,17 +711,20 @@ impl CodexChatGptProvider {
                 }
             }
             "response.completed" => {
-                if let Some(response) = parsed.get("response")
-                    && let Some(usage) = response.get("usage")
-                {
-                    result.input_tokens = usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    result.output_tokens = usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
+                if let Some(response) = parsed.get("response") {
+                    if let Some(usage) = response.get("usage") {
+                        result.input_tokens = usage
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        result.output_tokens = usage
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                    }
+                    if let Some(model) = response.get("model").and_then(|m| m.as_str()) {
+                        result.actual_model = Some(model.to_string());
+                    }
                 }
                 return true;
             }
@@ -791,6 +796,10 @@ impl CodexChatGptProvider {
             input_tokens: result.input_tokens,
             output_tokens: result.output_tokens,
             finish_reason,
+            metadata: ResponseMetadata {
+                actual_model: result.actual_model,
+                ..ResponseMetadata::default()
+            },
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         }
@@ -827,6 +836,7 @@ struct ResponsesResult {
     r5_events: Vec<LlmStreamEvent>,
     input_tokens: u32,
     output_tokens: u32,
+    actual_model: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1029,7 +1039,21 @@ data: {"response":{"usage":{"input_tokens":10,"output_tokens":5}}}
         assert_eq!(result.text, "Hello world!");
         assert_eq!(result.input_tokens, 10);
         assert_eq!(result.output_tokens, 5);
+        assert_eq!(result.actual_model, None);
         assert!(result.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_sse_response_model_when_present() {
+        let sse = r#"event: response.output_text.delta
+data: {"delta":"Hello"}
+
+event: response.completed
+data: {"response":{"model":"gpt-5.5-cyber","usage":{"input_tokens":10,"output_tokens":5}}}
+
+"#;
+        let result = CodexChatGptProvider::parse_sse_response(sse).unwrap();
+        assert_eq!(result.actual_model.as_deref(), Some("gpt-5.5-cyber"));
     }
 
     #[test]

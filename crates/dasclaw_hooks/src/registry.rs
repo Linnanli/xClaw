@@ -1,6 +1,8 @@
 //! Hook registry for managing and executing lifecycle hooks.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
 
@@ -12,6 +14,50 @@ struct HookEntry {
     priority: u32,
 }
 
+pub trait HookRunObserver: Send + Sync {
+    fn hook_started(&self, run: HookObservedRun);
+    fn hook_completed(&self, run: HookObservedRun);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookObservedRun {
+    pub id: String,
+    pub event_name: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub hook_name: String,
+    pub status: HookObservedStatus,
+    pub status_message: Option<String>,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+}
+
+impl HookObservedRun {
+    fn completed(
+        &self,
+        started: Instant,
+        status: HookObservedStatus,
+        status_message: Option<String>,
+    ) -> Self {
+        let mut completed = self.clone();
+        completed.status = status;
+        completed.status_message = status_message;
+        completed.completed_at_ms = Some(now_ms());
+        completed.duration_ms = Some(started.elapsed().as_millis() as u64);
+        completed
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookObservedStatus {
+    Running,
+    Completed,
+    Rejected,
+    Failed,
+    TimedOut,
+}
+
 /// Registry that manages hooks and executes them at lifecycle points.
 ///
 /// Hooks are executed in priority order (lower number = higher priority).
@@ -19,6 +65,16 @@ struct HookEntry {
 /// A `Modify` outcome chains through subsequent hooks.
 pub struct HookRegistry {
     hooks: RwLock<Vec<HookEntry>>,
+    observer: Option<Arc<dyn HookRunObserver>>,
+    next_run_id: AtomicU64,
+}
+
+impl std::fmt::Debug for HookRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookRegistry")
+            .field("observer_wired", &self.observer.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl HookRegistry {
@@ -26,7 +82,15 @@ impl HookRegistry {
     pub fn new() -> Self {
         Self {
             hooks: RwLock::new(Vec::new()),
+            observer: None,
+            next_run_id: AtomicU64::new(1),
         }
+    }
+
+    #[must_use]
+    pub fn with_observer(mut self, observer: Arc<dyn HookRunObserver>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Register a hook with default priority (100).
@@ -113,6 +177,23 @@ impl HookRegistry {
 
         for hook in &matching {
             let timeout = hook.timeout();
+            let started_at_ms = now_ms();
+            let started = Instant::now();
+            let run = HookObservedRun {
+                id: format!(
+                    "hook-run-{}",
+                    self.next_run_id.fetch_add(1, Ordering::Relaxed)
+                ),
+                event_name: point.as_str().to_string(),
+                thread_id: observed_thread_id(&current_event),
+                turn_id: observed_turn_id(&current_event),
+                hook_name: hook.name().to_string(),
+                status: HookObservedStatus::Running,
+                status_message: None,
+                started_at_ms,
+                completed_at_ms: None,
+                duration_ms: None,
+            };
 
             tracing::debug!(
                 hook_name = %hook.name(),
@@ -120,12 +201,19 @@ impl HookRegistry {
                 event_type = %event_kind,
                 "hook executing"
             );
+            self.notify_started(&run);
 
             let result = tokio::time::timeout(timeout, hook.execute(&current_event, &ctx)).await;
 
             match result {
                 Ok(Ok(HookOutcome::Reject { reason })) => {
                     tracing::debug!(hook = hook.name(), "Hook rejected: {}", reason);
+                    self.notify_completed(
+                        &run,
+                        started,
+                        HookObservedStatus::Rejected,
+                        Some(reason.clone()),
+                    );
                     return Err(HookError::Rejected { reason });
                 }
                 Ok(Ok(HookOutcome::Continue {
@@ -133,16 +221,30 @@ impl HookRegistry {
                 })) => {
                     tracing::debug!(hook = hook.name(), "Hook modified content");
                     current_event.apply_modification(&value);
+                    self.notify_completed(&run, started, HookObservedStatus::Completed, None);
                 }
                 Ok(Ok(HookOutcome::Continue { modified: None })) => {
                     // No-op, continue chain
+                    self.notify_completed(&run, started, HookObservedStatus::Completed, None);
                 }
                 Ok(Err(err)) => match hook.failure_mode() {
                     HookFailureMode::FailOpen => {
                         tracing::warn!(hook = hook.name(), "Hook failed (fail-open): {}", err);
+                        self.notify_completed(
+                            &run,
+                            started,
+                            HookObservedStatus::Failed,
+                            Some(err.to_string()),
+                        );
                     }
                     HookFailureMode::FailClosed => {
                         tracing::warn!(hook = hook.name(), "Hook failed (fail-closed): {}", err);
+                        self.notify_completed(
+                            &run,
+                            started,
+                            HookObservedStatus::Failed,
+                            Some(err.to_string()),
+                        );
                         return Err(HookError::ExecutionFailed {
                             reason: format!("Hook '{}' failed: {}", hook.name(), err),
                         });
@@ -155,12 +257,24 @@ impl HookRegistry {
                             "Hook timed out (fail-open) after {:?}",
                             timeout
                         );
+                        self.notify_completed(
+                            &run,
+                            started,
+                            HookObservedStatus::TimedOut,
+                            Some(format!("timed out after {timeout:?}")),
+                        );
                     }
                     HookFailureMode::FailClosed => {
                         tracing::warn!(
                             hook = hook.name(),
                             "Hook timed out (fail-closed) after {:?}",
                             timeout
+                        );
+                        self.notify_completed(
+                            &run,
+                            started,
+                            HookObservedStatus::TimedOut,
+                            Some(format!("timed out after {timeout:?}")),
                         );
                         return Err(HookError::Timeout { timeout });
                     }
@@ -176,6 +290,24 @@ impl HookRegistry {
             Ok(HookOutcome::modify(modified))
         } else {
             Ok(HookOutcome::ok())
+        }
+    }
+
+    fn notify_started(&self, run: &HookObservedRun) {
+        if let Some(observer) = &self.observer {
+            observer.hook_started(run.clone());
+        }
+    }
+
+    fn notify_completed(
+        &self,
+        run: &HookObservedRun,
+        started: Instant,
+        status: HookObservedStatus,
+        status_message: Option<String>,
+    ) {
+        if let Some(observer) = &self.observer {
+            observer.hook_completed(run.completed(started, status, status_message));
         }
     }
 }
@@ -200,11 +332,39 @@ fn extract_content(event: &HookEvent) -> String {
     }
 }
 
+fn observed_thread_id(event: &HookEvent) -> Option<String> {
+    match event {
+        HookEvent::Inbound { thread_id, .. } | HookEvent::Outbound { thread_id, .. } => {
+            thread_id.clone()
+        }
+        HookEvent::ResponseTransform { thread_id, .. } => Some(thread_id.clone()),
+        HookEvent::ToolCall { thread_id, .. } => thread_id.clone(),
+        HookEvent::SessionStart { session_id, .. } | HookEvent::SessionEnd { session_id, .. } => {
+            Some(session_id.clone())
+        }
+    }
+}
+
+fn observed_turn_id(event: &HookEvent) -> Option<String> {
+    match event {
+        HookEvent::ToolCall { turn_id, .. } => turn_id.clone(),
+        _ => None,
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hook::{HookFailureMode, HookPoint};
     use async_trait::async_trait;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     /// A test hook that always returns ok.
@@ -339,6 +499,44 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingHookObserver {
+        started: Mutex<Vec<HookObservedRun>>,
+        completed: Mutex<Vec<HookObservedRun>>,
+    }
+
+    impl RecordingHookObserver {
+        fn started(&self) -> Vec<HookObservedRun> {
+            self.started
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone()
+        }
+
+        fn completed(&self) -> Vec<HookObservedRun> {
+            self.completed
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone()
+        }
+    }
+
+    impl HookRunObserver for RecordingHookObserver {
+        fn hook_started(&self, run: HookObservedRun) {
+            self.started
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(run);
+        }
+
+        fn hook_completed(&self, run: HookObservedRun) {
+            self.completed
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(run);
+        }
+    }
+
     fn test_event() -> HookEvent {
         HookEvent::Inbound {
             user_id: "user-1".into(),
@@ -346,6 +544,55 @@ mod tests {
             content: "hello".into(),
             thread_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn registry_observer_receives_started_and_completed_for_real_run() {
+        let observer = Arc::new(RecordingHookObserver::default());
+        let registry = HookRegistry::new().with_observer(observer.clone());
+        registry
+            .register(Arc::new(PassthroughHook {
+                name: "lint".into(),
+                points: vec![HookPoint::BeforeInbound],
+            }))
+            .await;
+
+        let outcome = registry.run(&test_event()).await.expect("hook run");
+
+        assert!(matches!(outcome, HookOutcome::Continue { modified: None }));
+        let started = observer.started();
+        let completed = observer.completed();
+        assert_eq!(started.len(), 1);
+        assert_eq!(completed.len(), 1);
+        assert_eq!(started[0].id, "hook-run-1");
+        assert_eq!(completed[0].id, "hook-run-1");
+        assert_eq!(started[0].status, HookObservedStatus::Running);
+        assert_eq!(completed[0].status, HookObservedStatus::Completed);
+        assert_eq!(completed[0].hook_name, "lint");
+        assert_eq!(completed[0].event_name, "beforeInbound");
+        assert!(completed[0].completed_at_ms.is_some());
+        assert!(completed[0].duration_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn registry_observer_marks_reject_as_completed_rejected() {
+        let observer = Arc::new(RecordingHookObserver::default());
+        let registry = HookRegistry::new().with_observer(observer.clone());
+        registry
+            .register(Arc::new(RejectHook {
+                name: "blocker".into(),
+                reason: "blocked".into(),
+                points: vec![HookPoint::BeforeInbound],
+            }))
+            .await;
+
+        let outcome = registry.run(&test_event()).await;
+
+        assert!(matches!(outcome, Err(HookError::Rejected { .. })));
+        let completed = observer.completed();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].status, HookObservedStatus::Rejected);
+        assert_eq!(completed[0].status_message.as_deref(), Some("blocked"));
     }
 
     #[tokio::test]

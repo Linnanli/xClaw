@@ -479,6 +479,7 @@ Respond in JSON format:
                     let pre_truncated = truncate_at_tool_tags(&c);
                     clean_response(&pre_truncated)
                 });
+                let metadata = response.metadata;
                 // Populate per-tool reasoning from the shared narrative when the
                 // provider did not supply per-tool rationale.
                 let tool_calls: Vec<ToolCall> = response
@@ -508,11 +509,12 @@ Respond in JSON format:
                     },
                     usage,
                     finish_reason: response.finish_reason,
-                    metadata: ResponseMetadata::default(),
+                    metadata,
                 });
             }
 
             let content = response.content.unwrap_or_default();
+            let mut metadata = response.metadata;
 
             // Some models (e.g. GLM-4.7) emit tool calls as XML tags in content
             // instead of using the structured tool_calls field. Try to recover
@@ -535,7 +537,7 @@ Respond in JSON format:
                     },
                     usage,
                     finish_reason: response.finish_reason,
-                    metadata: ResponseMetadata::default(),
+                    metadata,
                 });
             }
 
@@ -549,17 +551,13 @@ Respond in JSON format:
             // Pre-truncate at tool tags to preserve text before the tag.
             let pre_truncated = truncate_at_tool_tags(&content);
             let cleaned = clean_response(&pre_truncated);
-            let metadata = if cleaned.trim().is_empty() {
+            if cleaned.trim().is_empty() {
                 tracing::warn!(
                     "LLM response was empty after cleaning (original len={}), using fallback",
                     content.len()
                 );
-                ResponseMetadata {
-                    anomaly: Some(ResponseAnomaly::EmptyToolCompletion),
-                }
-            } else {
-                ResponseMetadata::default()
-            };
+                metadata.anomaly = Some(ResponseAnomaly::EmptyToolCompletion);
+            }
             let final_text = if metadata.anomaly.is_some() {
                 "I'm not sure how to respond to that.".to_string()
             } else {
@@ -591,6 +589,7 @@ Respond in JSON format:
                 );
                 ResponseMetadata {
                     anomaly: Some(ResponseAnomaly::EmptyTextResponse),
+                    ..ResponseMetadata::default()
                 }
             } else {
                 ResponseMetadata::default()
@@ -690,6 +689,7 @@ Respond in JSON format:
                     let pre_truncated = truncate_at_tool_tags(&c);
                     clean_response(&pre_truncated)
                 });
+                let metadata = response.metadata;
                 let tool_calls: Vec<ToolCall> = response
                     .tool_calls
                     .into_iter()
@@ -715,26 +715,23 @@ Respond in JSON format:
                     },
                     usage,
                     finish_reason: response.finish_reason,
-                    metadata: ResponseMetadata::default(),
+                    metadata,
                 });
             }
 
             // Pure text — chunks were already streamed via chunk_tx.
             // Still clean the complete text for the final RespondOutput.
             let content = response.content.unwrap_or_default();
+            let mut metadata = response.metadata;
             let pre_truncated = truncate_at_tool_tags(&content);
             let cleaned = clean_response(&pre_truncated);
-            let metadata = if cleaned.trim().is_empty() {
+            if cleaned.trim().is_empty() {
                 tracing::warn!(
                     "Streaming LLM response was empty after cleaning (original len={}), using fallback",
                     content.len()
                 );
-                ResponseMetadata {
-                    anomaly: Some(ResponseAnomaly::EmptyToolCompletion),
-                }
-            } else {
-                ResponseMetadata::default()
-            };
+                metadata.anomaly = Some(ResponseAnomaly::EmptyToolCompletion);
+            }
             let final_text = if metadata.anomaly.is_some() {
                 "I'm not sure how to respond to that.".to_string()
             } else {
@@ -3172,6 +3169,7 @@ That's my plan."#;
                     input_tokens: 0,
                     output_tokens: 0,
                     finish_reason: FinishReason::Stop,
+                    metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 })
@@ -3523,6 +3521,7 @@ That's my plan."#;
                 input_tokens: 5000,
                 output_tokens: 1024,
                 finish_reason: self.finish_reason,
+                metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             })
@@ -3625,6 +3624,7 @@ That's my plan."#;
                             input_tokens: 1,
                             output_tokens: 2,
                             finish_reason: FinishReason::Stop,
+                            metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                             cache_read_input_tokens: 0,
                             cache_creation_input_tokens: 0,
                         })))
@@ -3742,6 +3742,7 @@ That's my plan."#;
                             input_tokens: 10,
                             output_tokens: 5,
                             finish_reason: FinishReason::ToolUse,
+                            metadata: dasclaw_core::response_types::ResponseMetadata::default(),
                             cache_read_input_tokens: 0,
                             cache_creation_input_tokens: 0,
                         })))
@@ -3831,6 +3832,7 @@ That's my plan."#;
                             input_tokens: 1,
                             output_tokens: 1,
                             finish_reason: FinishReason::Stop,
+                            metadata: ResponseMetadata::default(),
                             cache_read_input_tokens: 0,
                             cache_creation_input_tokens: 0,
                         })))

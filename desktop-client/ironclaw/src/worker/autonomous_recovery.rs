@@ -88,6 +88,7 @@ mod tests {
     fn metadata(anomaly: ResponseAnomaly) -> ResponseMetadata {
         ResponseMetadata {
             anomaly: Some(anomaly),
+            ..ResponseMetadata::default()
         }
     }
 

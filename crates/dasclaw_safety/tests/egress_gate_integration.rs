@@ -30,7 +30,7 @@ use dasclaw_core::messages::FinishReason;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::{ChatMessage, HookBundle, HostError};
-use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome};
+use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome, ModelCallMode};
 use dasclaw_safety::egress_gate::IronclawEgressGate;
 use dasclaw_safety::{SafetyConfig, SafetyLayer};
 use tokio::sync::Mutex;
@@ -89,7 +89,7 @@ async fn run_with(
     bundle: &HookBundle,
 ) -> Result<LoopOutcome, HostError> {
     let config = AgenticLoopConfig::default();
-    AgenticLoop::new(responder, None, None, None)
+    AgenticLoop::new(responder, None, None, ModelCallMode::Invoke, None)
         .run(ctx, &config, bundle)
         .await
 }
@@ -113,7 +113,7 @@ async fn run_agentic_loop_with_egress_gate_scrubs_secret_from_completion() {
         .expect("loop should not bubble HostError");
 
     match outcome {
-        LoopOutcome::Response(text) => {
+        LoopOutcome::Response { text, .. } => {
             assert!(
                 !text.contains(&raw_secret),
                 "raw secret leaked through the egress chain: {text}"
@@ -174,7 +174,7 @@ async fn run_agentic_loop_with_egress_gate_transparent_on_clean_input() {
         .expect("loop should succeed");
 
     match outcome {
-        LoopOutcome::Response(text) => assert_eq!(text, "all good"),
+        LoopOutcome::Response { text, .. } => assert_eq!(text, "all good"),
         other => panic!("expected Response, got {other:?}"),
     }
 }

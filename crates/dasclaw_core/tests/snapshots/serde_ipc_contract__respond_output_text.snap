@@ -1,5 +1,6 @@
 ---
 source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+assertion_line: 283
 expression: sample
 ---
 {
@@ -15,6 +16,8 @@ expression: sample
   },
   "finish_reason": "stop",
   "metadata": {
-    "anomaly": null
+    "anomaly": null,
+    "actualModel": null,
+    "modelVerifications": []
   }
 }

@@ -51,10 +51,17 @@ pub mod method {
     pub const SKILLS_CONFIG_WRITE: &str = "skills/config/write";
     pub const MCP_SERVER_OAUTH_LOGIN: &str = "mcpServer/oauth/login";
     pub const CONFIG_REQUIREMENTS_READ: &str = "configRequirements/read";
+    pub const CONFIG_READ: &str = "config/read";
+    pub const CONFIG_VALUE_WRITE: &str = "config/value/write";
+    pub const CONFIG_BATCH_WRITE: &str = "config/batchWrite";
     pub const CONFIG_MCP_SERVER_RELOAD: &str = "config/mcpServer/reload";
     pub const MCP_SERVER_STATUS_LIST: &str = "mcpServerStatus/list";
     pub const MCP_SERVER_RESOURCE_READ: &str = "mcpServer/resource/read";
     pub const MCP_SERVER_TOOL_CALL: &str = "mcpServer/tool/call";
+    pub const GIT_DIFF_TO_REMOTE: &str = "gitDiffToRemote";
+    pub const FUZZY_FILE_SEARCH: &str = "fuzzyFileSearch";
+    pub const GET_CONVERSATION_SUMMARY: &str = "getConversationSummary";
+    pub const REVIEW_START: &str = "review/start";
     pub const FS_READ_FILE: &str = "fs/readFile";
     pub const FS_WRITE_FILE: &str = "fs/writeFile";
     pub const FS_CREATE_DIRECTORY: &str = "fs/createDirectory";
@@ -122,6 +129,16 @@ pub mod event {
     pub const ITEM_MCP_TOOL_CALL_PROGRESS: &str = "item/mcpToolCall/progress";
     pub const MCP_SERVER_OAUTH_LOGIN_COMPLETED: &str = "mcpServer/oauthLogin/completed";
     pub const MCP_SERVER_STARTUP_STATUS_UPDATED: &str = "mcpServer/startupStatus/updated";
+    pub const FUZZY_FILE_SEARCH_SESSION_UPDATED: &str = "fuzzyFileSearch/sessionUpdated";
+    pub const FUZZY_FILE_SEARCH_SESSION_COMPLETED: &str = "fuzzyFileSearch/sessionCompleted";
+    pub const MODEL_REROUTED: &str = "model/rerouted";
+    pub const MODEL_VERIFICATION: &str = "model/verification";
+    pub const HOOK_STARTED: &str = "hook/started";
+    pub const HOOK_COMPLETED: &str = "hook/completed";
+    pub const WARNING: &str = "warning";
+    pub const GUARDIAN_WARNING: &str = "guardianWarning";
+    pub const CONFIG_WARNING: &str = "configWarning";
+    pub const DEPRECATION_NOTICE: &str = "deprecationNotice";
     pub const FS_CHANGED: &str = "fs/changed";
     pub const COMMAND_EXEC_OUTPUT_DELTA: &str = "command/exec/outputDelta";
     pub const ERROR: &str = "error";
@@ -671,6 +688,12 @@ pub struct CapabilityMatrix {
     pub thread_lifecycle: Capability,
     pub thread_goal: Capability,
     pub thread_compact: Capability,
+    pub config: Capability,
+    pub repo: Capability,
+    pub search: Capability,
+    pub review: Capability,
+    pub hooks: Capability,
+    pub warnings: Capability,
 }
 
 impl CapabilityMatrix {
@@ -738,6 +761,12 @@ impl CapabilityMatrix {
             sandbox: declared_future_capability("sandbox"),
             filesystem: declared_future_capability("filesystem"),
             command_exec: declared_future_capability("command_exec"),
+            config: declared_future_capability("config"),
+            repo: declared_future_capability("repo"),
+            search: declared_future_capability("search"),
+            review: declared_future_capability("review"),
+            hooks: declared_future_capability("hooks"),
+            warnings: declared_future_capability("warnings"),
             thread_lifecycle: Capability::implemented(
                 "thread_lifecycle",
                 &[
@@ -888,6 +917,59 @@ impl CapabilityMatrix {
         if !mcp_methods.is_empty() || !mcp_events.is_empty() {
             self.mcp = Capability::implemented("mcp", &mcp_methods, &mcp_events);
         }
+        if availability.r6.config {
+            self.config = Capability::implemented(
+                "config",
+                &[
+                    method::CONFIG_READ,
+                    method::CONFIG_VALUE_WRITE,
+                    method::CONFIG_BATCH_WRITE,
+                ],
+                &[],
+            );
+        }
+        if availability.r6.repo {
+            self.repo = Capability::implemented("repo", &[method::GIT_DIFF_TO_REMOTE], &[]);
+        }
+        if availability.r6.search {
+            self.search = Capability::implemented(
+                "search",
+                &[method::FUZZY_FILE_SEARCH],
+                &[
+                    event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+                    event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+                ],
+            );
+        }
+        if availability.r6.review {
+            self.review = Capability::implemented(
+                "review",
+                &[method::GET_CONVERSATION_SUMMARY, method::REVIEW_START],
+                &[],
+            );
+        }
+        let model_provider_event_names = model_provider_events(availability.r6);
+        if !model_provider_event_names.is_empty() {
+            self.model_provider = Capability::implemented(
+                "model_provider",
+                &[
+                    method::MODEL_LIST,
+                    method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+                ],
+                &model_provider_event_names,
+            );
+        }
+        if availability.r6.hooks {
+            self.hooks = Capability::implemented(
+                "hooks",
+                &[],
+                &[event::HOOK_STARTED, event::HOOK_COMPLETED],
+            );
+        }
+        let warning_event_names = warning_events(availability.r6);
+        if !warning_event_names.is_empty() {
+            self.warnings = Capability::implemented("warnings", &[], &warning_event_names);
+        }
         self.with_p5_filesystem_command(availability.p5)
     }
 
@@ -928,6 +1010,34 @@ fn declared_future_capability(id: &'static str) -> Capability {
     )
 }
 
+fn model_provider_events(availability: AppServerR6Availability) -> Vec<&'static str> {
+    let mut events = Vec::new();
+    if availability.model_events || availability.model_reroutes {
+        events.push(event::MODEL_REROUTED);
+    }
+    if availability.model_events || availability.model_verifications {
+        events.push(event::MODEL_VERIFICATION);
+    }
+    events
+}
+
+fn warning_events(availability: AppServerR6Availability) -> Vec<&'static str> {
+    let mut events = Vec::new();
+    if availability.warnings {
+        events.push(event::WARNING);
+    }
+    if availability.guardian_warnings {
+        events.push(event::GUARDIAN_WARNING);
+    }
+    if availability.config_warnings {
+        events.push(event::CONFIG_WARNING);
+    }
+    if availability.deprecation_notices {
+        events.push(event::DEPRECATION_NOTICE);
+    }
+    events
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AppServerServiceAvailability {
     pub logs: bool,
@@ -935,12 +1045,29 @@ pub struct AppServerServiceAvailability {
     pub skills: bool,
     pub mcp: McpServiceAvailability,
     pub p5: AppServerP5Availability,
+    pub r6: AppServerR6Availability,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AppServerP5Availability {
     pub filesystem: bool,
     pub command: CommandExecAvailability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppServerR6Availability {
+    pub config: bool,
+    pub repo: bool,
+    pub search: bool,
+    pub review: bool,
+    pub model_events: bool,
+    pub model_reroutes: bool,
+    pub model_verifications: bool,
+    pub hooks: bool,
+    pub warnings: bool,
+    pub config_warnings: bool,
+    pub deprecation_notices: bool,
+    pub guardian_warnings: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1059,6 +1186,11 @@ pub struct ProtocolSchemaResponse {
 }
 
 impl ProtocolSchemaResponse {
+    #[must_use]
+    pub fn current() -> Self {
+        Self::phase_one(CapabilityMatrix::phase_one())
+    }
+
     #[must_use]
     pub fn phase_one(capabilities: CapabilityMatrix) -> Self {
         Self {
@@ -1304,6 +1436,55 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "sandbox",
             None,
             "ConfigRequirementsReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_READ,
+            "config",
+            Some("ConfigReadParams"),
+            "ConfigReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_VALUE_WRITE,
+            "config",
+            Some("ConfigValueWriteParams"),
+            "ConfigWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_BATCH_WRITE,
+            "config",
+            Some("ConfigBatchWriteParams"),
+            "ConfigWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::GIT_DIFF_TO_REMOTE,
+            "repo",
+            Some("GitDiffToRemoteParams"),
+            "GitDiffToRemoteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FUZZY_FILE_SEARCH,
+            "search",
+            Some("FuzzyFileSearchParams"),
+            "FuzzyFileSearchResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::GET_CONVERSATION_SUMMARY,
+            "review",
+            Some("GetConversationSummaryParams"),
+            "GetConversationSummaryResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::REVIEW_START,
+            "review",
+            Some("ReviewStartParams"),
+            "ReviewStartResponse",
             true,
         ),
         MethodSchema::new(
@@ -1829,6 +2010,44 @@ fn phase_one_events() -> Vec<EventSchema> {
             "mcp",
             "McpServerStatusUpdatedNotification",
         ),
+        EventSchema::new(
+            event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+            "search",
+            "FuzzyFileSearchSessionUpdatedNotification",
+        ),
+        EventSchema::new(
+            event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+            "search",
+            "FuzzyFileSearchSessionCompletedNotification",
+        ),
+        EventSchema::new(
+            event::MODEL_REROUTED,
+            "model_provider",
+            "ModelReroutedNotification",
+        ),
+        EventSchema::new(
+            event::MODEL_VERIFICATION,
+            "model_provider",
+            "ModelVerificationNotification",
+        ),
+        EventSchema::new(event::HOOK_STARTED, "hooks", "HookStartedNotification"),
+        EventSchema::new(event::HOOK_COMPLETED, "hooks", "HookCompletedNotification"),
+        EventSchema::new(event::WARNING, "warnings", "WarningNotification"),
+        EventSchema::new(
+            event::GUARDIAN_WARNING,
+            "warnings",
+            "GuardianWarningNotification",
+        ),
+        EventSchema::new(
+            event::CONFIG_WARNING,
+            "warnings",
+            "ConfigWarningNotification",
+        ),
+        EventSchema::new(
+            event::DEPRECATION_NOTICE,
+            "warnings",
+            "DeprecationNoticeNotification",
+        ),
         EventSchema::new(event::FS_CHANGED, "filesystem", "FsChangedNotification"),
         EventSchema::new(
             event::COMMAND_EXEC_OUTPUT_DELTA,
@@ -1856,6 +2075,10 @@ pub enum ServiceName {
     Logs,
     Filesystem,
     CommandExec,
+    Config,
+    Repo,
+    Search,
+    Hooks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1946,6 +2169,396 @@ pub struct CapabilitiesListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRequirementsReadResponse {
     pub allowed_sandbox_modes: Vec<SandboxMode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadParams {
+    pub include_layers: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadResponse {
+    pub config: serde_json::Value,
+    pub origins: std::collections::BTreeMap<String, ConfigLayerMetadata>,
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayerMetadata {
+    pub name: ConfigLayerSource,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayer {
+    pub name: ConfigLayerSource,
+    pub version: String,
+    pub config: serde_json::Value,
+    pub disabled_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConfigLayerSource {
+    System { file: String },
+    User { file: String },
+    Project { dot_dasclaw_folder: String },
+    SessionFlags,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigValueWriteParams {
+    pub key_path: String,
+    pub value: serde_json::Value,
+    pub merge_strategy: MergeStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeStrategy {
+    Replace,
+    Upsert,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBatchWriteParams {
+    pub edits: Vec<ConfigEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reload_user_config: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEdit {
+    pub key_path: String,
+    pub value: serde_json::Value,
+    pub merge_strategy: MergeStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWriteResponse {
+    pub config: serde_json::Value,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteResponse {
+    pub sha: String,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<String>,
+    pub cancellation_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchResult {
+    pub root: String,
+    pub path: String,
+    pub match_type: FuzzyFileSearchMatchType,
+    pub file_name: String,
+    pub score: f64,
+    pub indices: Option<Vec<usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FuzzyFileSearchMatchType {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdatedNotification {
+    pub session_id: String,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionCompletedNotification {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub enum GetConversationSummaryParams {
+    RolloutPath { rollout_path: String },
+    ConversationId { conversation_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConversationSummaryResponse {
+    pub summary: ConversationSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub path: String,
+    pub preview: String,
+    pub timestamp: Option<String>,
+    pub updated_at: Option<String>,
+    pub model_provider: String,
+    pub cwd: String,
+    pub cli_version: String,
+    pub source: CodexSessionSource,
+    pub git_info: Option<CodexGitInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartParams {
+    pub thread_id: String,
+    pub target: ReviewTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartResponse {
+    pub turn: CodexTurn,
+    pub review_thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelReroutedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub from_model: String,
+    pub to_model: String,
+    pub reason: ModelRerouteReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelRerouteReason {
+    HighRiskCyberActivity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelVerificationNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub verifications: Vec<ModelVerification>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelVerification {
+    TrustedAccessForCyber,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookStartedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub run: HookRunSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub run: HookRunSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookRunSummary {
+    pub id: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub execution_mode: HookExecutionMode,
+    pub scope: HookScope,
+    pub source_path: String,
+    pub source: HookSource,
+    pub display_order: u64,
+    pub status: HookRunStatus,
+    pub status_message: Option<String>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub entries: Vec<HookOutputEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookEventName {
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
+    SessionStart,
+    UserPromptSubmit,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookExecutionMode {
+    Sync,
+    Async,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookHandlerType {
+    Command,
+    Prompt,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookScope {
+    Thread,
+    Turn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookSource {
+    System,
+    User,
+    Project,
+    Mdm,
+    SessionFlags,
+    LegacyManagedConfigFile,
+    LegacyManagedConfigMdm,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookRunStatus {
+    Running,
+    Completed,
+    Failed,
+    Blocked,
+    Stopped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookOutputEntry {
+    pub kind: HookOutputEntryKind,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookOutputEntryKind {
+    Warning,
+    Stop,
+    Feedback,
+    Context,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarningNotification {
+    pub thread_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardianWarningNotification {
+    pub thread_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWarningNotification {
+    pub summary: String,
+    pub details: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextRange {
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeprecationNoticeNotification {
+    pub summary: String,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2404,6 +3017,10 @@ pub enum CodexThreadItem {
         #[serde(default)]
         content: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl CodexThreadItem {
@@ -3493,6 +4110,54 @@ impl ServerNotification {
         Self::new(event::COMMAND_EXEC_OUTPUT_DELTA, event)
     }
 
+    pub fn fuzzy_file_search_session_updated(
+        event: FuzzyFileSearchSessionUpdatedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::FUZZY_FILE_SEARCH_SESSION_UPDATED, event)
+    }
+
+    pub fn fuzzy_file_search_session_completed(
+        event: FuzzyFileSearchSessionCompletedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::FUZZY_FILE_SEARCH_SESSION_COMPLETED, event)
+    }
+
+    pub fn model_rerouted(event: ModelReroutedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::MODEL_REROUTED, event)
+    }
+
+    pub fn model_verification(
+        event: ModelVerificationNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::MODEL_VERIFICATION, event)
+    }
+
+    pub fn hook_started(event: HookStartedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::HOOK_STARTED, event)
+    }
+
+    pub fn hook_completed(event: HookCompletedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::HOOK_COMPLETED, event)
+    }
+
+    pub fn warning(event: WarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::WARNING, event)
+    }
+
+    pub fn guardian_warning(event: GuardianWarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::GUARDIAN_WARNING, event)
+    }
+
+    pub fn config_warning(event: ConfigWarningNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::CONFIG_WARNING, event)
+    }
+
+    pub fn deprecation_notice(
+        event: DeprecationNoticeNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::DEPRECATION_NOTICE, event)
+    }
+
     pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ERROR, event)
     }
@@ -3998,6 +4663,345 @@ mod tests {
 
     fn protocol_schema() -> ProtocolSchemaResponse {
         ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one())
+    }
+
+    #[test]
+    fn r6_protocol_schema_lists_config_repo_search_review_and_warning_contracts() {
+        let schema = ProtocolSchemaResponse::current();
+        let methods: std::collections::BTreeSet<_> = schema
+            .methods
+            .iter()
+            .map(|entry| entry.method.as_str())
+            .collect();
+        for method in [
+            method::CONFIG_READ,
+            method::CONFIG_VALUE_WRITE,
+            method::CONFIG_BATCH_WRITE,
+            method::GIT_DIFF_TO_REMOTE,
+            method::FUZZY_FILE_SEARCH,
+            method::GET_CONVERSATION_SUMMARY,
+            method::REVIEW_START,
+        ] {
+            assert!(methods.contains(method), "missing R6 method {method}");
+        }
+
+        let events: std::collections::BTreeSet<_> = schema
+            .events
+            .iter()
+            .map(|entry| entry.event.as_str())
+            .collect();
+        for event in [
+            event::FUZZY_FILE_SEARCH_SESSION_UPDATED,
+            event::FUZZY_FILE_SEARCH_SESSION_COMPLETED,
+            event::MODEL_REROUTED,
+            event::MODEL_VERIFICATION,
+            event::HOOK_STARTED,
+            event::HOOK_COMPLETED,
+            event::WARNING,
+            event::GUARDIAN_WARNING,
+            event::CONFIG_WARNING,
+            event::DEPRECATION_NOTICE,
+        ] {
+            assert!(events.contains(event), "missing R6 event {event}");
+        }
+    }
+
+    #[test]
+    fn r6_core_dtos_serialize_with_codex_wire_shapes() {
+        let config_response = ConfigReadResponse {
+            config: serde_json::json!({"model": "gpt-5.5"}),
+            origins: std::collections::BTreeMap::from([(
+                "model".to_string(),
+                ConfigLayerMetadata {
+                    name: ConfigLayerSource::User {
+                        file: "/home/user/.dasclaw/config.json".to_string(),
+                    },
+                    version: "v1".to_string(),
+                },
+            )]),
+            layers: Some(vec![ConfigLayer {
+                name: ConfigLayerSource::Project {
+                    dot_dasclaw_folder: "/repo/.dasclaw".to_string(),
+                },
+                version: "v2".to_string(),
+                config: serde_json::json!({"sandbox": "workspace-write"}),
+                disabled_reason: None,
+            }]),
+        };
+        assert_eq!(
+            serde_json::to_value(config_response).expect("config response should serialize"),
+            serde_json::json!({
+                "config": {"model": "gpt-5.5"},
+                "origins": {
+                    "model": {
+                        "name": {"type": "user", "file": "/home/user/.dasclaw/config.json"},
+                        "version": "v1"
+                    }
+                },
+                "layers": [{
+                    "name": {
+                        "type": "project",
+                        "dotDasclawFolder": "/repo/.dasclaw"
+                    },
+                    "version": "v2",
+                    "config": {"sandbox": "workspace-write"},
+                    "disabledReason": null
+                }]
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(GitDiffToRemoteParams {
+                cwd: "/repo".to_string(),
+            })
+            .expect("git diff params should serialize"),
+            serde_json::json!({"cwd": "/repo"})
+        );
+        assert_eq!(
+            serde_json::to_value(GitDiffToRemoteResponse {
+                sha: "abc123".to_string(),
+                diff: "diff --git a/file b/file".to_string(),
+            })
+            .expect("git diff response should serialize"),
+            serde_json::json!({"sha": "abc123", "diff": "diff --git a/file b/file"})
+        );
+
+        let search_response = FuzzyFileSearchResponse {
+            files: vec![FuzzyFileSearchResult {
+                root: "/repo".to_string(),
+                path: "src/lib.rs".to_string(),
+                match_type: FuzzyFileSearchMatchType::File,
+                file_name: "lib.rs".to_string(),
+                score: 0.92,
+                indices: Some(vec![0, 4]),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(FuzzyFileSearchParams {
+                query: "lib".to_string(),
+                roots: vec!["/repo".to_string()],
+                cancellation_token: Some("cancel-1".to_string()),
+            })
+            .expect("search params should serialize"),
+            serde_json::json!({
+                "query": "lib",
+                "roots": ["/repo"],
+                "cancellationToken": "cancel-1"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(search_response).expect("search response should serialize"),
+            serde_json::json!({
+                "files": [{
+                    "root": "/repo",
+                    "path": "src/lib.rs",
+                    "matchType": "file",
+                    "fileName": "lib.rs",
+                    "score": 0.92,
+                    "indices": [0, 4]
+                }]
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(GetConversationSummaryParams::RolloutPath {
+                rollout_path: "/tmp/rollout.jsonl".to_string(),
+            })
+            .expect("summary params should serialize"),
+            serde_json::json!({"rolloutPath": "/tmp/rollout.jsonl"})
+        );
+        assert_eq!(
+            serde_json::to_value(GetConversationSummaryParams::ConversationId {
+                conversation_id: "conv-1".to_string(),
+            })
+            .expect("summary params should serialize"),
+            serde_json::json!({"conversationId": "conv-1"})
+        );
+
+        let review_turn = CodexTurn::in_progress("turn-review");
+        assert_eq!(
+            serde_json::to_value(ReviewStartParams {
+                thread_id: "thread-1".to_string(),
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect("review params should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "target": {"type": "baseBranch", "branch": "main"},
+                "delivery": "inline"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewStartResponse {
+                turn: review_turn,
+                review_thread_id: "review-thread-1".to_string(),
+            })
+            .expect("review response should serialize"),
+            serde_json::json!({
+                "turn": {
+                    "id": "turn-review",
+                    "items": [],
+                    "status": "inProgress",
+                    "error": null,
+                    "startedAt": null,
+                    "completedAt": null,
+                    "durationMs": null
+                },
+                "reviewThreadId": "review-thread-1"
+            })
+        );
+    }
+
+    #[test]
+    fn codex_thread_item_review_mode_items_roundtrip() {
+        let entered = CodexThreadItem::EnteredReviewMode {
+            id: "item-enter".to_string(),
+            review: "review local changes".to_string(),
+        };
+        let exited = CodexThreadItem::ExitedReviewMode {
+            id: "item-exit".to_string(),
+            review: "review complete".to_string(),
+        };
+
+        let entered_json = serde_json::to_value(&entered).expect("entered item serializes");
+        let exited_json = serde_json::to_value(&exited).expect("exited item serializes");
+
+        assert_eq!(
+            entered_json,
+            serde_json::json!({
+                "type": "enteredReviewMode",
+                "id": "item-enter",
+                "review": "review local changes"
+            })
+        );
+        assert_eq!(
+            exited_json,
+            serde_json::json!({
+                "type": "exitedReviewMode",
+                "id": "item-exit",
+                "review": "review complete"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<CodexThreadItem>(entered_json).expect("entered roundtrip"),
+            entered
+        );
+        assert_eq!(
+            serde_json::from_value::<CodexThreadItem>(exited_json).expect("exited roundtrip"),
+            exited
+        );
+    }
+
+    #[test]
+    fn r6_model_hook_and_warning_dtos_serialize_with_codex_wire_shapes() {
+        assert_eq!(
+            serde_json::to_value(ModelVerificationNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                verifications: vec![ModelVerification::TrustedAccessForCyber],
+            })
+            .expect("model verification should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "verifications": ["trustedAccessForCyber"]
+            })
+        );
+
+        let hook = HookStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: HookRunSummary {
+                id: "hook-run-1".to_string(),
+                event_name: HookEventName::PreToolUse,
+                handler_type: HookHandlerType::Command,
+                execution_mode: HookExecutionMode::Sync,
+                scope: HookScope::Turn,
+                source_path: "/tmp/hook.sh".to_string(),
+                source: HookSource::Project,
+                display_order: 1,
+                status: HookRunStatus::Running,
+                status_message: None,
+                started_at: 1,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                entries: vec![HookOutputEntry {
+                    kind: HookOutputEntryKind::Warning,
+                    text: "check this".to_string(),
+                }],
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(hook).expect("hook started should serialize"),
+            serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "run": {
+                    "id": "hook-run-1",
+                    "eventName": "preToolUse",
+                    "handlerType": "command",
+                    "executionMode": "sync",
+                    "scope": "turn",
+                    "sourcePath": "/tmp/hook.sh",
+                    "source": "project",
+                    "displayOrder": 1,
+                    "status": "running",
+                    "statusMessage": null,
+                    "startedAt": 1,
+                    "completedAt": 2,
+                    "durationMs": 1,
+                    "entries": [{"kind": "warning", "text": "check this"}]
+                }
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(WarningNotification {
+                thread_id: None,
+                message: "config file ignored".to_string(),
+            })
+            .expect("warning should serialize"),
+            serde_json::json!({"threadId": null, "message": "config file ignored"})
+        );
+        assert_eq!(
+            serde_json::to_value(ConfigWarningNotification {
+                summary: "unsupported config key".to_string(),
+                details: Some("experimental.foo is ignored".to_string()),
+                path: Some("/tmp/config.json".to_string()),
+                range: Some(TextRange {
+                    start_line: 1,
+                    start_column: 2,
+                    end_line: 1,
+                    end_column: 9,
+                }),
+            })
+            .expect("config warning should serialize"),
+            serde_json::json!({
+                "summary": "unsupported config key",
+                "details": "experimental.foo is ignored",
+                "path": "/tmp/config.json",
+                "range": {
+                    "startLine": 1,
+                    "startColumn": 2,
+                    "endLine": 1,
+                    "endColumn": 9
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(DeprecationNoticeNotification {
+                summary: "old key is deprecated".to_string(),
+                details: Some("use newKey".to_string()),
+            })
+            .expect("deprecation notice should serialize"),
+            serde_json::json!({
+                "summary": "old key is deprecated",
+                "details": "use newKey"
+            })
+        );
     }
 
     #[test]
@@ -4749,6 +5753,12 @@ mod tests {
             schema.capabilities.thread_lifecycle.id.as_str(),
             schema.capabilities.thread_goal.id.as_str(),
             schema.capabilities.thread_compact.id.as_str(),
+            schema.capabilities.config.id.as_str(),
+            schema.capabilities.repo.id.as_str(),
+            schema.capabilities.search.id.as_str(),
+            schema.capabilities.review.id.as_str(),
+            schema.capabilities.hooks.id.as_str(),
+            schema.capabilities.warnings.id.as_str(),
         ];
 
         for method in &schema.methods {
@@ -4914,6 +5924,19 @@ mod tests {
             method::THREAD_READ,
             method::THREAD_LIST,
             method::THREAD_TURNS_LIST,
+            method::THREAD_RESUME,
+            method::THREAD_FORK,
+            method::THREAD_ARCHIVE,
+            method::THREAD_UNARCHIVE,
+            method::THREAD_UNSUBSCRIBE,
+            method::THREAD_NAME_SET,
+            method::THREAD_METADATA_UPDATE,
+            method::THREAD_ROLLBACK,
+            method::THREAD_LOADED_LIST,
+            method::THREAD_INJECT_ITEMS,
+            method::THREAD_GOAL_SET,
+            method::THREAD_GOAL_GET,
+            method::THREAD_GOAL_CLEAR,
             method::TURN_START,
             method::TURN_INTERRUPT,
             method::TURN_READ,
@@ -5322,6 +6345,65 @@ mod tests {
                 item: CodexThreadItem::completed_agent_message("turn_1", "hello"),
             })
             .expect("item/completed fixture should serialize"),
+            ServerNotification::thread_status_changed(ThreadStatusChangedEvent {
+                thread_id: "thread_1".to_string(),
+                status: CodexThreadStatus::Idle,
+            })
+            .expect("thread/status fixture should serialize"),
+            ServerNotification::thread_archived(ThreadArchivedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/archived fixture should serialize"),
+            ServerNotification::thread_unarchived(ThreadUnarchivedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/unarchived fixture should serialize"),
+            ServerNotification::thread_name_updated(ThreadNameUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                thread_name: Some("thread name".to_string()),
+            })
+            .expect("thread/name fixture should serialize"),
+            ServerNotification::thread_goal_updated(ThreadGoalUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: Some("turn_1".to_string()),
+                goal: ThreadGoal {
+                    thread_id: "thread_1".to_string(),
+                    objective: "finish task".to_string(),
+                    status: ThreadGoalStatus::Active,
+                    token_budget: Some(1000),
+                    tokens_used: 10,
+                    time_used_seconds: 1,
+                    created_at: 1,
+                    updated_at: 2,
+                },
+            })
+            .expect("thread/goal updated fixture should serialize"),
+            ServerNotification::thread_goal_cleared(ThreadGoalClearedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/goal cleared fixture should serialize"),
+            ServerNotification::thread_token_usage_updated(ThreadTokenUsageUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                token_usage: ThreadTokenUsage {
+                    total: TokenUsageBreakdown {
+                        total_tokens: 10,
+                        input_tokens: 6,
+                        cached_input_tokens: 2,
+                        output_tokens: 4,
+                        reasoning_output_tokens: 1,
+                    },
+                    last: TokenUsageBreakdown {
+                        total_tokens: 10,
+                        input_tokens: 6,
+                        cached_input_tokens: 2,
+                        output_tokens: 4,
+                        reasoning_output_tokens: 1,
+                    },
+                    model_context_window: Some(128000),
+                },
+            })
+            .expect("thread/token usage fixture should serialize"),
             ServerNotification::error(ErrorEvent {
                 code: ErrorCode::ServiceDegraded,
                 message: "runtime failed".to_string(),
@@ -6110,6 +7192,7 @@ mod tests {
                     startup_status_events: true,
                 },
                 p5: AppServerP5Availability::default(),
+                r6: AppServerR6Availability::default(),
             });
 
         assert_eq!(matrix.logs.status, CapabilityStatus::Implemented);
@@ -6181,6 +7264,42 @@ mod tests {
                 .mcp
                 .methods
                 .contains(&method::MCP_SERVER_OAUTH_LOGIN.to_string())
+        );
+    }
+
+    #[test]
+    fn r6_config_warning_is_advertised_only_by_warnings_capability() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
+                r6: AppServerR6Availability {
+                    config: true,
+                    config_warnings: true,
+                    ..AppServerR6Availability::default()
+                },
+                ..AppServerServiceAvailability::default()
+            });
+
+        assert_eq!(matrix.config.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.config.methods,
+            vec![
+                method::CONFIG_READ.to_string(),
+                method::CONFIG_VALUE_WRITE.to_string(),
+                method::CONFIG_BATCH_WRITE.to_string(),
+            ]
+        );
+        assert!(
+            !matrix
+                .config
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
+        );
+        assert_eq!(matrix.warnings.status, CapabilityStatus::Implemented);
+        assert!(
+            matrix
+                .warnings
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
         );
     }
 

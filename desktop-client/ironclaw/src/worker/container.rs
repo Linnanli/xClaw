@@ -31,7 +31,7 @@ use crate::worker::autonomous_recovery::{
 };
 use crate::worker::proxy_llm::ProxyLlmProvider;
 use dasclaw_core::TokenUsage;
-use dasclaw_core::agentic_loop::AgenticLoopConfig;
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, ModelCallMode};
 use dasclaw_core::intent::truncate_for_preview;
 use dasclaw_core::messages::ToolCall;
 use dasclaw_core::traits::HostError;
@@ -249,16 +249,22 @@ Work independently to complete this job. When finished, your final message MUST 
             // No cancellation token — container worker lifecycle is owned by the
             // orchestrator (check_signals always Continue). No event channel —
             // events are streamed via WorkerHttpClient::post_event instead.
-            AgenticLoop::new(Arc::new(responder), Some(Arc::new(dispatcher)), None, None)
-                .run(&mut reason_ctx, &config, &hooks)
-                .await
+            AgenticLoop::new(
+                Arc::new(responder),
+                Some(Arc::new(dispatcher)),
+                None,
+                ModelCallMode::Invoke,
+                None,
+            )
+            .run(&mut reason_ctx, &config, &hooks)
+            .await
         })
         .await;
 
         let iterations = *iteration_tracker.lock().await;
 
         match result {
-            Ok(Ok(LoopOutcome::Response(output))) => {
+            Ok(Ok(LoopOutcome::Response { text: output, .. })) => {
                 tracing::info!("Worker completed job {} successfully", self.config.job_id);
                 self.post_event(
                     "result",
@@ -504,7 +510,7 @@ impl AgentResponder for ContainerResponder {
     ) -> TextAction {
         let action = {
             let mut recovery = self.recovery_state.lock().await;
-            recovery.on_text_response(metadata, text)
+            recovery.on_text_response(metadata.clone(), text)
         };
         match action {
             AutonomousRecoveryAction::ToolModeNudge => {
@@ -566,7 +572,11 @@ impl AgentResponder for ContainerResponder {
             } else {
                 last.clone()
             };
-            return TextAction::Return(LoopOutcome::Response(output));
+            return TextAction::Return(LoopOutcome::Response {
+                text: output,
+                usage,
+                metadata,
+            });
         }
 
         reason_ctx

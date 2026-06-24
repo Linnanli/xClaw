@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::llm::error::LlmError;
+use crate::llm::provider::{LlmProviderCapabilities, LlmStream};
 use crate::llm::{
     ChatMessage, CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, Role,
     ToolCompletionRequest, ToolCompletionResponse,
@@ -525,18 +526,15 @@ impl LlmProvider for RecordingLlm {
         self.inner.calculate_cost(input_tokens, output_tokens)
     }
 
-    fn supports_streaming(&self) -> bool {
-        self.inner.supports_streaming()
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        self.inner.capabilities()
     }
 
-    async fn complete_with_tools_stream(
+    async fn stream_with_tools(
         &self,
         request: ToolCompletionRequest,
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<ToolCompletionResponse, LlmError> {
-        self.inner
-            .complete_with_tools_stream(request, chunk_tx)
-            .await
+    ) -> Result<LlmStream, LlmError> {
+        self.inner.stream_with_tools(request).await
     }
 }
 

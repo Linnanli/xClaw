@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use ironclaw::error::LlmError;
 use ironclaw::llm::{
-    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider, Role, ToolCall,
-    ToolCompletionRequest, ToolCompletionResponse,
+    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider,
+    ResponseMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
 };
 
 // Re-export shared types from recording module so existing test code can
@@ -548,10 +548,12 @@ impl LlmProvider for TraceLlm {
                 output_tokens,
             } => Ok(ToolCompletionResponse {
                 content: Some(content),
+                reasoning: None,
                 tool_calls: Vec::new(),
                 input_tokens,
                 output_tokens,
                 finish_reason: FinishReason::Stop,
+                metadata: ResponseMetadata::default(),
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
             }),
@@ -571,10 +573,12 @@ impl LlmProvider for TraceLlm {
                     .collect();
                 Ok(ToolCompletionResponse {
                     content: None,
+                    reasoning: None,
                     tool_calls: calls,
                     input_tokens,
                     output_tokens,
                     finish_reason: FinishReason::ToolUse,
+                    metadata: ResponseMetadata::default(),
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 })

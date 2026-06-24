@@ -280,7 +280,7 @@ impl AgentResponder for DesktopResponder {
             }
         }
 
-        let use_streaming = self.llm.supports_streaming();
+        let use_streaming = self.llm.capabilities().native_streaming;
         let output = if use_streaming {
             self.call_llm_streaming(reason_ctx).await?
         } else {

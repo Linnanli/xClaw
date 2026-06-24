@@ -18,8 +18,8 @@ use rust_decimal::Decimal;
 use ironclaw::error::LlmError;
 use ironclaw::llm::{
     ChatMessage, CircuitBreakerConfig, CircuitBreakerProvider, CompletionRequest,
-    CompletionResponse, CooldownConfig, FailoverProvider, FinishReason, LlmProvider, RetryConfig,
-    RetryProvider, ToolCompletionRequest, ToolCompletionResponse,
+    CompletionResponse, CooldownConfig, FailoverProvider, FinishReason, LlmProvider,
+    ResponseMetadata, RetryConfig, RetryProvider, ToolCompletionRequest, ToolCompletionResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,10 +113,12 @@ impl LlmProvider for FlakeyProvider {
         }
         Ok(ToolCompletionResponse {
             content: Some(self.success_response.clone()),
+            reasoning: None,
             tool_calls: vec![],
             input_tokens: 10,
             output_tokens: 5,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })
@@ -208,10 +210,12 @@ impl LlmProvider for GarbageProvider {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         Ok(ToolCompletionResponse {
             content: Some(String::new()), // empty content
+            reasoning: None,
             tool_calls: vec![],
             input_tokens: 0,
             output_tokens: 0,
             finish_reason: FinishReason::Unknown,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })
@@ -268,10 +272,12 @@ impl LlmProvider for ReliableProvider {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         Ok(ToolCompletionResponse {
             content: Some(self.response.clone()),
+            reasoning: None,
             tool_calls: vec![],
             input_tokens: 10,
             output_tokens: 5,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })

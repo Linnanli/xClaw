@@ -38,8 +38,8 @@ use crate::channels::{
 use crate::db::Database;
 use crate::error::{ChannelError, LlmError};
 use crate::llm::{
-    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCompletionRequest,
-    ToolCompletionResponse,
+    CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ResponseMetadata,
+    ToolCompletionRequest, ToolCompletionResponse,
 };
 use crate::tools::ToolRegistry;
 
@@ -228,10 +228,12 @@ impl LlmProvider for StubLlm {
         }
         Ok(ToolCompletionResponse {
             content: Some(self.response.clone()),
+            reasoning: None,
             tool_calls: Vec::new(),
             input_tokens: 10,
             output_tokens: 5,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })

@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::llm::config::NearAiConfig;
 use crate::llm::error::LlmError;
 use crate::llm::{
-    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider, Role, ToolCall,
-    ToolCompletionRequest, ToolCompletionResponse,
+    ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider,
+    ResponseMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
 };
 use crate::llm::{costs, session::SessionManager};
 
@@ -620,10 +620,12 @@ impl LlmProvider for NearAiChatProvider {
 
         Ok(ToolCompletionResponse {
             content,
+            reasoning: None,
             tool_calls,
             finish_reason,
             input_tokens,
             output_tokens,
+            metadata: ResponseMetadata::default(),
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })

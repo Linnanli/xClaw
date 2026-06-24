@@ -8,10 +8,14 @@
 
 pub mod app_services;
 pub mod command_service;
+pub mod config_service;
 pub mod fs_service;
+pub mod hook_service;
 pub mod job_service;
 pub mod log_service;
 pub mod mcp_service;
+pub mod repo_service;
+pub mod search_service;
 pub mod skills_service;
 
 mod blocking_runtime;
@@ -36,28 +40,34 @@ use dasclaw_app_server_protocol::{
     CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
     CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
-    CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigRequirementsReadResponse,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    CommandExecutionTerminalInteractionEvent, CompatibilityProfile, ConfigBatchWriteParams,
+    ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse, ConfigValueWriteParams,
+    ConfigWarningNotification, ConfigWriteResponse, DEFAULT_MAX_PENDING_NOTIFICATIONS,
+    DeprecationNoticeNotification, DynamicToolCallOutputContentItem, DynamicToolCallParams,
     DynamicToolCallResponse, ErrorCode, ErrorData, ErrorEvent, FileChangeApprovalDecision,
     FileChangeOutputDeltaEvent, FileChangePatchUpdatedEvent, FileChangeRequestApprovalParams,
     FileChangeRequestApprovalResponse, FileUpdateChange, FsChangedNotification, FsCopyParams,
     FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
     FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
     FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
-    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, GuardianApprovalReview,
-    HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
-    ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest,
-    JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
-    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, GetConversationSummaryParams, GetConversationSummaryResponse,
+    GitDiffToRemoteParams, GitDiffToRemoteResponse, GuardianApprovalReview,
+    GuardianWarningNotification, HealthCheckParams, HealthCheckResponse, HookCompletedNotification,
+    HookStartedNotification, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
     McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
     McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
     McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
-    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    PermissionsApprovalDecision, PermissionsRequestApprovalParams,
+    ModelProviderSelectForNextTurnResponse, ModelRerouteReason, ModelReroutedNotification,
+    ModelVerification, ModelVerificationNotification, NotificationQueuePolicy,
+    NotificationsInitializedEvent, PermissionsApprovalDecision, PermissionsRequestApprovalParams,
     PermissionsRequestApprovalResponse, PlanDeltaEvent, ProtocolSchemaResponse, ProtocolVersion,
     RawResponseItemCompletedEvent, ReasoningSummaryPartAddedEvent, ReasoningSummaryTextDeltaEvent,
     ReasoningTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
@@ -80,11 +90,12 @@ use dasclaw_app_server_protocol::{
     ToolRequestUserInputResponse, TurnCompletedEvent, TurnDiffUpdatedEvent, TurnInterruptParams,
     TurnInterruptResponse, TurnPlanStep, TurnPlanUpdatedEvent, TurnReadParams, TurnReadResponse,
     TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSteerParams,
-    TurnSteerResponse, UserInput,
+    TurnSteerResponse, UserInput, WarningNotification,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
-    CodexTurnStatus,
+    CodexTurnStatus, ConversationSummary, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+    ReviewTarget,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
 use dasclaw_core::agentic_loop::{AgentPlanStep, AgentPlanStepStatus};
@@ -93,6 +104,8 @@ use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
 use dasclaw_llm_provider::provider::registry::ProviderProtocol;
 use dasclaw_runtime::LlmProviderResponder;
+use hook_service::AppServerHookNotification;
+use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -833,6 +846,8 @@ impl AppServer {
         self.emit_lifecycle_changed(previous_state);
         self.emit_capabilities_changed(CapabilitiesChangedReason::Initialize);
         self.emit_codex_notifications_initialized(unavailable_requested_capabilities.clone());
+        self.app_services.collect_startup_notifications();
+        self.drain_service_updates();
 
         Ok(InitializeResponse {
             server: self.server.clone(),
@@ -888,6 +903,46 @@ impl AppServer {
         })
     }
 
+    pub fn config_read(
+        &self,
+        params: ConfigReadParams,
+    ) -> Result<ConfigReadResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.read(params)
+    }
+
+    pub fn config_value_write(
+        &self,
+        params: ConfigValueWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.write_value(params)
+    }
+
+    pub fn config_batch_write(
+        &self,
+        params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        self.require_initialized("config")?;
+        self.app_services.config.write_batch(params)
+    }
+
+    pub fn git_diff_to_remote(
+        &self,
+        params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError> {
+        self.require_initialized("repo")?;
+        self.app_services.repo.git_diff_to_remote(params)
+    }
+
+    pub fn fuzzy_file_search(
+        &self,
+        params: FuzzyFileSearchParams,
+    ) -> Result<FuzzyFileSearchResponse, AppServerError> {
+        self.require_initialized("search")?;
+        self.app_services.search.fuzzy_file_search(params)
+    }
+
     fn create_thread_record(
         &mut self,
         params: ThreadStartParams,
@@ -941,6 +996,74 @@ impl AppServer {
             model,
             model_provider,
             cwd,
+        })
+    }
+
+    pub fn get_conversation_summary(
+        &self,
+        params: GetConversationSummaryParams,
+    ) -> Result<GetConversationSummaryResponse, AppServerError> {
+        self.require_initialized("session")?;
+        let summary = match params {
+            GetConversationSummaryParams::ConversationId { conversation_id } => {
+                self.thread_summary_or_error_with_capability(&conversation_id, "session")?
+            }
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                self.threads.summary_by_path(&rollout_path).ok_or_else(|| {
+                    AppServerError::invalid_request(
+                        "session",
+                        format!("unknown rollout path: {rollout_path}"),
+                    )
+                })?
+            }
+        };
+
+        Ok(GetConversationSummaryResponse {
+            summary: self.conversation_summary_view(summary)?,
+        })
+    }
+
+    pub fn review_start(
+        &mut self,
+        params: ReviewStartParams,
+    ) -> Result<ReviewStartResponse, AppServerError> {
+        self.require_initialized("review")?;
+        self.thread_summary_or_error_with_capability(&params.thread_id, "review")?;
+
+        let prompt = review_start_prompt(&params.target)?;
+        let review_thread_id = match params.delivery.unwrap_or(ReviewDelivery::Inline) {
+            ReviewDelivery::Inline => params.thread_id,
+            ReviewDelivery::Detached => {
+                self.thread_fork(ThreadForkParams {
+                    thread_id: params.thread_id,
+                    ephemeral: true,
+                    exclude_turns: false,
+                    persist_extended_history: false,
+                    cwd: None,
+                })
+                .map_err(|error| error.with_capability("review"))?
+                .thread
+                .id
+            }
+        };
+        let turn = self
+            .turn_start(TurnStartParams {
+                thread_id: review_thread_id.clone(),
+                input: vec![dasclaw_app_server_protocol::UserInput::Text {
+                    text: prompt,
+                    text_elements: Vec::new(),
+                }],
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })?
+            .turn;
+
+        Ok(ReviewStartResponse {
+            turn,
+            review_thread_id,
         })
     }
 
@@ -1299,6 +1422,7 @@ impl AppServer {
                 reasoning_summary,
                 sandbox_context,
                 updates: self.runtime_turn_updates.clone(),
+                hook_registry: self.app_services.hook_registry.clone(),
             })
             .map_err(|error| {
                 if let Err(cancel_error) = self.threads.cancel_turn(&params.thread_id, &turn_id) {
@@ -1946,6 +2070,31 @@ impl AppServer {
                     self.config_requirements_read()
                 })
             }
+            method::CONFIG_READ => {
+                route_with_params(request.id, request.params, |params: ConfigReadParams| {
+                    self.config_read(params)
+                })
+            }
+            method::CONFIG_VALUE_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: ConfigValueWriteParams| self.config_value_write(params),
+            ),
+            method::CONFIG_BATCH_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: ConfigBatchWriteParams| self.config_batch_write(params),
+            ),
+            method::GIT_DIFF_TO_REMOTE => route_with_params(
+                request.id,
+                request.params,
+                |params: GitDiffToRemoteParams| self.git_diff_to_remote(params),
+            ),
+            method::FUZZY_FILE_SEARCH => route_with_params(
+                request.id,
+                request.params,
+                |params: FuzzyFileSearchParams| self.fuzzy_file_search(params),
+            ),
             method::HEALTH_CHECK => {
                 route_with_optional_params(request.id, request.params, |params| {
                     Ok(self.health_check(params))
@@ -1960,6 +2109,16 @@ impl AppServer {
             method::SHUTDOWN => route_with_optional_params(request.id, request.params, |params| {
                 Ok(self.shutdown(params))
             }),
+            method::GET_CONVERSATION_SUMMARY => route_with_params(
+                request.id,
+                request.params,
+                |params: GetConversationSummaryParams| self.get_conversation_summary(params),
+            ),
+            method::REVIEW_START => {
+                route_with_params(request.id, request.params, |params: ReviewStartParams| {
+                    self.review_start(params)
+                })
+            }
             method::THREAD_START => {
                 route_with_params(request.id, request.params, |params: ThreadStartParams| {
                     self.thread_start(params)
@@ -2737,6 +2896,40 @@ impl AppServer {
         for event in self.app_services.drain_command_exec_output_delta_events() {
             self.notifications.emit_command_exec_output_delta(event);
         }
+        for event in self.app_services.drain_search_events() {
+            match event {
+                SearchNotification::Updated(event) => {
+                    self.notifications
+                        .emit_fuzzy_file_search_session_updated(event);
+                }
+                SearchNotification::Completed(event) => {
+                    self.notifications
+                        .emit_fuzzy_file_search_session_completed(event);
+                }
+            }
+        }
+        for event in self.app_services.drain_hook_notifications() {
+            match event {
+                AppServerHookNotification::Started(event) => {
+                    self.notifications.emit_hook_started(event);
+                }
+                AppServerHookNotification::Completed(event) => {
+                    self.notifications.emit_hook_completed(event);
+                }
+                AppServerHookNotification::Warning(event) => {
+                    self.notifications.emit_warning(event);
+                }
+                AppServerHookNotification::GuardianWarning(event) => {
+                    self.notifications.emit_guardian_warning(event);
+                }
+                AppServerHookNotification::ConfigWarning(event) => {
+                    self.notifications.emit_config_warning(event);
+                }
+                AppServerHookNotification::DeprecationNotice(event) => {
+                    self.notifications.emit_deprecation_notice(event);
+                }
+            }
+        }
     }
 
     fn refresh_service_capabilities(&mut self) {
@@ -2750,7 +2943,11 @@ impl AppServer {
         capabilities.jobs = service_baseline.jobs;
         capabilities.skills = service_baseline.skills;
         capabilities.mcp = service_baseline.mcp;
-        capabilities.with_app_services(self.app_services.availability())
+        let mut availability = self.app_services.availability();
+        availability.r6.review = true;
+        availability.r6.model_reroutes = self.runtime_features.model_reroutes;
+        availability.r6.model_verifications = self.runtime_features.model_verifications;
+        capabilities.with_app_services(availability)
     }
 
     fn tools_health(&self) -> ServiceHealth {
@@ -2958,6 +3155,31 @@ impl AppServer {
             name: summary.title,
             turns,
         })
+    }
+
+    fn conversation_summary_view(
+        &self,
+        summary: ThreadSummary,
+    ) -> Result<ConversationSummary, AppServerError> {
+        Ok(ConversationSummary {
+            conversation_id: summary.thread_id.clone(),
+            path: summary.path.unwrap_or_default(),
+            preview: self.thread_preview(&summary.thread_id)?,
+            timestamp: Some(summary.created_at.to_string()),
+            updated_at: Some(summary.updated_at.to_string()),
+            model_provider: self.model_provider.selected_provider_id(),
+            cwd: summary.workspace_root.unwrap_or_else(|| ".".to_string()),
+            cli_version: SERVER_VERSION.to_string(),
+            source: CodexSessionSource::Unknown,
+            git_info: summary.git_info,
+        })
+    }
+
+    fn thread_preview(&self, thread_id: &str) -> Result<String, AppServerError> {
+        Ok(self
+            .thread_summary_or_error(thread_id)?
+            .title
+            .unwrap_or_default())
     }
 
     fn codex_turn_view(&self, thread_id: &str, turn_id: &str) -> Result<CodexTurn, AppServerError> {
@@ -3305,6 +3527,38 @@ impl AppServer {
                         );
                     }
                 }
+                RuntimeTurnOutcome::ModelRerouted {
+                    from_model,
+                    to_model,
+                    reason,
+                } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_model_rerouted(ModelReroutedNotification {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                from_model,
+                                to_model,
+                                reason,
+                            });
+                    }
+                }
+                RuntimeTurnOutcome::ModelVerification { verifications } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_model_verification(ModelVerificationNotification {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                verifications,
+                            });
+                    }
+                }
                 RuntimeTurnOutcome::TokenUsageUpdated { usage } => {
                     if self
                         .threads
@@ -3633,6 +3887,8 @@ pub struct RuntimeBridgeFeatures {
     pub approval: bool,
     pub tools: bool,
     pub sandbox: bool,
+    pub model_reroutes: bool,
+    pub model_verifications: bool,
     pub dynamic_tool_call: bool,
     pub tool_user_input: bool,
     pub permissions_approval: bool,
@@ -3667,6 +3923,7 @@ pub struct RuntimeTurnStartRequest {
     pub reasoning_summary: ReasoningSummary,
     pub sandbox_context: RuntimeSandboxContext,
     pub updates: RuntimeTurnUpdateSink,
+    pub hook_registry: Option<Arc<dasclaw_hooks::HookRegistry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3848,6 +4105,7 @@ pub struct RuntimeClientRequestContext {
     cwd: PathBuf,
     updates: RuntimeTurnUpdateSink,
     pending_requests: PendingRuntimeClientRequests,
+    hook_registry: Option<Arc<dasclaw_hooks::HookRegistry>>,
 }
 
 impl RuntimeClientRequestContext {
@@ -4109,6 +4367,33 @@ impl RuntimeClientToolExecutor {
             }
         }
     }
+
+    async fn run_before_tool_call_hook(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<(), String> {
+        let Some(registry) = &self.context.hook_registry else {
+            return Ok(());
+        };
+
+        let event = dasclaw_hooks::HookEvent::ToolCall {
+            tool_name: call.name.clone(),
+            parameters: call.arguments.clone(),
+            user_id: "app-server".to_string(),
+            thread_id: Some(self.context.thread_id.clone()),
+            turn_id: Some(self.context.turn_id.clone()),
+            context: "chat".to_string(),
+        };
+
+        registry
+            .run(&event)
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                dasclaw_hooks::HookError::Rejected { reason } => reason,
+                other => other.to_string(),
+            })
+    }
 }
 
 #[async_trait::async_trait]
@@ -4117,6 +4402,10 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientToolExecutor {
         &self,
         call: &dasclaw_core::messages::ToolCall,
     ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        if let Err(reason) = self.run_before_tool_call_hook(call).await {
+            return Ok(error_tool_result(call, &reason));
+        }
+
         match classify_runtime_client_tool(&call.name) {
             RuntimeClientToolKind::DynamicTool { namespace, tool } => {
                 Ok(self.execute_dynamic_tool(call, namespace, tool).await)
@@ -4541,6 +4830,38 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn model_rerouted(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        from_model: String,
+        to_model: String,
+        reason: ModelRerouteReason,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ModelRerouted {
+                from_model,
+                to_model,
+                reason,
+            },
+        });
+    }
+
+    pub fn model_verification(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        verifications: Vec<ModelVerification>,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ModelVerification { verifications },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -4624,6 +4945,14 @@ pub enum RuntimeTurnOutcome {
     },
     TokenUsageUpdated {
         usage: dasclaw_core::response_types::TokenUsage,
+    },
+    ModelRerouted {
+        from_model: String,
+        to_model: String,
+        reason: ModelRerouteReason,
+    },
+    ModelVerification {
+        verifications: Vec<ModelVerification>,
     },
     Completed {
         output: String,
@@ -4922,6 +5251,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             cwd: request.cwd.clone(),
             updates: request.updates.clone(),
             pending_requests: Arc::clone(&self.pending_client_requests),
+            hook_registry: request.hook_registry.clone(),
         };
         let agent = Arc::new((self.agent_factory)(
             token.clone(),
@@ -4956,6 +5286,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         let event_updates = updates.clone();
         let event_thread_id = thread_id.clone();
         let event_turn_id = turn_id.clone();
+        let requested_model = request.model_provider.model_id.clone();
         let model_call_mode = request.model_provider.model_call_mode;
         let event_bridge = bridge.clone();
         thread::Builder::new()
@@ -5182,6 +5513,13 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                 bridge.cleanup_runtime_turn(&runtime_cleanup_turn_id, &runtime_cleanup_agent);
                 match result {
                     Ok(output) => {
+                        emit_response_model_metadata(
+                            &updates,
+                            &thread_id,
+                            &turn_id,
+                            &requested_model,
+                            &output.metadata,
+                        );
                         updates.token_usage_updated(
                             thread_id.clone(),
                             turn_id.clone(),
@@ -5420,6 +5758,36 @@ fn redact_snapshot_secret(message: &str, snapshot: &RuntimeModelProviderSnapshot
     }
 
     message.replace(&snapshot.api_key, "<redacted>")
+}
+
+fn emit_response_model_metadata(
+    updates: &RuntimeTurnUpdateSink,
+    thread_id: &str,
+    turn_id: &str,
+    _requested_model: &str,
+    metadata: &dasclaw_core::response_types::ResponseMetadata,
+) {
+    if !metadata.model_verifications.is_empty() {
+        updates.model_verification(
+            thread_id.to_string(),
+            turn_id.to_string(),
+            metadata
+                .model_verifications
+                .iter()
+                .map(app_server_model_verification)
+                .collect(),
+        );
+    }
+}
+
+fn app_server_model_verification(
+    verification: &dasclaw_core::response_types::ResponseModelVerification,
+) -> ModelVerification {
+    match verification {
+        dasclaw_core::response_types::ResponseModelVerification::TrustedAccessForCyber => {
+            ModelVerification::TrustedAccessForCyber
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5667,6 +6035,38 @@ impl NotificationBus {
         self.push(ServerNotification::auto_approval_review_completed(event));
     }
 
+    pub fn emit_model_rerouted(&mut self, event: ModelReroutedNotification) {
+        self.push(ServerNotification::model_rerouted(event));
+    }
+
+    pub fn emit_model_verification(&mut self, event: ModelVerificationNotification) {
+        self.push(ServerNotification::model_verification(event));
+    }
+
+    pub fn emit_hook_started(&mut self, event: HookStartedNotification) {
+        self.push(ServerNotification::hook_started(event));
+    }
+
+    pub fn emit_hook_completed(&mut self, event: HookCompletedNotification) {
+        self.push(ServerNotification::hook_completed(event));
+    }
+
+    pub fn emit_warning(&mut self, event: WarningNotification) {
+        self.push(ServerNotification::warning(event));
+    }
+
+    pub fn emit_guardian_warning(&mut self, event: GuardianWarningNotification) {
+        self.push(ServerNotification::guardian_warning(event));
+    }
+
+    pub fn emit_config_warning(&mut self, event: ConfigWarningNotification) {
+        self.push(ServerNotification::config_warning(event));
+    }
+
+    pub fn emit_deprecation_notice(&mut self, event: DeprecationNoticeNotification) {
+        self.push(ServerNotification::deprecation_notice(event));
+    }
+
     pub fn emit_log_entry(&mut self, event: LogEntryEvent) {
         self.push(ServerNotification::log_entry(event));
     }
@@ -5696,6 +6096,22 @@ impl NotificationBus {
 
     pub fn emit_mcp_startup_status_updated(&mut self, event: McpServerStatusUpdatedNotification) {
         self.push(ServerNotification::mcp_server_startup_status_updated(event));
+    }
+
+    pub fn emit_fuzzy_file_search_session_updated(
+        &mut self,
+        event: dasclaw_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification,
+    ) {
+        self.push(ServerNotification::fuzzy_file_search_session_updated(event));
+    }
+
+    pub fn emit_fuzzy_file_search_session_completed(
+        &mut self,
+        event: dasclaw_app_server_protocol::FuzzyFileSearchSessionCompletedNotification,
+    ) {
+        self.push(ServerNotification::fuzzy_file_search_session_completed(
+            event,
+        ));
     }
 
     pub fn emit_server_request(&mut self, request: JsonRpcServerRequest) {
@@ -6018,6 +6434,15 @@ impl AppServerError {
         }
     }
 
+    fn with_capability(self, capability: impl Into<String>) -> Self {
+        match self {
+            Self::Protocol { mut data } => {
+                data.capability = Some(capability.into());
+                Self::Protocol { data }
+            }
+        }
+    }
+
     fn version_mismatch(lifecycle: LifecycleSnapshot) -> Self {
         Self::protocol(ErrorData {
             code: ErrorCode::VersionMismatch,
@@ -6100,15 +6525,57 @@ fn compatibility_profiles() -> Vec<CompatibilityProfile> {
     vec![CompatibilityProfile::codex_app_server_v2_chat_session_subset()]
 }
 
+fn review_start_prompt(target: &ReviewTarget) -> Result<String, AppServerError> {
+    let label = match target {
+        ReviewTarget::UncommittedChanges => "uncommitted changes".to_string(),
+        ReviewTarget::BaseBranch { branch } => {
+            format!("changes against base branch {}", branch.trim())
+        }
+        ReviewTarget::Commit { sha, title } => {
+            let mut label = format!("commit {}", sha.trim());
+            if let Some(title) = title
+                .as_ref()
+                .map(|title| title.trim())
+                .filter(|title| !title.is_empty())
+            {
+                label.push_str(": ");
+                label.push_str(title);
+            }
+            label
+        }
+        ReviewTarget::Custom { instructions } => {
+            let trimmed = instructions.trim();
+            if trimmed.is_empty() {
+                return Err(AppServerError::invalid_request(
+                    "review",
+                    "custom review instructions must not be empty",
+                ));
+            }
+            trimmed.to_string()
+        }
+    };
+
+    Ok(format!(
+        "Review request: {label}\n\nFocus on correctness, regressions, safety, and missing tests. Return findings first with file and line references."
+    ))
+}
+
 pub fn supported_methods() -> &'static [&'static str] {
     &[
         method::INITIALIZE,
         method::PROTOCOL_SCHEMA,
         method::CONFIG_REQUIREMENTS_READ,
+        method::CONFIG_READ,
+        method::CONFIG_VALUE_WRITE,
+        method::CONFIG_BATCH_WRITE,
+        method::GIT_DIFF_TO_REMOTE,
+        method::FUZZY_FILE_SEARCH,
         method::HEALTH_CHECK,
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
         method::SHUTDOWN,
+        method::GET_CONVERSATION_SUMMARY,
+        method::REVIEW_START,
         method::THREAD_START,
         method::THREAD_LIST,
         method::THREAD_READ,
@@ -6194,13 +6661,15 @@ mod tests {
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         CommandExecTerminalSize, DynamicToolCallOutputContentItem, FsChangedKind,
-        FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope, SkillsListEntry,
-        TransportKind, UserInput, WorkspaceInfo, WorkspaceTrust, event, server_request,
+        FsChangedNotification, HookEventName, HookExecutionMode, HookHandlerType, HookOutputEntry,
+        HookOutputEntryKind, HookRunStatus, HookRunSummary, HookScope, HookSource, ServiceStatus,
+        SkillMetadata, SkillScope, SkillsListEntry, TransportKind, UserInput, WorkspaceInfo,
+        WorkspaceTrust, event, server_request,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
     use dasclaw_core::response_types::{
-        RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
+        RespondOutput, RespondResult, ResponseMetadata, ResponseModelVerification, TokenUsage,
     };
     use dasclaw_core::traits::HostError;
     use dasclaw_observability::{Observer, ObserverEvent};
@@ -6248,6 +6717,21 @@ mod tests {
         assert!(health.services.iter().any(|service| {
             service.service == ServiceName::Mcp && service.status == ServiceStatus::Disabled
         }));
+    }
+
+    #[test]
+    fn real_r6_services_do_not_advertise_unwired_notification_producers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let server = initialized_server_with_root(temp.path());
+        let capabilities = &server.capabilities;
+
+        assert_eq!(capabilities.config.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.repo.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.search.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.review.status, CapabilityStatus::Implemented);
+        assert!(capabilities.model_provider.events.is_empty());
+        assert_eq!(capabilities.hooks.status, CapabilityStatus::Declared);
+        assert_eq!(capabilities.warnings.status, CapabilityStatus::Declared);
     }
 
     #[test]
@@ -6779,6 +7263,745 @@ mod tests {
         let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
         assert_eq!(read_value["result"]["dataBase64"], "dGVzdA==");
         assert_eq!(exec_value["result"]["stdout"], "test");
+    }
+
+    #[test]
+    fn config_read_returns_redacted_config_and_layers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(
+            temp.path(),
+            serde_json::json!({
+                "model": "gpt-test",
+                "api_key": "secret-api-key",
+                "private_key": "secret-private-key",
+                "provider": {
+                    "token": "secret-token",
+                    "name": "openai"
+                }
+            }),
+        );
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":10,"method":"config/read","params":{"includeLayers":true}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], "gpt-test");
+        assert_eq!(value["result"]["config"]["api_key"], "<redacted>");
+        assert_eq!(value["result"]["config"]["private_key"], "<redacted>");
+        assert_eq!(value["result"]["config"]["provider"]["token"], "<redacted>");
+        assert_eq!(value["result"]["config"]["provider"]["name"], "openai");
+        assert!(
+            !value["result"]["layers"]
+                .as_array()
+                .expect("layers")
+                .is_empty()
+        );
+        assert!(!value.to_string().contains("secret-api-key"));
+        assert!(!value.to_string().contains("secret-private-key"));
+        assert!(!value.to_string().contains("secret-token"));
+    }
+
+    #[test]
+    fn config_read_runtime_warning_drains_to_json_rpc_notification() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        write_app_server_config(temp.path(), serde_json::json!({"unknown_key": true}));
+
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":10,"method":"config/read","params":{"includeLayers":false}}"#,
+            )
+            .expect("response");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(methods_from_values(&notifications), vec!["configWarning"]);
+        assert_eq!(
+            notifications[0]["params"]["summary"],
+            "unsupported config key"
+        );
+        assert!(
+            notifications[0]["params"]["details"]
+                .as_str()
+                .expect("details")
+                .contains("unknown_key")
+        );
+    }
+
+    #[test]
+    fn config_write_rejects_key_outside_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":11,"method":"config/value/write","params":{"keyPath":"api_key","value":"secret","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("not writable")
+        );
+    }
+
+    #[test]
+    fn config_write_rejects_version_mismatch_with_stable_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(temp.path(), serde_json::json!({"model": "gpt-test"}));
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":12,"method":"config/value/write","params":{"keyPath":"model","value":"gpt-next","mergeStrategy":"replace","expectedVersion":"stale-version"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["message"], "config version mismatch");
+    }
+
+    #[test]
+    fn config_write_rejects_nested_secret_key_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":12,"method":"config/value/write","params":{"keyPath":"model.api_key","value":"secret","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_batch_write_rejects_nested_secret_key_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":13,"method":"config/batchWrite","params":{"edits":[{"keyPath":"model.token","value":"secret","mergeStrategy":"replace"}]}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_read_uses_cwd_project_config_inside_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+        write_app_server_config(temp.path(), serde_json::json!({"model": "root-model"}));
+        write_app_server_config(&project, serde_json::json!({"model": "project-model"}));
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":14,"method":"config/read","params":{{"includeLayers":true,"cwd":{}}}}}"#,
+                serde_json::to_string(&project.to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], "project-model");
+        assert_eq!(
+            value["result"]["layers"][0]["config"]["model"],
+            "project-model"
+        );
+    }
+
+    #[test]
+    fn get_conversation_summary_returns_thread_card_shape() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        let cwd_json = serde_json::to_string(&cwd.to_string_lossy()).expect("cwd json");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let start_response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{{"cwd":{cwd_json}}}}}"#
+            ))
+            .expect("thread/start should return a response");
+        let start_value: serde_json::Value =
+            serde_json::from_str(&start_response).expect("thread/start response JSON");
+        let thread = &start_value["result"]["thread"];
+        let thread_id = thread["id"].as_str().expect("thread id");
+
+        let summary_response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"{}"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY,
+                thread_id
+            ))
+            .expect("getConversationSummary should return a response");
+        let summary_value: serde_json::Value =
+            serde_json::from_str(&summary_response).expect("summary response JSON");
+        let summary = &summary_value["result"]["summary"];
+
+        assert_eq!(summary["conversationId"], thread["id"]);
+        assert_eq!(summary["path"], "");
+        assert_eq!(summary["preview"], "");
+        assert_eq!(summary["timestamp"], thread["createdAt"].to_string());
+        assert_eq!(summary["updatedAt"], thread["updatedAt"].to_string());
+        assert_eq!(summary["modelProvider"], "openai");
+        assert_eq!(summary["cwd"], cwd.to_string_lossy().as_ref());
+        assert_eq!(summary["cliVersion"], SERVER_VERSION);
+        assert_eq!(summary["source"], "unknown");
+        assert_eq!(summary["gitInfo"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn get_conversation_summary_returns_rollout_path_thread_card_shape() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let snapshot_path = temp.path().join("threads.json");
+        let rollout_path = temp.path().join("rollout.jsonl");
+        let rollout_path = rollout_path.to_string_lossy();
+        let mut server = initialized_server_with_thread_snapshot(
+            temp.path(),
+            &snapshot_path,
+            serde_json::json!({
+                "version": 1,
+                "nextThreadId": 2,
+                "nextTurnId": 1,
+                "threads": [{
+                    "threadId": "thread_1",
+                    "title": "Loaded conversation",
+                    "workspaceRoot": "/workspace",
+                    "sandbox": null,
+                    "permissionProfile": null,
+                    "forkedFromId": null,
+                    "ephemeral": false,
+                    "archived": false,
+                    "subscribed": false,
+                    "path": rollout_path.as_ref(),
+                    "createdAt": 11,
+                    "updatedAt": 22,
+                    "gitInfo": {
+                        "sha": "abc123",
+                        "branch": "main",
+                        "originUrl": "https://example.invalid/repo.git"
+                    },
+                    "goal": null,
+                    "compactedTurnId": null,
+                    "tokenUsage": null
+                }],
+                "turns": []
+            }),
+        );
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"rolloutPath":{}}}}}"#,
+                method::GET_CONVERSATION_SUMMARY,
+                serde_json::to_string(rollout_path.as_ref()).expect("rollout path json")
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+        let summary = &value["result"]["summary"];
+
+        assert_eq!(summary["conversationId"], "thread_1");
+        assert_eq!(summary["path"], rollout_path.as_ref());
+        assert_eq!(summary["preview"], "Loaded conversation");
+        assert_eq!(summary["timestamp"], "11");
+        assert_eq!(summary["updatedAt"], "22");
+        assert_eq!(summary["modelProvider"], "openai");
+        assert_eq!(summary["cwd"], "/workspace");
+        assert_eq!(summary["cliVersion"], SERVER_VERSION);
+        assert_eq!(summary["source"], "unknown");
+        assert_eq!(summary["gitInfo"]["sha"], "abc123");
+        assert_eq!(summary["gitInfo"]["branch"], "main");
+        assert_eq!(
+            summary["gitInfo"]["originUrl"],
+            "https://example.invalid/repo.git"
+        );
+    }
+
+    #[test]
+    fn get_conversation_summary_rejects_unknown_conversation_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"missing"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn get_conversation_summary_rejects_unknown_rollout_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"rolloutPath":"/tmp/missing.jsonl"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn get_conversation_summary_requires_initialized_server() {
+        let mut server = AppServer::new();
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"summary","method":"{}","params":{{"conversationId":"thread_1"}}}}"#,
+                method::GET_CONVERSATION_SUMMARY
+            ))
+            .expect("getConversationSummary should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("summary response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "session");
+    }
+
+    #[test]
+    fn config_read_rejects_cwd_outside_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":15,"method":"config/read","params":{{"includeLayers":false,"cwd":{}}}}}"#,
+                serde_json::to_string(&outside.path().to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+    }
+
+    #[test]
+    fn config_write_rejects_file_path_outside_root_as_capability_unavailable() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let outside_file = outside.path().join("app-server-config.json");
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":16,"method":"config/value/write","params":{{"keyPath":"model","value":"gpt-test","mergeStrategy":"replace","filePath":{}}}}}"#,
+                serde_json::to_string(&outside_file.to_string_lossy()).expect("file path json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_read_rejects_user_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join(".dasclaw"),
+            root.path().join(".dasclaw"),
+        )
+        .expect("symlink .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":17,"method":"config/read","params":{"includeLayers":false}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+        assert!(!value.to_string().contains("outside-model"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_write_rejects_user_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join(".dasclaw"),
+            root.path().join(".dasclaw"),
+        )
+        .expect("symlink .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":18,"method":"config/value/write","params":{"keyPath":"model","value":"inside-model","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+
+        let outside_config = fs::read_to_string(
+            outside
+                .path()
+                .join(".dasclaw")
+                .join("app-server-config.json"),
+        )
+        .expect("outside config");
+        assert!(outside_config.contains("outside-model"));
+        assert!(!outside_config.contains("inside-model"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_read_rejects_project_config_symlink_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let project = root.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+        write_app_server_config(
+            outside.path(),
+            serde_json::json!({"model": "outside-model"}),
+        );
+        std::os::unix::fs::symlink(outside.path().join(".dasclaw"), project.join(".dasclaw"))
+            .expect("symlink project .dasclaw");
+        let mut server = initialized_server_with_root(root.path());
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":19,"method":"config/read","params":{{"includeLayers":true,"cwd":{}}}}}"#,
+                serde_json::to_string(&project.to_string_lossy()).expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(!value.to_string().contains("outside-model"));
+    }
+
+    #[test]
+    fn config_write_rejects_secret_keys_inside_object_value() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":20,"method":"config/value/write","params":{"keyPath":"model","value":{"api_key":"secret"},"mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_batch_write_rejects_secret_keys_inside_nested_object_value() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":21,"method":"config/batchWrite","params":{"edits":[{"keyPath":"profile","value":{"nested":{"token":"secret"}},"mergeStrategy":"upsert"}]}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("secret")
+        );
+    }
+
+    #[test]
+    fn config_write_persists_complete_json_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":22,"method":"config/value/write","params":{"keyPath":"model","value":"gpt-test","mergeStrategy":"replace"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["config"]["model"], "gpt-test");
+
+        let written =
+            fs::read_to_string(temp.path().join(".dasclaw").join("app-server-config.json"))
+                .expect("written config");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("complete json");
+        assert_eq!(parsed["model"], "gpt-test");
+    }
+
+    #[test]
+    fn git_diff_to_remote_returns_merge_base_sha_and_patch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        init_git_fixture(temp.path());
+        std::fs::write(temp.path().join("src.txt"), "changed\n").expect("write");
+        let expected_sha =
+            run_git_fixture_output(temp.path(), &["merge-base", "HEAD", "@{upstream}"])
+                .trim()
+                .to_string();
+
+        let mut server = initialized_server_with_root(temp.path());
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "gitDiffToRemote",
+            "params": { "cwd": temp.path().to_string_lossy() }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["sha"], expected_sha);
+        assert!(
+            value["result"]["diff"]
+                .as_str()
+                .expect("diff")
+                .contains("changed")
+        );
+    }
+
+    #[test]
+    fn fuzzy_file_search_returns_files_and_session_notifications() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("mkdir");
+        std::fs::write(temp.path().join("src/config_service.rs"), "").expect("write");
+
+        let mut server = initialized_server_with_root(temp.path());
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": "cfg",
+                "roots": [temp.path().to_string_lossy()],
+                "cancellationToken": "session-a"
+            }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["result"]["files"][0]["fileName"], "config_service.rs");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = methods_from_values(&notifications);
+        assert!(methods.contains(&"fuzzyFileSearch/sessionUpdated"));
+        assert!(methods.contains(&"fuzzyFileSearch/sessionCompleted"));
+    }
+
+    #[test]
+    fn fuzzy_file_search_rejects_root_outside_service_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![outside.path().to_string_lossy().to_string()],
+        );
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+    }
+
+    #[test]
+    fn fuzzy_file_search_rejects_empty_root() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(&mut server, "cfg", vec![String::new()]);
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fuzzy_file_search_rejects_symlink_root_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("cfg.rs"), "").expect("write outside file");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![
+                root.path()
+                    .join("outside-link")
+                    .to_string_lossy()
+                    .to_string(),
+            ],
+        );
+
+        assert_eq!(value["error"]["data"]["capability"], "search");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fuzzy_file_search_does_not_follow_symlink_entries() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("cfg.rs"), "").expect("write outside file");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside");
+        let mut server = initialized_server_with_root(root.path());
+
+        let value = fuzzy_file_search_json_rpc(
+            &mut server,
+            "cfg",
+            vec![root.path().to_string_lossy().to_string()],
+        );
+
+        assert_eq!(
+            value["result"]["files"]
+                .as_array()
+                .expect("files array")
+                .len(),
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_diff_to_remote_rejects_symlink_cwd_escape() {
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        init_git_fixture(outside.path());
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside-link"))
+            .expect("symlink outside repo");
+
+        let mut server = initialized_server_with_root(root.path());
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":31,"method":"gitDiffToRemote","params":{{"cwd":{}}}}}"#,
+                serde_json::to_string(&root.path().join("outside-link").to_string_lossy())
+                    .expect("cwd json")
+            ))
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "repo");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("outside")
+        );
+    }
+
+    fn init_git_fixture(root: &std::path::Path) {
+        std::fs::write(root.join("src.txt"), "base\n").expect("write base");
+        run_git_fixture(root, &["init"]);
+        run_git_fixture(root, &["config", "user.email", "test@example.com"]);
+        run_git_fixture(root, &["config", "user.name", "Test User"]);
+        run_git_fixture(root, &["add", "."]);
+        run_git_fixture(root, &["commit", "-m", "base"]);
+        let branch = run_git_fixture_output(root, &["branch", "--show-current"])
+            .trim()
+            .to_string();
+        let remote = root.join(".remote.git");
+        let remote_path = remote.to_string_lossy();
+        run_git_fixture(root, &["clone", "--bare", ".", remote_path.as_ref()]);
+        run_git_fixture(root, &["remote", "add", "origin", remote_path.as_ref()]);
+        run_git_fixture(root, &["push", "-u", "origin", &branch]);
+    }
+
+    fn fuzzy_file_search_json_rpc(
+        server: &mut AppServer,
+        query: &str,
+        roots: Vec<String>,
+    ) -> serde_json::Value {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": query,
+                "roots": roots
+            }
+        });
+        let response = server
+            .handle_json_rpc(&request.to_string())
+            .expect("response");
+        serde_json::from_str(&response).expect("json")
+    }
+
+    fn run_git_fixture(root: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .expect("git fixture command");
+        assert!(status.success());
+    }
+
+    fn run_git_fixture_output(root: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git fixture command");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     #[test]
@@ -10152,6 +11375,70 @@ mod tests {
     }
 
     #[test]
+    fn thread_lifecycle_inject_review_mode_items_requires_string_review() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"start","method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+
+        let valid = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"valid","method":"thread/inject_items","params":{"threadId":"thread_1","items":[{"type":"enteredReviewMode","review":"review started"},{"type":"exitedReviewMode","review":"review exited"}]}}"#,
+            )
+            .expect("valid review items should return a response");
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"read","method":"thread/read","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/read should return a response");
+
+        let valid_value: Value = serde_json::from_str(&valid).expect("valid response JSON");
+        let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
+        assert_eq!(valid_value["result"], serde_json::json!({}));
+        let items = read_value["result"]["thread"]["turns"][0]["items"]
+            .as_array()
+            .expect("items array");
+        assert_eq!(items[0]["type"], "enteredReviewMode");
+        assert_eq!(items[0]["review"], "review started");
+        assert_eq!(items[1]["type"], "exitedReviewMode");
+        assert_eq!(items[1]["review"], "review exited");
+
+        for (id, item) in [
+            ("missing", serde_json::json!({"type": "enteredReviewMode"})),
+            (
+                "wrong",
+                serde_json::json!({"type": "exitedReviewMode", "review": 42}),
+            ),
+        ] {
+            let response = server
+                .handle_json_rpc(
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "thread/inject_items",
+                        "params": {
+                            "threadId": "thread_1",
+                            "items": [item]
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("malformed review item should return a response");
+            let value: Value = serde_json::from_str(&response).expect("error response JSON");
+            assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+            assert_eq!(value["error"]["data"]["capability"], "thread_lifecycle");
+            assert!(
+                value["error"]["message"]
+                    .as_str()
+                    .expect("error message")
+                    .contains("review must be a string")
+            );
+        }
+    }
+
+    #[test]
     fn thread_goal_set_get_and_clear_persist_and_emit_notifications() {
         let mut server = initialized_server();
         server
@@ -10276,6 +11563,234 @@ mod tests {
             usage_events[1].params["tokenUsage"]["total"]["outputTokens"],
             6
         );
+    }
+
+    #[test]
+    fn review_start_inline_runs_review_turn_on_existing_thread() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::UncommittedChanges,
+                delivery: None,
+            })
+            .expect("inline review should start");
+
+        assert_eq!(response.review_thread_id, thread.thread_id);
+        assert_eq!(response.turn.status, CodexTurnStatus::InProgress);
+        assert_eq!(response.turn.id, "turn_1");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, response.review_thread_id);
+        assert_eq!(calls[0].turn_id, response.turn.id);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: uncommitted changes")
+        );
+        assert!(calls[0].prompt.contains("Focus on correctness"));
+        assert!(calls[0].prompt.contains("Return findings first"));
+        drop(calls);
+        interrupt_turn(&mut server, response.review_thread_id, response.turn.id);
+    }
+
+    #[test]
+    fn review_start_detached_forks_review_thread() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Detached),
+            })
+            .expect("detached review should start");
+
+        assert_ne!(response.review_thread_id, thread.thread_id);
+        assert_eq!(response.turn.status, CodexTurnStatus::InProgress);
+        let review_thread = server
+            .thread_read(ThreadReadParams {
+                thread_id: response.review_thread_id.clone(),
+            })
+            .expect("review thread should be readable")
+            .thread;
+        assert_eq!(review_thread.forked_from_id, Some(thread.thread_id));
+        assert!(review_thread.ephemeral);
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, response.review_thread_id);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: changes against base branch main")
+        );
+        assert!(calls[0].prompt.contains("file and line references"));
+        drop(calls);
+        interrupt_turn(&mut server, response.review_thread_id, response.turn.id);
+    }
+
+    #[test]
+    fn review_start_rejects_empty_custom_instructions() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let error = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id,
+                target: ReviewTarget::Custom {
+                    instructions: " \n\t ".to_string(),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect_err("empty custom instructions should fail");
+
+        let AppServerError::Protocol { data } = error;
+        assert_eq!(data.capability, Some("review".to_string()));
+        assert!(bridge.calls.lock().expect("calls lock").is_empty());
+    }
+
+    #[test]
+    fn review_start_json_rpc_returns_in_progress_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        let response = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "review",
+                    "method": "review/start",
+                    "params": {
+                        "threadId": thread.thread_id,
+                        "target": {"type": "uncommittedChanges"},
+                        "delivery": "inline"
+                    }
+                })
+                .to_string(),
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review response JSON");
+        assert_eq!(value["result"]["reviewThreadId"], "thread_1");
+        assert_eq!(value["result"]["turn"]["status"], "inProgress");
+        assert_eq!(value["result"]["turn"]["id"], "turn_1");
+        interrupt_turn(&mut server, "thread_1", "turn_1");
+    }
+
+    #[test]
+    fn review_start_json_rpc_reports_review_capability_before_initialize() {
+        let mut server = AppServer::new();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"review","method":"review/start","params":{"threadId":"thread_1","target":{"type":"uncommittedChanges"}}}"#,
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review error JSON");
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "review");
+    }
+
+    #[test]
+    fn review_start_json_rpc_reports_review_capability_for_unknown_thread() {
+        let mut server =
+            initialized_server_with_bridge(Arc::new(RecordingRuntimeBridge::default()));
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"review","method":"review/start","params":{"threadId":"missing","target":{"type":"uncommittedChanges"}}}"#,
+            )
+            .expect("review/start should return a response");
+
+        let value: Value = serde_json::from_str(&response).expect("review error JSON");
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "review");
+    }
+
+    #[test]
+    fn review_start_commit_target_prompt_includes_sha_and_title() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+
+        server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::Commit {
+                    sha: "abc123".to_string(),
+                    title: Some("fix owner routing".to_string()),
+                },
+                delivery: Some(ReviewDelivery::Inline),
+            })
+            .expect("commit review should start");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0]
+                .prompt
+                .contains("Review request: commit abc123: fix owner routing")
+        );
+        drop(calls);
+        interrupt_turn(&mut server, thread.thread_id, "turn_1");
+    }
+
+    #[test]
+    fn review_start_detached_pending_turn_error_uses_review_capability() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let pending = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("leave pending".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let error = server
+            .review_start(ReviewStartParams {
+                thread_id: thread.thread_id.clone(),
+                target: ReviewTarget::UncommittedChanges,
+                delivery: Some(ReviewDelivery::Detached),
+            })
+            .expect_err("detached review should reject pending source thread");
+
+        let AppServerError::Protocol { data } = error;
+        assert_eq!(data.code, ErrorCode::InvalidParams);
+        assert_eq!(data.capability, Some("review".to_string()));
+        assert!(data.message.contains("pending turns"));
+        assert!(!data.retryable);
+        assert!(data.lifecycle.is_none());
+        interrupt_turn(&mut server, thread.thread_id, pending.turn.id);
     }
 
     #[test]
@@ -11696,6 +13211,491 @@ mod tests {
     }
 
     #[test]
+    fn runtime_model_verification_update_emits_notification() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("verify model".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_verification(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            vec![ModelVerification::TrustedAccessForCyber],
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["model/verification"]
+        );
+        assert_eq!(notifications[0]["params"]["threadId"], thread.thread_id);
+        assert_eq!(notifications[0]["params"]["turnId"], turn.turn.id);
+        assert_eq!(
+            notifications[0]["params"]["verifications"],
+            serde_json::json!(["trustedAccessForCyber"])
+        );
+    }
+
+    #[test]
+    fn hook_service_events_drain_to_json_rpc_notifications() {
+        let hook_service = hook_service::AppServerHookService::default();
+        hook_service.push(AppServerHookNotification::Started(
+            HookStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run: sample_hook_run(HookRunStatus::Running),
+            },
+        ));
+        hook_service.push(AppServerHookNotification::Completed(
+            HookCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                run: sample_hook_run(HookRunStatus::Completed),
+            },
+        ));
+        let services = app_services::AppServerServices {
+            hooks: Arc::new(hook_service),
+            ..app_services::AppServerServices::for_tests(
+                app_services::TestLogService::ready(),
+                app_services::TestJobService::ready(vec![]),
+                app_services::TestSkillsService::ready(vec![]),
+                app_services::TestMcpService::ready(vec![]),
+                app_services::TestFsService::disabled(),
+                app_services::TestCommandExecService::disabled(),
+            )
+        };
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["hook/started", "hook/completed"]
+        );
+        assert_eq!(notifications[0]["params"]["run"]["status"], "running");
+        assert_eq!(notifications[0]["params"]["run"]["eventName"], "preToolUse");
+        assert_eq!(notifications[1]["params"]["run"]["status"], "completed");
+        assert_eq!(notifications[1]["params"]["run"]["eventName"], "preToolUse");
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
+    fn real_hook_registry_run_drains_to_json_rpc_notifications() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::passthrough(
+                    "audit",
+                    dasclaw_hooks::HookPoint::BeforeToolCall,
+                )))
+                .await;
+            registry
+                .run(&dasclaw_hooks::HookEvent::ToolCall {
+                    tool_name: "shell.exec".to_string(),
+                    parameters: serde_json::json!({"cmd": "pwd"}),
+                    user_id: "user-1".to_string(),
+                    thread_id: Some("thread-1".to_string()),
+                    turn_id: Some("turn-1".to_string()),
+                    context: "chat".to_string(),
+                })
+                .await
+                .expect("hook run");
+        });
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["hook/started", "hook/completed"]
+        );
+        assert_eq!(notifications[0]["params"]["threadId"], "thread-1");
+        assert_eq!(notifications[0]["params"]["turnId"], "turn-1");
+        assert_eq!(notifications[0]["params"]["run"]["eventName"], "preToolUse");
+        assert_eq!(
+            notifications[0]["params"]["run"]["sourcePath"],
+            "dasclaw://hook/audit"
+        );
+        assert_eq!(notifications[0]["params"]["run"]["status"], "running");
+        assert_eq!(notifications[1]["params"]["run"]["status"], "completed");
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_blocks_rejected_hook_before_fallback() {
+        let runtime = test_tokio_runtime();
+        let hook_service = Arc::new(hook_service::AppServerHookService::wired());
+        let observer: Arc<dyn dasclaw_hooks::HookRunObserver> = hook_service.clone();
+        let registry = Arc::new(dasclaw_hooks::HookRegistry::new().with_observer(observer));
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::rejecting(
+                    "policy",
+                    dasclaw_hooks::HookPoint::BeforeToolCall,
+                    "blocked by policy",
+                )))
+                .await;
+        });
+        let fallback = Arc::new(CountingExecutor::new());
+        let executor = RuntimeClientToolExecutor::new(
+            RuntimeClientRequestContext {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                cwd: PathBuf::from("."),
+                updates: RuntimeTurnUpdateSink::new(),
+                pending_requests: Arc::new(Mutex::new(HashMap::new())),
+                hook_registry: Some(registry),
+            },
+            Some(fallback.clone()),
+        );
+        let call = ToolCall {
+            id: "call-1".to_string(),
+            name: "shell.exec".to_string(),
+            arguments: serde_json::json!({"cmd": "pwd"}),
+            reasoning: None,
+        };
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("tool executor should return hook rejection as tool result")
+        });
+        let notifications =
+            app_services::HookNotificationService::drain_hook_notifications(&*hook_service);
+
+        assert!(result.is_error);
+        assert_eq!(result.content, "blocked by policy");
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert_eq!(notifications.len(), 2);
+        let AppServerHookNotification::Completed(completed) = &notifications[1] else {
+            panic!("second hook notification should be completed");
+        };
+        assert_eq!(completed.thread_id, "thread-1");
+        assert_eq!(completed.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(
+            completed.run.status_message.as_deref(),
+            Some("blocked by policy")
+        );
+        assert_eq!(completed.run.entries[0].kind, HookOutputEntryKind::Stop);
+    }
+
+    #[test]
+    fn warning_service_events_drain_to_json_rpc_notifications() {
+        let hook_service = hook_service::AppServerHookService::default();
+        hook_service.push(AppServerHookNotification::Warning(WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "general warning".to_string(),
+        }));
+        hook_service.push(AppServerHookNotification::ConfigWarning(
+            ConfigWarningNotification {
+                summary: "unsupported config key".to_string(),
+                details: Some("experimental.foo is ignored".to_string()),
+                path: Some("/tmp/config.json".to_string()),
+                range: None,
+            },
+        ));
+        let services = app_services::AppServerServices {
+            hooks: Arc::new(hook_service),
+            ..app_services::AppServerServices::for_tests(
+                app_services::TestLogService::ready(),
+                app_services::TestJobService::ready(vec![]),
+                app_services::TestSkillsService::ready(vec![]),
+                app_services::TestMcpService::ready(vec![]),
+                app_services::TestFsService::disabled(),
+                app_services::TestCommandExecService::disabled(),
+            )
+        };
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["warning", "configWarning"]
+        );
+        assert_eq!(notifications[0]["params"]["message"], "general warning");
+        assert_eq!(
+            notifications[1]["params"]["summary"],
+            "unsupported config key"
+        );
+        assert_eq!(
+            notifications[1]["params"]["details"],
+            "experimental.foo is ignored"
+        );
+        assert_eq!(notifications[1]["params"]["path"], "/tmp/config.json");
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
+    fn initialize_emits_config_warning_and_deprecation_for_startup_config() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(
+            tempdir.path(),
+            serde_json::json!({
+                "model": "gpt-test",
+                "unknown_key": true,
+                "experimental_instructions_file": "legacy.md"
+            }),
+        );
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let mut server =
+            AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        let methods = methods_from_values(&notifications);
+        assert!(methods.contains(&"configWarning"));
+        assert!(methods.contains(&"deprecationNotice"));
+        let config_warning = notifications
+            .iter()
+            .find(|notification| notification["method"] == "configWarning")
+            .expect("config warning notification");
+        assert_eq!(
+            config_warning["params"]["summary"],
+            "unsupported config key"
+        );
+        assert!(
+            config_warning["params"]["details"]
+                .as_str()
+                .expect("details")
+                .contains("unknown_key")
+        );
+        let deprecation = notifications
+            .iter()
+            .find(|notification| notification["method"] == "deprecationNotice")
+            .expect("deprecation notice notification");
+        assert_eq!(
+            deprecation["params"]["summary"],
+            "experimental_instructions_file"
+        );
+    }
+
+    #[test]
+    fn config_service_collects_warning_for_unknown_config_key() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(tempdir.path(), serde_json::json!({"unknown_key": true}));
+        let service =
+            crate::config_service::AppServerConfigService::new(tempdir.path().to_path_buf());
+
+        app_services::ConfigService::read(
+            &service,
+            ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            },
+        )
+        .expect("config read should succeed");
+        let warnings = service.drain_config_warnings();
+
+        assert_eq!(warnings.len(), 1);
+        let AppServerHookNotification::ConfigWarning(warning) = &warnings[0] else {
+            panic!("expected config warning");
+        };
+        assert_eq!(warning.summary, "unsupported config key");
+        assert!(
+            warning
+                .details
+                .as_deref()
+                .expect("details")
+                .contains("unknown_key")
+        );
+    }
+
+    #[test]
+    fn capabilities_advertise_ready_r6_config_warning_producers_only() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut server = initialized_server_with_root(tempdir.path());
+
+        let capabilities = server.capabilities().capabilities;
+
+        assert_eq!(capabilities.hooks.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.warnings.status, CapabilityStatus::Implemented);
+        assert!(
+            capabilities
+                .warnings
+                .events
+                .contains(&event::CONFIG_WARNING.to_string())
+        );
+        assert!(
+            capabilities
+                .warnings
+                .events
+                .contains(&event::DEPRECATION_NOTICE.to_string())
+        );
+        assert!(
+            !capabilities
+                .warnings
+                .events
+                .contains(&event::WARNING.to_string())
+        );
+        assert!(
+            !capabilities
+                .warnings
+                .events
+                .contains(&event::GUARDIAN_WARNING.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_REROUTED.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_VERIFICATION.to_string())
+        );
+    }
+
+    #[test]
+    fn provider_runtime_bridge_does_not_advertise_model_events_without_trusted_reasons() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let mut server = AppServer::with_runtime_bridge(Arc::new(
+            DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
+        ))
+        .with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+
+        let capabilities = server.capabilities().capabilities;
+
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_REROUTED.to_string())
+        );
+        assert!(
+            !capabilities
+                .model_provider
+                .events
+                .contains(&event::MODEL_VERIFICATION.to_string())
+        );
+    }
+
+    #[test]
+    fn runtime_model_reroute_update_emits_notification() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("reroute model".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_rerouted(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            "gpt-test".to_string(),
+            "gpt-next".to_string(),
+            ModelRerouteReason::HighRiskCyberActivity,
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(methods_from_values(&notifications), vec!["model/rerouted"]);
+        assert_eq!(notifications[0]["params"]["threadId"], thread.thread_id);
+        assert_eq!(notifications[0]["params"]["turnId"], turn.turn.id);
+        assert_eq!(notifications[0]["params"]["fromModel"], "gpt-test");
+        assert_eq!(notifications[0]["params"]["toModel"], "gpt-next");
+        assert_eq!(
+            notifications[0]["params"]["reason"],
+            "highRiskCyberActivity"
+        );
+    }
+
+    #[test]
+    fn runtime_model_update_ignores_stale_turn() {
+        let mut server = initialized_server();
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("complete before stale update".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_json_rpc_notifications();
+        server.runtime_turn_updates.complete(
+            thread.thread_id.clone(),
+            turn.turn.id.clone(),
+            "done".to_string(),
+        );
+        let _ = server.drain_json_rpc_notifications();
+
+        server.runtime_turn_updates.model_rerouted(
+            thread.thread_id,
+            turn.turn.id,
+            "gpt-test".to_string(),
+            "gpt-next".to_string(),
+            ModelRerouteReason::HighRiskCyberActivity,
+        );
+
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
     fn interrupt_turn_invokes_runtime_bridge_before_recording_interrupted_turn() {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
@@ -11801,6 +13801,7 @@ mod tests {
                     reasoning_summary: ReasoningSummary::None,
                     sandbox_context: RuntimeSandboxContext::empty(),
                     updates: RuntimeTurnUpdateSink::new(),
+                    hook_registry: None,
                 })
                 .expect_err("test factory should stop before spawning");
             assert_eq!(error.message, "test factory stops before run");
@@ -11837,6 +13838,7 @@ mod tests {
                     ),
                 },
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("real runtime bridge must reject unenforced sandbox context");
 
@@ -11877,6 +13879,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::Concise,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("test factory should stop before spawning");
 
@@ -11952,6 +13955,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12001,6 +14005,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12021,6 +14026,127 @@ mod tests {
             &updates[2].outcome,
             RuntimeTurnOutcome::Completed { output } if output == "usage bridge path"
         ));
+    }
+
+    #[test]
+    fn runtime_completed_event_does_not_infer_high_risk_reroute_from_actual_model_metadata() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "actual model differs",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-next".to_string()),
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let _turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification["method"] != "model/rerouted"),
+            "actual_model alone should not emit high-risk model/rerouted: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_completed_event_emits_model_verification_from_response_metadata() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "verified",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-test".to_string()),
+                        model_verifications: vec![ResponseModelVerification::TrustedAccessForCyber],
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        let verification = notifications
+            .iter()
+            .find(|notification| notification["method"] == "model/verification")
+            .expect("model/verification notification");
+
+        assert_eq!(verification["params"]["threadId"], thread.thread_id);
+        assert_eq!(verification["params"]["turnId"], turn.turn.id);
+        assert_eq!(
+            verification["params"]["verifications"],
+            serde_json::json!(["trustedAccessForCyber"])
+        );
+    }
+
+    #[test]
+    fn runtime_same_model_metadata_does_not_emit_reroute() {
+        let bridge =
+            DasclawAgentRuntimeBridge::from_responder(Arc::new(ScriptedResponder::new(vec![
+                text_output_with_metadata(
+                    "same model",
+                    ResponseMetadata {
+                        actual_model: Some("gpt-test".to_string()),
+                        ..ResponseMetadata::default()
+                    },
+                ),
+            ])));
+        let mut server = initialized_server_with_bridge(Arc::new(bridge));
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification["method"] != "model/rerouted"),
+            "same-model metadata should not emit model/rerouted: {notifications:?}"
+        );
     }
 
     #[test]
@@ -12062,6 +14188,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12167,6 +14294,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12269,6 +14397,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12391,6 +14520,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -12475,6 +14605,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13068,6 +15199,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13153,6 +15285,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13237,6 +15370,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: updates.clone(),
+                hook_registry: None,
             })
             .expect("turn should start");
 
@@ -13306,6 +15440,7 @@ mod tests {
                 reasoning_summary: ReasoningSummary::None,
                 sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
             })
             .expect_err("unknown api format should be rejected before spawning");
 
@@ -14893,6 +17028,71 @@ mod tests {
         initialized_server_with_bridge(Arc::new(NoopRuntimeBridge))
     }
 
+    fn initialized_server_with_root(root: &std::path::Path) -> AppServer {
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(root.to_path_buf());
+        let mut server =
+            AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_notifications();
+        server
+    }
+
+    fn initialized_server_with_thread_snapshot(
+        root: &std::path::Path,
+        snapshot_path: &std::path::Path,
+        snapshot: serde_json::Value,
+    ) -> AppServer {
+        fs::write(
+            snapshot_path,
+            serde_json::to_vec_pretty(&snapshot).expect("snapshot json"),
+        )
+        .expect("write thread snapshot");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(root.to_path_buf());
+        let mut server = AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge))
+            .with_app_services(services)
+            .with_thread_snapshot_path(snapshot_path)
+            .expect("thread snapshot should load");
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_notifications();
+        server
+    }
+
+    fn write_app_server_config(root: &Path, value: serde_json::Value) {
+        let dir = root.join(".dasclaw");
+        fs::create_dir_all(&dir).expect("config dir");
+        fs::write(
+            dir.join("app-server-config.json"),
+            serde_json::to_vec_pretty(&value).expect("config json"),
+        )
+        .expect("write config");
+    }
+
     fn create_completed_thread_with_turns(server: &mut AppServer, count: usize) -> String {
         let thread = server
             .thread_start(ThreadStartParams {
@@ -15138,6 +17338,59 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
         }
     }
 
+    fn sample_hook_run(status: HookRunStatus) -> HookRunSummary {
+        HookRunSummary {
+            id: "hook-run-1".to_string(),
+            event_name: HookEventName::PreToolUse,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Turn,
+            source_path: "/tmp/hook.sh".to_string(),
+            source: HookSource::Project,
+            display_order: 1,
+            status,
+            status_message: None,
+            started_at: 1,
+            completed_at: Some(2),
+            duration_ms: Some(1),
+            entries: vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "check this".to_string(),
+            }],
+        }
+    }
+
+    fn test_tokio_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime")
+    }
+
+    struct TestHook {
+        name: String,
+        points: Vec<dasclaw_hooks::HookPoint>,
+        rejection: Option<String>,
+    }
+
+    impl TestHook {
+        fn passthrough(name: &str, point: dasclaw_hooks::HookPoint) -> Self {
+            Self {
+                name: name.to_string(),
+                points: vec![point],
+                rejection: None,
+            }
+        }
+
+        fn rejecting(name: &str, point: dasclaw_hooks::HookPoint, reason: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                points: vec![point],
+                rejection: Some(reason.to_string()),
+            }
+        }
+    }
+
     fn write_fixture_http_response(
         stream: &mut std::net::TcpStream,
         content_type: &str,
@@ -15150,6 +17403,28 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
         stream
             .write_all(response.as_bytes())
             .expect("fixture server should write response");
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_hooks::Hook for TestHook {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn hook_points(&self) -> &[dasclaw_hooks::HookPoint] {
+            &self.points
+        }
+
+        async fn execute(
+            &self,
+            _event: &dasclaw_hooks::HookEvent,
+            _ctx: &dasclaw_hooks::HookContext,
+        ) -> Result<dasclaw_hooks::HookOutcome, dasclaw_hooks::HookError> {
+            match &self.rejection {
+                Some(reason) => Ok(dasclaw_hooks::HookOutcome::reject(reason.clone())),
+                None => Ok(dasclaw_hooks::HookOutcome::ok()),
+            }
+        }
     }
 
     fn replace_file_with_directory(path: &Path) {
@@ -15170,6 +17445,19 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
 
     fn image_input(url: impl Into<String>) -> Vec<dasclaw_app_server_protocol::UserInput> {
         vec![dasclaw_app_server_protocol::UserInput::Image { url: url.into() }]
+    }
+
+    fn interrupt_turn(
+        server: &mut AppServer,
+        thread_id: impl Into<String>,
+        turn_id: impl Into<String>,
+    ) {
+        server
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: thread_id.into(),
+                turn_id: turn_id.into(),
+            })
+            .expect("turn should interrupt");
     }
 
     fn assert_turn_status_and_ready(
@@ -15208,6 +17496,8 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
             CodexThreadItem::AgentMessage { text, .. } if !text.is_empty() => Some(text.clone()),
             CodexThreadItem::AgentMessage { .. } => None,
             CodexThreadItem::Reasoning { .. } => None,
+            CodexThreadItem::EnteredReviewMode { .. } => None,
+            CodexThreadItem::ExitedReviewMode { .. } => None,
         })
     }
 
@@ -15373,6 +17663,15 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
             usage,
             finish_reason: FinishReason::Stop,
             metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn text_output_with_metadata(text: &str, metadata: ResponseMetadata) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::Text(text.to_string()),
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::Stop,
+            metadata,
         }
     }
 
@@ -15585,6 +17884,7 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                 auto_approval_review: true,
                 thread_compact: false,
                 turn_steer: false,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 
@@ -15630,6 +17930,7 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                 auto_approval_review: true,
                 thread_compact: false,
                 turn_steer: false,
+                ..RuntimeBridgeFeatures::default()
             }
         }
 
@@ -16100,6 +18401,26 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                     request.thread_id.clone(),
                     request.turn_id.clone(),
                     usage,
+                );
+            }
+            RuntimeTurnOutcome::ModelRerouted {
+                from_model,
+                to_model,
+                reason,
+            } => {
+                request.updates.model_rerouted(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    from_model,
+                    to_model,
+                    reason,
+                );
+            }
+            RuntimeTurnOutcome::ModelVerification { verifications } => {
+                request.updates.model_verification(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    verifications,
                 );
             }
             RuntimeTurnOutcome::Completed { output } => {

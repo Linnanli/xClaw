@@ -10,6 +10,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use async_trait::async_trait;
+use dasclaw_core::response_types::ResponseMetadata;
 use rust_decimal::Decimal;
 
 use crate::provider::error::LlmError;
@@ -144,8 +145,32 @@ impl LlmProvider for StubLlm {
             input_tokens: 10,
             output_tokens: 5,
             finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata {
+                actual_model: Some(self.model_name.clone()),
+                ..ResponseMetadata::default()
+            },
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn tool_completion_response_carries_actual_model_metadata() {
+        let provider = StubLlm::new("ok").with_model_name("stub-actual-model");
+
+        let response = provider
+            .complete_with_tools(ToolCompletionRequest::new(Vec::new(), Vec::new()))
+            .await
+            .expect("stub response");
+
+        assert_eq!(
+            response.metadata.actual_model.as_deref(),
+            Some("stub-actual-model")
+        );
     }
 }
