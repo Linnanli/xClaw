@@ -35,7 +35,10 @@ impl AppServerHookService {
 
 impl HookNotificationService for AppServerHookService {
     fn health(&self) -> ServiceHealth {
-        ServiceHealth::ready(ServiceName::Hooks)
+        ServiceHealth::disabled(
+            ServiceName::Hooks,
+            "hook notification producer is not wired",
+        )
     }
 
     fn drain_hook_notifications(&self) -> Vec<AppServerHookNotification> {

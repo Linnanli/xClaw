@@ -6204,6 +6204,21 @@ mod tests {
     }
 
     #[test]
+    fn real_r6_services_do_not_advertise_unwired_notification_producers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let server = initialized_server_with_root(temp.path());
+        let capabilities = &server.capabilities;
+
+        assert_eq!(capabilities.config.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.repo.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.search.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.review.status, CapabilityStatus::Implemented);
+        assert!(capabilities.model_provider.events.is_empty());
+        assert_eq!(capabilities.hooks.status, CapabilityStatus::Declared);
+        assert_eq!(capabilities.warnings.status, CapabilityStatus::Declared);
+    }
+
+    #[test]
     fn runtime_features_gate_r1_capability_advertising() {
         let bridge = Arc::new(R1RuntimeBridge::default());
         let server = initialized_server_with_bridge(bridge);
@@ -6541,6 +6556,21 @@ mod tests {
                 .expect("message")
                 .contains("not writable")
         );
+    }
+
+    #[test]
+    fn config_write_rejects_version_mismatch_with_stable_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_app_server_config(temp.path(), serde_json::json!({"model": "gpt-test"}));
+        let mut server = initialized_server_with_root(temp.path());
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":12,"method":"config/value/write","params":{"keyPath":"model","value":"gpt-next","mergeStrategy":"replace","expectedVersion":"stale-version"}}"#,
+            )
+            .expect("response");
+        let value: serde_json::Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(value["error"]["data"]["capability"], "config");
+        assert_eq!(value["error"]["message"], "config version mismatch");
     }
 
     #[test]

@@ -8,6 +8,10 @@
 
 **Tech Stack:** Rust 2024, serde/serde_json, tokio current-thread blocking worker pattern already used by app-server services, existing Dasclaw crates (`dasclaw_app_server_protocol`, `dasclaw_app_server`, `dasclaw_fs_tools`, `dasclaw_git_tools`, `dasclaw_hooks`, `dasclaw_core`), cargo nextest, cargo fmt, project panic scan.
 
+## Post-Review Status
+
+Independent review on 2026-06-24 found that the config, repo diff, fuzzy search, conversation summary, and review-start owner slices are implemented and tested, but the model and hook/warning notification slices are only protocol/drain wiring so far. `model/rerouted` / `model/verification` still need a real app-server producer and readiness advertisement before they can be marked complete. `hook/started` / `hook/completed` / warning events still need a real `dasclaw_hooks::HookRegistry` or warning source integration before they can be advertised as implemented. The gap matrix therefore strikes through only the completed R6 subitems and keeps those producer follow-ups open.
+
 ---
 
 ## Start Gate

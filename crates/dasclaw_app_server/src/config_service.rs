@@ -211,7 +211,7 @@ impl ConfigService for AppServerConfigService {
         {
             return Err(AppServerError::invalid_request(
                 CAPABILITY,
-                "expectedVersion does not match current config version",
+                "config version mismatch",
             ));
         }
 
