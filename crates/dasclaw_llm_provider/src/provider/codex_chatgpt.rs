@@ -22,14 +22,15 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::codex_auth;
 use crate::provider::error::LlmError;
 
 use super::provider::{
-    ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
-    Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
+    ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmPlanStep,
+    LlmPlanStepStatus, LlmProvider, LlmStream, LlmStreamEvent, Role, ToolCall,
+    ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
 
 /// Provider that speaks the Responses API protocol against the ChatGPT backend.
@@ -344,7 +345,7 @@ impl CodexChatGptProvider {
     ///
     /// On HTTP 401, if a refresh token is available, attempts to refresh
     /// the access token and retry the request once.
-    async fn send_request(&self, body: Value) -> Result<ResponsesResult, LlmError> {
+    async fn send_responses_request(&self, body: &Value) -> Result<reqwest::Response, LlmError> {
         let url = format!("{}/responses", self.base_url);
 
         tracing::debug!(
@@ -389,7 +390,7 @@ impl CodexChatGptProvider {
                             ),
                         });
                     }
-                    return Self::parse_sse_response_stream(retry_resp, self.request_timeout).await;
+                    return Ok(retry_resp);
                 }
 
                 tracing::info!("Received 401, attempting token refresh");
@@ -426,7 +427,7 @@ impl CodexChatGptProvider {
                         });
                     }
 
-                    return Self::parse_sse_response_stream(retry_resp, self.request_timeout).await;
+                    return Ok(retry_resp);
                 } else {
                     tracing::warn!(
                         "Token refresh failed. Please re-authenticate with: codex --login"
@@ -454,6 +455,11 @@ impl CodexChatGptProvider {
             });
         }
 
+        Ok(resp)
+    }
+
+    async fn send_request(&self, body: Value) -> Result<ResponsesResult, LlmError> {
+        let resp = self.send_responses_request(&body).await?;
         Self::parse_sse_response_stream(resp, self.request_timeout).await
     }
 
@@ -487,12 +493,35 @@ impl CodexChatGptProvider {
         let stream = resp
             .bytes_stream()
             .map(|chunk| chunk.map_err(|e| e.to_string()));
-        Self::parse_sse_stream(stream, idle_timeout).await
+        Self::parse_sse_stream_inner(stream, idle_timeout, None).await
     }
 
+    async fn parse_sse_response_stream_with_events(
+        resp: reqwest::Response,
+        idle_timeout: Duration,
+        event_tx: &mpsc::Sender<Result<LlmStreamEvent, LlmError>>,
+    ) -> Result<ResponsesResult, LlmError> {
+        let stream = resp
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|e| e.to_string()));
+        Self::parse_sse_stream_inner(stream, idle_timeout, Some(event_tx)).await
+    }
+
+    #[cfg(test)]
     async fn parse_sse_stream<S>(
         stream: S,
         idle_timeout: Duration,
+    ) -> Result<ResponsesResult, LlmError>
+    where
+        S: Stream<Item = Result<bytes::Bytes, String>> + Unpin,
+    {
+        Self::parse_sse_stream_inner(stream, idle_timeout, None).await
+    }
+
+    async fn parse_sse_stream_inner<S>(
+        stream: S,
+        idle_timeout: Duration,
+        event_tx: Option<&mpsc::Sender<Result<LlmStreamEvent, LlmError>>>,
     ) -> Result<ResponsesResult, LlmError>
     where
         S: Stream<Item = Result<bytes::Bytes, String>> + Unpin,
@@ -513,7 +542,18 @@ impl CodexChatGptProvider {
                         Err(_) => continue,
                     };
 
-                    if Self::handle_sse_event(&mut result, event.event.as_str(), &parsed) {
+                    let r5_start = result.r5_events.len();
+                    let completed =
+                        Self::handle_sse_event(&mut result, event.event.as_str(), &parsed);
+                    if let Some(event_tx) = event_tx {
+                        let new_events = result.r5_events.drain(r5_start..).collect::<Vec<_>>();
+                        for event in new_events {
+                            if event_tx.send(Ok(event)).await.is_err() {
+                                return Ok(result);
+                            }
+                        }
+                    }
+                    if completed {
                         return Ok(result);
                     }
                 }
@@ -576,6 +616,23 @@ impl CodexChatGptProvider {
                     result.text.push_str(delta);
                 }
             }
+            "response.reasoning_text.delta" | "response.reasoning_content.delta" => {
+                if let Some(delta) = parsed.get("delta").and_then(|d| d.as_str()) {
+                    result
+                        .r5_events
+                        .push(LlmStreamEvent::ReasoningRawTextDelta {
+                            item_id: parsed
+                                .get("item_id")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                            content_index: parsed
+                                .get("content_index")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                            delta: delta.to_string(),
+                        });
+                }
+            }
             "response.output_item.added" => {
                 // Capture function call metadata when the item is first added.
                 // The item has: id (item_id), call_id, name, type.
@@ -607,6 +664,13 @@ impl CodexChatGptProvider {
                         });
                 }
             }
+            "response.output_item.done" | "response.output_item.completed" => {
+                if let Some(item) = parsed.get("item") {
+                    result
+                        .r5_events
+                        .push(LlmStreamEvent::RawResponseItemCompleted { item: item.clone() });
+                }
+            }
             "response.function_call_arguments.delta" => {
                 // Delta events use `item_id` (not `call_id`)
                 if let Some(item_id) = parsed.get("item_id").and_then(|v| v.as_str())
@@ -614,6 +678,34 @@ impl CodexChatGptProvider {
                     && let Some(delta) = parsed.get("delta").and_then(|d| d.as_str())
                 {
                     entry.arguments.push_str(delta);
+                }
+            }
+            "turn.plan.updated" => {
+                // Upstream must provide a real turn-level plan event. Do not
+                // synthesize plans from ordinary assistant text.
+                let plan = parsed
+                    .get("plan")
+                    .and_then(parse_plan_steps)
+                    .unwrap_or_default();
+                if !plan.is_empty() {
+                    result.r5_events.push(LlmStreamEvent::TurnPlanUpdated {
+                        explanation: parsed
+                            .get("explanation")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        plan,
+                    });
+                }
+            }
+            "turn.diff.updated" => {
+                // Upstream must provide a real turn-level diff event. Do not
+                // synthesize diffs from ordinary assistant text.
+                if let Some(diff) = parsed.get("diff").and_then(|v| v.as_str()) {
+                    if !diff.is_empty() {
+                        result
+                            .r5_events
+                            .push(LlmStreamEvent::TurnDiffUpdated { diff: diff.into() });
+                    }
                 }
             }
             "response.completed" => {
@@ -656,6 +748,70 @@ impl CodexChatGptProvider {
             other => other,
         }
     }
+
+    fn tool_completion_from_responses_result(result: ResponsesResult) -> ToolCompletionResponse {
+        let tool_calls: Vec<ToolCall> = result
+            .pending_tool_calls
+            .into_values()
+            .map(|tc| {
+                let args: Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!(tc.arguments));
+                // gpt-5.2-codex fills optional parameters with empty strings (e.g.
+                // `"timestamp": ""`), which IronClaw's tool validation rejects.
+                // Strip them so only actually-provided values reach the tool.
+                let args = Self::strip_empty_string_values(args);
+                ToolCall {
+                    id: tc.call_id,
+                    name: tc.name,
+                    arguments: args,
+                    reasoning: None,
+                }
+            })
+            .collect();
+
+        let finish_reason = if tool_calls.is_empty() {
+            FinishReason::Stop
+        } else {
+            FinishReason::ToolUse
+        };
+
+        ToolCompletionResponse {
+            content: if result.text.is_empty() {
+                None
+            } else {
+                Some(result.text)
+            },
+            reasoning: None,
+            tool_calls,
+            input_tokens: result.input_tokens,
+            output_tokens: result.output_tokens,
+            finish_reason,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        }
+    }
+}
+
+fn parse_plan_steps(value: &Value) -> Option<Vec<LlmPlanStep>> {
+    let steps = value.as_array()?;
+    Some(
+        steps
+            .iter()
+            .filter_map(|step| {
+                let text = step.get("step").and_then(|v| v.as_str())?;
+                let status = match step.get("status").and_then(|v| v.as_str()) {
+                    Some("pending") => LlmPlanStepStatus::Pending,
+                    Some("inProgress") => LlmPlanStepStatus::InProgress,
+                    Some("completed") => LlmPlanStepStatus::Completed,
+                    _ => return None,
+                };
+                Some(LlmPlanStep {
+                    step: text.to_string(),
+                    status,
+                })
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Default)]
@@ -663,6 +819,7 @@ struct ResponsesResult {
     text: String,
     /// Keyed by item_id (the SSE item identifier, e.g. "fc_...").
     pending_tool_calls: std::collections::HashMap<String, PendingToolCall>,
+    r5_events: Vec<LlmStreamEvent>,
     input_tokens: u32,
     output_tokens: u32,
 }
@@ -718,45 +875,40 @@ impl LlmProvider for CodexChatGptProvider {
         );
         let result = self.send_request(body).await?;
 
-        let tool_calls: Vec<ToolCall> = result
-            .pending_tool_calls
-            .into_values()
-            .map(|tc| {
-                let args: Value =
-                    serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!(tc.arguments));
-                // gpt-5.2-codex fills optional parameters with empty strings (e.g.
-                // `"timestamp": ""`), which IronClaw's tool validation rejects.
-                // Strip them so only actually-provided values reach the tool.
-                let args = Self::strip_empty_string_values(args);
-                ToolCall {
-                    id: tc.call_id,
-                    name: tc.name,
-                    arguments: args,
-                    reasoning: None,
+        Ok(Self::tool_completion_from_responses_result(result))
+    }
+
+    async fn stream_with_tools(
+        &self,
+        request: ToolCompletionRequest,
+    ) -> Result<LlmStream, LlmError> {
+        let model = self.resolve_model().await;
+        let body = self.build_request_body(
+            model,
+            &request.messages,
+            &request.tools,
+            request.tool_choice.as_deref(),
+        );
+        let resp = self.send_responses_request(&body).await?;
+        let idle_timeout = self.request_timeout;
+        let (event_tx, event_rx) =
+            tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(16);
+
+        tokio::spawn(async move {
+            match Self::parse_sse_response_stream_with_events(resp, idle_timeout, &event_tx).await {
+                Ok(result) => {
+                    let completed = Self::tool_completion_from_responses_result(result);
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::Completed(completed)))
+                        .await;
                 }
-            })
-            .collect();
+                Err(error) => {
+                    let _ = event_tx.send(Err(error)).await;
+                }
+            }
+        });
 
-        let finish_reason = if tool_calls.is_empty() {
-            FinishReason::Stop
-        } else {
-            FinishReason::ToolUse
-        };
-
-        Ok(ToolCompletionResponse {
-            content: if result.text.is_empty() {
-                None
-            } else {
-                Some(result.text)
-            },
-            reasoning: None,
-            tool_calls,
-            input_tokens: result.input_tokens,
-            output_tokens: result.output_tokens,
-            finish_reason,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-        })
+        Ok(LlmStream::new(event_rx))
     }
 }
 
@@ -765,6 +917,8 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use futures::stream;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_message_conversion_user() {
@@ -899,6 +1053,250 @@ data: {"response":{"usage":{"input_tokens":20,"output_tokens":15}}}
         assert_eq!(tc.arguments, "{\"query\":\"rust\"}");
     }
 
+    #[test]
+    fn codex_chatgpt_fixture_emits_raw_response_item_completed() {
+        let sse = r#"event: response.output_item.done
+data: {"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}
+
+"#;
+
+        let result = CodexChatGptProvider::parse_sse_response(sse).unwrap();
+        assert!(result.r5_events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::RawResponseItemCompleted { item }
+                    if item["id"] == "msg_1" && item["type"] == "message"
+            )
+        }));
+    }
+
+    #[test]
+    fn codex_chatgpt_fixture_emits_reasoning_raw_text_delta() {
+        let sse = r#"event: response.reasoning_text.delta
+data: {"item_id":"rs_1","content_index":2,"delta":"raw step"}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}
+
+"#;
+
+        let result = CodexChatGptProvider::parse_sse_response(sse).unwrap();
+        assert!(result.r5_events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::ReasoningRawTextDelta {
+                    item_id: Some(item_id),
+                    content_index: 2,
+                    delta,
+                } if item_id == "rs_1" && delta == "raw step"
+            )
+        }));
+    }
+
+    #[test]
+    fn provider_fixture_emits_plan_or_diff_only_when_source_event_exists() {
+        let text_only_sse = r#"event: response.output_text.delta
+data: {"delta":"Plan: do not synthesize this into a turn plan\nDiff: not an upstream diff event"}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}
+
+"#;
+
+        let text_only_result = CodexChatGptProvider::parse_sse_response(text_only_sse).unwrap();
+        assert!(text_only_result.r5_events.iter().all(|event| {
+            !matches!(
+                event,
+                LlmStreamEvent::PlanDelta { .. }
+                    | LlmStreamEvent::TurnPlanUpdated { .. }
+                    | LlmStreamEvent::TurnDiffUpdated { .. }
+            )
+        }));
+
+        let event_source_sse = r#"event: turn.plan.updated
+data: {"explanation":"need two steps","plan":[{"step":"inspect","status":"completed"},{"step":"patch","status":"inProgress"}]}
+
+event: turn.diff.updated
+data: {"diff":"diff --git a/file b/file\n+added\n"}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}
+
+"#;
+
+        let event_source_result =
+            CodexChatGptProvider::parse_sse_response(event_source_sse).unwrap();
+        assert!(event_source_result.r5_events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::TurnPlanUpdated { explanation, plan }
+                    if explanation.as_deref() == Some("need two steps") && plan.len() == 2
+            )
+        }));
+        assert!(event_source_result.r5_events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::TurnDiffUpdated { diff }
+                    if diff.contains("diff --git") && diff.contains("+added")
+            )
+        }));
+
+        let empty_diff_sse = r#"event: turn.diff.updated
+data: {"diff":""}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":1,"output_tokens":1}}}
+
+"#;
+
+        let empty_diff_result = CodexChatGptProvider::parse_sse_response(empty_diff_sse).unwrap();
+        assert!(
+            empty_diff_result
+                .r5_events
+                .iter()
+                .all(|event| !matches!(event, LlmStreamEvent::TurnDiffUpdated { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_chatgpt_stream_with_tools_emits_r5_events_from_http_responses_sse() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "models": [{"slug": "gpt-4o"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let sse = r#"event: response.reasoning_text.delta
+data: {"item_id":"rs_1","content_index":2,"delta":"raw step"}
+
+event: response.output_item.done
+data: {"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+
+event: turn.plan.updated
+data: {"explanation":"provider event","plan":[{"step":"inspect","status":"completed"},{"step":"patch","status":"inProgress"}]}
+
+event: turn.diff.updated
+data: {"diff":"diff --git a/file b/file\n+added\n"}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
+
+"#;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = CodexChatGptProvider::new(&server.uri(), "key", "gpt-4o");
+        let request = ToolCompletionRequest::new(vec![ChatMessage::user("hello")], vec![]);
+        let mut stream = provider.stream_with_tools(request).await.unwrap();
+        let mut events = Vec::new();
+
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            let is_completed = matches!(event, LlmStreamEvent::Completed(_));
+            events.push(event);
+            if is_completed {
+                break;
+            }
+        }
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::ReasoningRawTextDelta {
+                    item_id: Some(item_id),
+                    content_index: 2,
+                    delta,
+                } if item_id == "rs_1" && delta == "raw step"
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::RawResponseItemCompleted { item }
+                    if item["id"] == "msg_1" && item["type"] == "message"
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::TurnPlanUpdated { explanation, plan }
+                    if explanation.as_deref() == Some("provider event") && plan.len() == 2
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::TurnDiffUpdated { diff }
+                    if diff.contains("diff --git") && diff.contains("+added")
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::Completed(response)
+                    if response.input_tokens == 3 && response.output_tokens == 2
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn codex_chatgpt_stream_with_tools_yields_r5_events_before_response_completed() {
+        let (base_url, release_completed) = spawn_delayed_responses_fixture_server();
+        let provider = CodexChatGptProvider::new(&base_url, "key", "gpt-4o");
+        let request = ToolCompletionRequest::new(vec![ChatMessage::user("hello")], vec![]);
+
+        let stream_result =
+            tokio::time::timeout(Duration::from_secs(1), provider.stream_with_tools(request)).await;
+        let mut stream = stream_result
+            .expect("stream_with_tools should return before response.completed")
+            .expect("stream should be created");
+
+        let first_event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("first stream event should arrive before response.completed")
+            .expect("stream should yield an event")
+            .expect("first stream event should be ok");
+        assert!(matches!(
+            first_event,
+            LlmStreamEvent::TurnPlanUpdated { explanation, plan }
+                if explanation.as_deref() == Some("delayed plan")
+                    && plan.len() == 1
+                    && plan[0].step == "inspect"
+        ));
+
+        release_completed
+            .send(())
+            .expect("fixture should still be waiting to release completion");
+        let completed = tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(event) = stream.next().await {
+                let event = event?;
+                if matches!(event, LlmStreamEvent::Completed(_)) {
+                    return Ok::<(), LlmError>(());
+                }
+            }
+            Err(LlmError::InvalidResponse {
+                provider: "codex_chatgpt".to_string(),
+                reason: "stream ended before completion".to_string(),
+            })
+        })
+        .await
+        .expect("completion should arrive after fixture release");
+        completed.expect("completion event should be ok");
+    }
+
     #[tokio::test]
     async fn test_parse_sse_stream_response() {
         let stream = stream::iter(vec![
@@ -931,5 +1329,115 @@ data: {"response":{"usage":{"input_tokens":20,"output_tokens":15}}}
         });
         let cleaned = CodexChatGptProvider::strip_empty_string_values(input);
         assert_eq!(cleaned, json!({"format": "%Y-%m-%d", "operation": "now"}));
+    }
+
+    fn spawn_delayed_responses_fixture_server() -> (String, std::sync::mpsc::Sender<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("fixture server should bind localhost");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            for (expected_prefix, content_type, body) in [
+                (
+                    "GET /models",
+                    "application/json",
+                    r#"{"models":[{"slug":"gpt-4o"}]}"#.to_string(),
+                ),
+                (
+                    "POST /responses",
+                    "text/event-stream",
+                    r#"event: turn.plan.updated
+data: {"explanation":"delayed plan","plan":[{"step":"inspect","status":"inProgress"}]}
+
+"#
+                    .to_string(),
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().expect("fixture should accept request");
+                let request = read_fixture_http_request(&mut stream);
+                let request_line = request.lines().next().unwrap_or_default();
+                assert!(
+                    request_line.starts_with(expected_prefix),
+                    "expected request line prefix {expected_prefix:?}, got {request_line:?}"
+                );
+
+                if expected_prefix == "POST /responses" {
+                    write_fixture_http_response_headers(&mut stream, content_type);
+                    use std::io::Write as _;
+                    stream
+                        .write_all(body.as_bytes())
+                        .expect("fixture should write first SSE event");
+                    stream
+                        .flush()
+                        .expect("fixture should flush first SSE event");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("test should release response.completed");
+                    stream
+                        .write_all(
+                            b"event: response.completed\n\
+data: {\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n",
+                        )
+                        .expect("fixture should write completion SSE event");
+                    stream
+                        .flush()
+                        .expect("fixture should flush completion SSE event");
+                } else {
+                    write_fixture_http_response(&mut stream, content_type, &body);
+                }
+            }
+        });
+
+        (base_url, release_tx)
+    }
+
+    fn read_fixture_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read as _;
+
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("fixture request stream should support read timeout");
+        let mut buffer = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let read = stream
+                .read(&mut chunk)
+                .expect("fixture should read request bytes");
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&buffer).into_owned()
+    }
+
+    fn write_fixture_http_response(
+        stream: &mut std::net::TcpStream,
+        content_type: &str,
+        body: &str,
+    ) {
+        write_fixture_http_response_headers(stream, content_type);
+        use std::io::Write as _;
+        stream
+            .write_all(body.as_bytes())
+            .expect("fixture should write response body");
+        stream.flush().expect("fixture should flush response body");
+    }
+
+    fn write_fixture_http_response_headers(stream: &mut std::net::TcpStream, content_type: &str) {
+        use std::io::Write as _;
+
+        let headers =
+            format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(headers.as_bytes())
+            .expect("fixture should write response headers");
+        stream
+            .flush()
+            .expect("fixture should flush response headers");
     }
 }

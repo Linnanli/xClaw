@@ -156,6 +156,31 @@ pub enum AgentEvent {
     TextChunk(String),
     /// A fragment of model reasoning summary.
     ReasoningSummaryChunk(String),
+    /// Provider reported a new reasoning summary part.
+    ReasoningSummaryPartAdded {
+        item_id: Option<String>,
+        summary_index: i64,
+    },
+    /// Provider emitted raw reasoning text.
+    ReasoningRawTextChunk {
+        item_id: Option<String>,
+        content_index: i64,
+        delta: String,
+    },
+    /// Provider emitted an incremental plan delta.
+    PlanDelta {
+        item_id: Option<String>,
+        delta: String,
+    },
+    /// Provider emitted the current turn plan snapshot.
+    TurnPlanUpdated {
+        explanation: Option<String>,
+        plan: Vec<AgentPlanStep>,
+    },
+    /// Provider emitted the current turn diff snapshot.
+    TurnDiffUpdated { diff: String },
+    /// Provider emitted a raw response item completion payload.
+    RawResponseItemCompleted { item: serde_json::Value },
     /// The model requested a tool invocation.
     ToolCallStart {
         /// Tool name as emitted by the model.
@@ -202,6 +227,21 @@ pub enum AgentEvent {
     },
     /// The agent run completed successfully.
     Completed(AgentRunOutput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlanStep {
+    pub step: String,
+    pub status: AgentPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
 }
 
 /// Best-effort emit; a closed receiver is not a loop-fatal error.

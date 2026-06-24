@@ -58,8 +58,9 @@ use dasclaw_app_server_protocol::{
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
     PermissionsApprovalDecision, PermissionsRequestApprovalParams,
-    PermissionsRequestApprovalResponse, ProtocolSchemaResponse, ProtocolVersion,
-    ReasoningSummaryTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
+    PermissionsRequestApprovalResponse, PlanDeltaEvent, ProtocolSchemaResponse, ProtocolVersion,
+    RawResponseItemCompletedEvent, ReasoningSummaryPartAddedEvent, ReasoningSummaryTextDeltaEvent,
+    ReasoningTextDeltaEvent, RuntimeToolApprovalAvailability, SandboxMode, ServerInfo,
     ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
     ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
     SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
@@ -76,15 +77,17 @@ use dasclaw_app_server_protocol::{
     ThreadTurnsListResponse, ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnarchivedEvent,
     ThreadUnsubscribeParams, ThreadUnsubscribeResponse, ThreadUnsubscribeStatus,
     TokenUsageBreakdown, ToolRequestUserInputParams, ToolRequestUserInputQuestion,
-    ToolRequestUserInputResponse, TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse,
-    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
-    TurnStatus,
+    ToolRequestUserInputResponse, TurnCompletedEvent, TurnDiffUpdatedEvent, TurnInterruptParams,
+    TurnInterruptResponse, TurnPlanStep, TurnPlanUpdatedEvent, TurnReadParams, TurnReadResponse,
+    TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSteerParams,
+    TurnSteerResponse, UserInput,
 };
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
     CodexTurnStatus,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
+use dasclaw_core::agentic_loop::{AgentPlanStep, AgentPlanStepStatus};
 use dasclaw_core::messages::ReasoningSummary;
 use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
@@ -737,6 +740,9 @@ impl AppServer {
         if features.thread_compact {
             server.capabilities = server.capabilities.with_thread_compact_ready();
         }
+        if features.turn_steer {
+            server.capabilities = server.capabilities.with_runtime_turn_steer_ready();
+        }
         server.runtime_features = features;
         server.runtime_bridge = runtime_bridge;
         server
@@ -1320,6 +1326,55 @@ impl AppServer {
         self.emit_codex_item_started(thread_id.clone(), turn_id.clone());
 
         Ok(TurnStartResponse { turn })
+    }
+
+    pub fn turn_steer(
+        &mut self,
+        params: TurnSteerParams,
+    ) -> Result<TurnSteerResponse, AppServerError> {
+        self.require_initialized("session")?;
+        self.drain_runtime_turn_updates();
+        self.require_thread_exists(&params.thread_id)?;
+        if !self.runtime_features.turn_steer {
+            return Err(AppServerError::capability_unavailable(
+                "turn_steer",
+                "runtime bridge does not support turn steer",
+            ));
+        }
+        if params.input.is_empty() {
+            return Err(AppServerError::invalid_request(
+                "turn/steer",
+                "turn/steer input must not be empty",
+            ));
+        }
+        let prompt = prompt_text_from_user_input(&params.input);
+        if prompt.trim().is_empty() {
+            return Err(AppServerError::invalid_request(
+                "turn/steer",
+                "turn/steer input must include at least one text item",
+            ));
+        }
+        let active_turn =
+            self.turn_summary_or_error(&params.thread_id, &params.expected_turn_id)?;
+        if active_turn.status != TurnStatus::Pending {
+            return Err(AppServerError::invalid_request(
+                "session",
+                format!("turn is not active: {}", params.expected_turn_id),
+            ));
+        }
+
+        let turn_id = params.expected_turn_id;
+        self.runtime_bridge
+            .steer_turn(RuntimeTurnSteerRequest {
+                thread_id: params.thread_id,
+                turn_id: turn_id.clone(),
+                input: params.input.clone(),
+                prompt,
+                responsesapi_client_metadata: params.responsesapi_client_metadata,
+            })
+            .map_err(AppServerError::runtime_bridge)?;
+
+        Ok(TurnSteerResponse { turn_id })
     }
 
     pub fn model_provider_select_for_next_turn(
@@ -1994,6 +2049,11 @@ impl AppServer {
             method::TURN_START => {
                 route_with_params(request.id, request.params, |params: TurnStartParams| {
                     self.turn_start(params)
+                })
+            }
+            method::TURN_STEER => {
+                route_with_params(request.id, request.params, |params: TurnSteerParams| {
+                    self.turn_steer(params)
                 })
             }
             method::TURN_INTERRUPT => {
@@ -3032,6 +3092,90 @@ impl AppServer {
                         );
                     }
                 }
+                RuntimeTurnOutcome::ReasoningSummaryPartAdded { update: part } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_reasoning_summary_part_added(
+                            ReasoningSummaryPartAddedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item_id: part.item_id,
+                                summary_index: part.summary_index,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::ReasoningTextDelta { update: reasoning } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_reasoning_text_delta(ReasoningTextDeltaEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item_id: reasoning.item_id,
+                                content_index: reasoning.content_index,
+                                delta: reasoning.delta,
+                            });
+                    }
+                }
+                RuntimeTurnOutcome::PlanUpdated { update: plan } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_turn_plan_updated(TurnPlanUpdatedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                explanation: plan.explanation,
+                                plan: plan.plan,
+                            });
+                    }
+                }
+                RuntimeTurnOutcome::DiffUpdated { update: diff } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_turn_diff_updated(TurnDiffUpdatedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                diff: diff.diff,
+                            });
+                    }
+                }
+                RuntimeTurnOutcome::RawResponseItemCompleted { update: raw } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_raw_response_item_completed(
+                            RawResponseItemCompletedEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item: raw.item,
+                            },
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::PlanDelta { update: delta } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_plan_delta(PlanDeltaEvent {
+                            thread_id: update.thread_id,
+                            turn_id: update.turn_id,
+                            item_id: delta.item_id,
+                            delta: delta.delta,
+                        });
+                    }
+                }
                 RuntimeTurnOutcome::ApprovalRequested { request } => {
                     self.emit_approval_server_request(update.thread_id, update.turn_id, request);
                 }
@@ -3441,6 +3585,11 @@ pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
 
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError>;
     fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError>;
+    fn steer_turn(&self, _request: RuntimeTurnSteerRequest) -> Result<(), RuntimeBridgeError> {
+        Err(RuntimeBridgeError::fatal(
+            "runtime bridge does not support turn steer",
+        ))
+    }
     fn compact_thread(
         &self,
         _request: RuntimeThreadCompactRequest,
@@ -3491,6 +3640,7 @@ pub struct RuntimeBridgeFeatures {
     pub file_change_events: bool,
     pub auto_approval_review: bool,
     pub thread_compact: bool,
+    pub turn_steer: bool,
 }
 
 impl RuntimeBridgeFeatures {
@@ -3523,6 +3673,15 @@ pub struct RuntimeTurnStartRequest {
 pub struct RuntimeTurnCancelRequest {
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTurnSteerRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub input: Vec<UserInput>,
+    pub prompt: String,
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4071,6 +4230,41 @@ pub struct RuntimeCommandOutputDeltaUpdate {
     pub delta: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeReasoningSummaryPartAddedUpdate {
+    pub item_id: String,
+    pub summary_index: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeReasoningTextDeltaUpdate {
+    pub item_id: String,
+    pub content_index: i64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTurnPlanUpdate {
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTurnDiffUpdate {
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeRawResponseItemCompletedUpdate {
+    pub item: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePlanDeltaUpdate {
+    pub item_id: String,
+    pub delta: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeTurnUpdateSink {
     updates: Arc<Mutex<Vec<RuntimeTurnUpdate>>>,
@@ -4120,6 +4314,79 @@ impl RuntimeTurnUpdateSink {
                 delta,
                 summary_index,
             },
+        });
+    }
+
+    pub fn reasoning_summary_part_added(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeReasoningSummaryPartAddedUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ReasoningSummaryPartAdded { update },
+        });
+    }
+
+    pub fn reasoning_text_delta(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeReasoningTextDeltaUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ReasoningTextDelta { update },
+        });
+    }
+
+    pub fn turn_plan_updated(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeTurnPlanUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::PlanUpdated { update },
+        });
+    }
+
+    pub fn turn_diff_updated(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeTurnDiffUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::DiffUpdated { update },
+        });
+    }
+
+    pub fn raw_response_item_completed(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeRawResponseItemCompletedUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::RawResponseItemCompleted { update },
+        });
+    }
+
+    pub fn plan_delta(&self, thread_id: String, turn_id: String, update: RuntimePlanDeltaUpdate) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::PlanDelta { update },
         });
     }
 
@@ -4288,14 +4555,14 @@ impl RuntimeTurnUpdateSink {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeTurnUpdate {
     pub thread_id: String,
     pub turn_id: String,
     pub outcome: RuntimeTurnOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeTurnOutcome {
     Delta {
         delta: String,
@@ -4303,6 +4570,24 @@ pub enum RuntimeTurnOutcome {
     ReasoningSummaryDelta {
         delta: String,
         summary_index: i64,
+    },
+    ReasoningSummaryPartAdded {
+        update: RuntimeReasoningSummaryPartAddedUpdate,
+    },
+    ReasoningTextDelta {
+        update: RuntimeReasoningTextDeltaUpdate,
+    },
+    PlanUpdated {
+        update: RuntimeTurnPlanUpdate,
+    },
+    DiffUpdated {
+        update: RuntimeTurnDiffUpdate,
+    },
+    RawResponseItemCompleted {
+        update: RuntimeRawResponseItemCompletedUpdate,
+    },
+    PlanDelta {
+        update: RuntimePlanDeltaUpdate,
     },
     ApprovalRequested {
         request: RuntimeApprovalRequest,
@@ -4709,6 +4994,86 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                         );
                                     }
                                 }
+                                Ok(dasclaw_runtime::AgentEvent::ReasoningSummaryPartAdded {
+                                    item_id,
+                                    summary_index,
+                                }) => {
+                                    event_updates.reasoning_summary_part_added(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeReasoningSummaryPartAddedUpdate {
+                                            item_id: item_id.unwrap_or_else(|| {
+                                                format!("{event_turn_id}:reasoning")
+                                            }),
+                                            summary_index,
+                                        },
+                                    );
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::ReasoningRawTextChunk {
+                                    item_id,
+                                    content_index,
+                                    delta,
+                                }) => {
+                                    if !delta.is_empty() {
+                                        event_updates.reasoning_text_delta(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimeReasoningTextDeltaUpdate {
+                                                item_id: item_id.unwrap_or_else(|| {
+                                                    format!("{event_turn_id}:reasoning")
+                                                }),
+                                                content_index,
+                                                delta,
+                                            },
+                                        );
+                                    }
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::PlanDelta { item_id, delta }) => {
+                                    if !delta.is_empty() {
+                                        event_updates.plan_delta(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            RuntimePlanDeltaUpdate {
+                                                item_id: item_id.unwrap_or_else(|| {
+                                                    format!("{event_turn_id}:plan")
+                                                }),
+                                                delta,
+                                            },
+                                        );
+                                    }
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::TurnPlanUpdated {
+                                    explanation,
+                                    plan,
+                                }) => {
+                                    event_updates.turn_plan_updated(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeTurnPlanUpdate {
+                                            explanation,
+                                            plan: plan
+                                                .into_iter()
+                                                .map(turn_plan_step_from_agent)
+                                                .collect(),
+                                        },
+                                    );
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::TurnDiffUpdated { diff }) => {
+                                    event_updates.turn_diff_updated(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeTurnDiffUpdate { diff },
+                                    );
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::RawResponseItemCompleted {
+                                    item,
+                                }) => {
+                                    event_updates.raw_response_item_completed(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeRawResponseItemCompletedUpdate { item },
+                                    );
+                                }
                                 Ok(dasclaw_runtime::AgentEvent::Completed(output)) => {
                                     return Ok(output);
                                 }
@@ -4798,7 +5163,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                         },
                                     );
                                 }
-                                Ok(_) => {}
+                                Ok(dasclaw_runtime::AgentEvent::FinishReason(_)) => {}
                                 Err(error) => {
                                     return Err(error);
                                 }
@@ -4959,6 +5324,34 @@ fn tool_call_id_from_arguments(arguments: &Value) -> Option<String> {
 
 fn command_from_arguments(arguments: &Value) -> Option<String> {
     string_field(arguments, "cmd").or_else(|| string_field(arguments, "command"))
+}
+
+fn turn_plan_step_from_agent(step: AgentPlanStep) -> TurnPlanStep {
+    TurnPlanStep {
+        step: step.step,
+        status: match step.status {
+            AgentPlanStepStatus::Pending => {
+                dasclaw_app_server_protocol::TurnPlanStepStatus::Pending
+            }
+            AgentPlanStepStatus::InProgress => {
+                dasclaw_app_server_protocol::TurnPlanStepStatus::InProgress
+            }
+            AgentPlanStepStatus::Completed => {
+                dasclaw_app_server_protocol::TurnPlanStepStatus::Completed
+            }
+        },
+    }
+}
+
+fn prompt_text_from_user_input(input: &[UserInput]) -> String {
+    input
+        .iter()
+        .filter_map(|input| match input {
+            UserInput::Text { text, .. } => Some(text.as_str()),
+            UserInput::Image { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn agent_from_model_provider_snapshot(
@@ -5182,6 +5575,14 @@ impl NotificationBus {
         self.push(ServerNotification::turn_completed(event));
     }
 
+    pub fn emit_turn_plan_updated(&mut self, event: TurnPlanUpdatedEvent) {
+        self.push(ServerNotification::turn_plan_updated(event));
+    }
+
+    pub fn emit_turn_diff_updated(&mut self, event: TurnDiffUpdatedEvent) {
+        self.push(ServerNotification::turn_diff_updated(event));
+    }
+
     pub fn emit_item_started(&mut self, event: ItemStartedEvent) {
         self.push(ServerNotification::item_started(event));
     }
@@ -5192,6 +5593,22 @@ impl NotificationBus {
 
     pub fn emit_reasoning_summary_text_delta(&mut self, event: ReasoningSummaryTextDeltaEvent) {
         self.push(ServerNotification::reasoning_summary_text_delta(event));
+    }
+
+    pub fn emit_reasoning_summary_part_added(&mut self, event: ReasoningSummaryPartAddedEvent) {
+        self.push(ServerNotification::reasoning_summary_part_added(event));
+    }
+
+    pub fn emit_reasoning_text_delta(&mut self, event: ReasoningTextDeltaEvent) {
+        self.push(ServerNotification::reasoning_text_delta(event));
+    }
+
+    pub fn emit_raw_response_item_completed(&mut self, event: RawResponseItemCompletedEvent) {
+        self.push(ServerNotification::raw_response_item_completed(event));
+    }
+
+    pub fn emit_plan_delta(&mut self, event: PlanDeltaEvent) {
+        self.push(ServerNotification::plan_delta(event));
     }
 
     pub fn emit_item_completed(&mut self, event: ItemCompletedEvent) {
@@ -5691,6 +6108,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::THREAD_GOAL_CLEAR,
         method::THREAD_COMPACT_START,
         method::TURN_START,
+        method::TURN_STEER,
         method::TURN_INTERRUPT,
         method::THREAD_TURNS_LIST,
         method::TURN_READ,
@@ -5846,6 +6264,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_features_gate_turn_steer_capability_advertising() {
+        let default_bridge = Arc::new(RecordingRuntimeBridge::default());
+        let default_server = initialized_server_with_bridge(default_bridge);
+        assert!(
+            !default_server
+                .capabilities
+                .session
+                .methods
+                .contains(&method::TURN_STEER.to_string()),
+            "default runtime bridge must not advertise steer capability"
+        );
+
+        let steer_bridge = Arc::new(RecordingRuntimeBridge::with_turn_steer());
+        let steer_server = initialized_server_with_bridge(steer_bridge);
+        assert!(
+            steer_server
+                .capabilities
+                .session
+                .methods
+                .contains(&method::TURN_STEER.to_string()),
+            "steer-capable runtime bridge should advertise turn/steer"
+        );
+    }
+
+    #[test]
+    fn default_dasclaw_runtime_bridge_does_not_advertise_turn_steer_until_real_injection_exists() {
+        let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
+        assert!(
+            !bridge.features().turn_steer,
+            "default runtime bridge must stay fail-safe until it can inject input into a running turn"
+        );
+    }
+
+    #[test]
     fn default_runtime_bridge_advertises_r2_request_owner_capabilities() {
         let bridge = Arc::new(DasclawAgentRuntimeBridge::from_model_provider_snapshot());
         let server = initialized_server_with_bridge(bridge);
@@ -5913,6 +6365,88 @@ mod tests {
         assert!(values.iter().any(|value| {
             value["method"] == "item/fileChange/patchUpdated"
                 && value["params"]["changes"][0]["path"] == "src/lib.rs"
+        }));
+    }
+
+    #[test]
+    fn r5_runtime_updates_emit_plan_diff_raw_and_plan_delta_notifications() {
+        let bridge = Arc::new(SequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::PlanUpdated {
+                update: RuntimeTurnPlanUpdate {
+                    explanation: Some("Adjusting plan".to_string()),
+                    plan: vec![dasclaw_app_server_protocol::TurnPlanStep {
+                        step: "inspect current producer".to_string(),
+                        status: dasclaw_app_server_protocol::TurnPlanStepStatus::InProgress,
+                    }],
+                },
+            },
+            RuntimeTurnOutcome::DiffUpdated {
+                update: RuntimeTurnDiffUpdate {
+                    diff: "--- a/file\n+++ b/file\n".to_string(),
+                },
+            },
+            RuntimeTurnOutcome::RawResponseItemCompleted {
+                update: RuntimeRawResponseItemCompletedUpdate {
+                    item: serde_json::json!({
+                        "id": "raw_item_1",
+                        "type": "message",
+                        "content": "raw provider item",
+                    }),
+                },
+            },
+            RuntimeTurnOutcome::PlanDelta {
+                update: RuntimePlanDeltaUpdate {
+                    item_id: "plan_item_1".to_string(),
+                    delta: "add verification".to_string(),
+                },
+            },
+        ]));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("run r5 producers".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let values = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_PLAN_UPDATED
+                && value["params"]["threadId"] == thread_id
+                && value["params"]["turnId"] == turn.turn.id
+                && value["params"]["explanation"] == "Adjusting plan"
+                && value["params"]["plan"][0]["step"] == "inspect current producer"
+                && value["params"]["plan"][0]["status"] == "inProgress"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_DIFF_UPDATED
+                && value["params"]["threadId"] == thread_id
+                && value["params"]["turnId"] == turn.turn.id
+                && value["params"]["diff"] == "--- a/file\n+++ b/file\n"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::RAW_RESPONSE_ITEM_COMPLETED
+                && value["params"]["threadId"] == thread_id
+                && value["params"]["turnId"] == turn.turn.id
+                && value["params"]["item"]["id"] == "raw_item_1"
+                && value["params"]["item"]["content"] == "raw provider item"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::ITEM_PLAN_DELTA
+                && value["params"]["threadId"] == thread_id
+                && value["params"]["turnId"] == turn.turn.id
+                && value["params"]["itemId"] == "plan_item_1"
+                && value["params"]["delta"] == "add verification"
         }));
     }
 
@@ -9733,6 +10267,244 @@ mod tests {
     }
 
     #[test]
+    fn turn_steer_json_rpc_routes_and_forwards_active_turn_input() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_turn_steer());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello runtime"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"steer","method":"turn/steer","params":{{"threadId":"{}","expectedTurnId":"{}","input":[{{"type":"text","text":"extra context","text_elements":[]}}],"responsesapiClientMetadata":{{"source":"test"}}}}}}"#,
+                thread.thread_id, start.turn.id
+            ))
+            .expect("turn/steer should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("steer response JSON");
+
+        assert_eq!(value["result"]["turnId"], start.turn.id);
+        let calls = bridge.steer_calls.lock().expect("steer calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, thread.thread_id);
+        assert_eq!(calls[0].turn_id, start.turn.id);
+        assert_eq!(calls[0].prompt, "extra context");
+        assert_eq!(calls[0].input, text_input("extra context"));
+        assert_eq!(
+            calls[0]
+                .responsesapi_client_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("source"))
+                .map(String::as_str),
+            Some("test")
+        );
+    }
+
+    #[test]
+    fn turn_steer_rejects_feature_disabled_without_bridge_call() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello runtime"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let error = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id,
+                expected_turn_id: start.turn.id,
+                input: text_input("extra context"),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should require runtime feature support");
+
+        assert!(matches!(
+            error,
+            AppServerError::Protocol { data } if data.code == ErrorCode::CapabilityUnavailable
+        ));
+        assert!(
+            bridge
+                .steer_calls
+                .lock()
+                .expect("steer calls lock")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn turn_steer_rejects_mismatched_or_missing_active_turn_without_bridge_call() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_turn_steer());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello runtime"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let mismatch = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: "turn_missing".to_string(),
+                input: text_input("extra context"),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject missing active turn");
+        assert!(matches!(
+            mismatch,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+
+        server
+            .threads
+            .apply_runtime_turn_update(RuntimeTurnUpdate {
+                thread_id: thread.thread_id.clone(),
+                turn_id: start.turn.id.clone(),
+                outcome: RuntimeTurnOutcome::Completed {
+                    output: "done".to_string(),
+                },
+            })
+            .expect("turn should complete");
+        let completed = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: start.turn.id.clone(),
+                input: text_input("extra context"),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject terminal turn");
+        assert!(matches!(
+            completed,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+
+        let other_thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("other thread should be created");
+        let wrong_thread = server
+            .turn_steer(TurnSteerParams {
+                thread_id: other_thread.thread_id,
+                expected_turn_id: start.turn.id,
+                input: text_input("extra context"),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject mismatched thread");
+        assert!(matches!(
+            wrong_thread,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+        assert!(
+            bridge
+                .steer_calls
+                .lock()
+                .expect("steer calls lock")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn turn_steer_rejects_empty_input_without_bridge_call() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_turn_steer());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello runtime"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let error = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: start.turn.id.clone(),
+                input: Vec::new(),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject empty input");
+
+        assert!(matches!(
+            error,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+        assert!(
+            bridge
+                .steer_calls
+                .lock()
+                .expect("steer calls lock")
+                .is_empty()
+        );
+
+        let whitespace = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id.clone(),
+                expected_turn_id: start.turn.id.clone(),
+                input: text_input("   "),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject whitespace-only input");
+        assert!(matches!(
+            whitespace,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+
+        let image_only = server
+            .turn_steer(TurnSteerParams {
+                thread_id: thread.thread_id,
+                expected_turn_id: start.turn.id,
+                input: image_input("file:///tmp/image.png"),
+                responsesapi_client_metadata: None,
+            })
+            .expect_err("turn/steer should reject image-only input");
+        assert!(matches!(
+            image_only,
+            AppServerError::Protocol { data } if data.code == ErrorCode::InvalidParams
+        ));
+        assert!(
+            bridge
+                .steer_calls
+                .lock()
+                .expect("steer calls lock")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn turn_start_invokes_runtime_bridge_before_recording_pending_turn() {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
@@ -12541,6 +13313,208 @@ mod tests {
     }
 
     #[test]
+    fn dasclaw_runtime_bridge_forwards_r5_agent_events_to_json_rpc_notifications() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(ScriptedRuntimeResponder::new(
+                    [
+                        dasclaw_runtime::AgentEvent::ReasoningSummaryPartAdded {
+                            item_id: Some("reasoning_item_1".to_string()),
+                            summary_index: 2,
+                        },
+                        dasclaw_runtime::AgentEvent::ReasoningRawTextChunk {
+                            item_id: Some("reasoning_item_1".to_string()),
+                            content_index: 3,
+                            delta: "raw reasoning".to_string(),
+                        },
+                        dasclaw_runtime::AgentEvent::PlanDelta {
+                            item_id: Some("plan_item_1".to_string()),
+                            delta: "add verification".to_string(),
+                        },
+                        dasclaw_runtime::AgentEvent::TurnPlanUpdated {
+                            explanation: Some("Adjusting plan".to_string()),
+                            plan: vec![AgentPlanStep {
+                                step: "inspect current producer".to_string(),
+                                status: AgentPlanStepStatus::InProgress,
+                            }],
+                        },
+                        dasclaw_runtime::AgentEvent::TurnDiffUpdated {
+                            diff: "--- a/file\n+++ b/file\n".to_string(),
+                        },
+                        dasclaw_runtime::AgentEvent::RawResponseItemCompleted {
+                            item: serde_json::json!({
+                                "id": "raw_item_1",
+                                "type": "message",
+                                "content": "raw provider item",
+                            }),
+                        },
+                        dasclaw_runtime::AgentEvent::TextChunk("final answer".to_string()),
+                    ],
+                    "final answer",
+                ))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_codex_v2_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        let values = notifications
+            .iter()
+            .map(|notification| {
+                serde_json::json!({
+                    "method": notification.method,
+                    "params": notification.params,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| {
+            value["method"] == event::ITEM_REASONING_SUMMARY_PART_ADDED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["itemId"] == "reasoning_item_1"
+                && value["params"]["summaryIndex"] == 2
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::ITEM_REASONING_TEXT_DELTA
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["itemId"] == "reasoning_item_1"
+                && value["params"]["contentIndex"] == 3
+                && value["params"]["delta"] == "raw reasoning"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::ITEM_PLAN_DELTA
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["itemId"] == "plan_item_1"
+                && value["params"]["delta"] == "add verification"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_PLAN_UPDATED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["explanation"] == "Adjusting plan"
+                && value["params"]["plan"][0]["step"] == "inspect current producer"
+                && value["params"]["plan"][0]["status"] == "inProgress"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_DIFF_UPDATED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["diff"] == "--- a/file\n+++ b/file\n"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::RAW_RESPONSE_ITEM_COMPLETED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["item"]["id"] == "raw_item_1"
+                && value["params"]["item"]["content"] == "raw provider item"
+        }));
+    }
+
+    #[test]
+    fn provider_backed_raw_response_item_reaches_app_server_notification() {
+        let (base_url, fixture_done) = spawn_codex_chatgpt_responses_fixture_server();
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(move |token| {
+            let provider = Arc::new(
+                dasclaw_llm_provider::provider::CodexChatGptProvider::with_lazy_model(
+                    &base_url,
+                    SecretString::from("test-api-key".to_string()),
+                    "gpt-4o",
+                    None,
+                    None,
+                    5,
+                ),
+            );
+            dasclaw_runtime::Agent::builder()
+                .responder(
+                    LlmProviderResponder::new(provider)
+                        .with_reasoning_summary(ReasoningSummary::Auto),
+                )
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_codex_v2_server_with_bridge(bridge);
+        let thread = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(5));
+        fixture_done
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fixture server should serve model list and Responses SSE");
+        let values = notifications
+            .iter()
+            .map(|notification| {
+                serde_json::json!({
+                    "method": notification.method,
+                    "params": notification.params,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| {
+            value["method"] == event::ITEM_REASONING_TEXT_DELTA
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["itemId"] == "reasoning_item_1"
+                && value["params"]["contentIndex"] == 3
+                && value["params"]["delta"] == "raw reasoning"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_PLAN_UPDATED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["explanation"] == "provider-backed plan"
+                && value["params"]["plan"][0]["step"] == "inspect current producer"
+                && value["params"]["plan"][0]["status"] == "inProgress"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::TURN_DIFF_UPDATED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["diff"] == "--- a/file\n+++ b/file\n"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == event::RAW_RESPONSE_ITEM_COMPLETED
+                && value["params"]["threadId"] == thread.thread_id
+                && value["params"]["turnId"] == started.turn.id
+                && value["params"]["item"]["id"] == "raw_item_1"
+                && value["params"]["item"]["content"] == "raw provider item"
+        }));
+    }
+
+    #[test]
     fn app_server_runtime_responder_constructor_wires_real_agent_bridge() {
         let responder = Arc::new(ChunkedRuntimeResponder::new(["res", "ponder"]));
         let mut server = AppServer::with_runtime_responder(responder);
@@ -13903,6 +14877,130 @@ mod tests {
         lines.into_iter().map(json_rpc_value).collect()
     }
 
+    fn spawn_codex_chatgpt_responses_fixture_server() -> (String, std::sync::mpsc::Receiver<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("fixture server should bind localhost");
+        listener
+            .set_nonblocking(true)
+            .expect("fixture server should support nonblocking accept");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        thread::spawn(move || {
+            let sse = r#"event: response.reasoning_text.delta
+data: {"item_id":"reasoning_item_1","content_index":3,"delta":"raw reasoning"}
+
+event: response.output_text.delta
+data: {"delta":"final answer"}
+
+event: response.output_item.done
+data: {"item":{"id":"raw_item_1","type":"message","content":"raw provider item"}}
+
+event: turn.plan.updated
+data: {"explanation":"provider-backed plan","plan":[{"step":"inspect current producer","status":"inProgress"}]}
+
+event: turn.diff.updated
+data: {"diff":"--- a/file\n+++ b/file\n"}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
+
+"#;
+            let responses = [
+                (
+                    "GET /models",
+                    "application/json",
+                    r#"{"models":[{"slug":"gpt-4o"}]}"#.to_string(),
+                ),
+                ("POST /responses", "text/event-stream", sse.to_string()),
+            ];
+            let deadline = Instant::now() + Duration::from_secs(5);
+
+            for (expected_prefix, content_type, body) in responses {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(accepted) => break accepted,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "fixture server timed out waiting for {expected_prefix}"
+                            );
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("fixture server accept failed: {error}"),
+                    }
+                };
+
+                let request = read_fixture_http_request(&mut stream);
+                let request_line = request.lines().next().unwrap_or_default();
+                assert!(
+                    request_line.starts_with(expected_prefix),
+                    "expected request line prefix {expected_prefix:?}, got {request_line:?}"
+                );
+                write_fixture_http_response(&mut stream, content_type, &body);
+            }
+
+            let _ = done_tx.send(());
+        });
+
+        (base_url, done_rx)
+    }
+
+    fn read_fixture_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read as _;
+
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("fixture request stream should support read timeout");
+        let mut buffer = Vec::new();
+        let mut scratch = [0_u8; 1024];
+        let mut expected_len = None;
+
+        loop {
+            let read = stream
+                .read(&mut scratch)
+                .expect("fixture server should read request bytes");
+            assert!(read > 0, "fixture client closed request before headers");
+            buffer.extend_from_slice(&scratch[..read]);
+
+            if expected_len.is_none()
+                && let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+                let content_len = header_text
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                expected_len = Some(header_end + 4 + content_len);
+            }
+
+            if let Some(expected_len) = expected_len
+                && buffer.len() >= expected_len
+            {
+                return String::from_utf8_lossy(&buffer).into_owned();
+            }
+        }
+    }
+
+    fn write_fixture_http_response(
+        stream: &mut std::net::TcpStream,
+        content_type: &str,
+        body: &str,
+    ) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("fixture server should write response");
+    }
+
     fn replace_file_with_directory(path: &Path) {
         if path.is_file() {
             fs::remove_file(path).expect("remove snapshot file");
@@ -13917,6 +15015,10 @@ mod tests {
             text: text.into(),
             text_elements: Vec::new(),
         }]
+    }
+
+    fn image_input(url: impl Into<String>) -> Vec<dasclaw_app_server_protocol::UserInput> {
+        vec![dasclaw_app_server_protocol::UserInput::Image { url: url.into() }]
     }
 
     fn assert_turn_status_and_ready(
@@ -14331,6 +15433,7 @@ mod tests {
                 file_change_events: true,
                 auto_approval_review: true,
                 thread_compact: false,
+                turn_steer: false,
             }
         }
 
@@ -14375,6 +15478,7 @@ mod tests {
                 file_change_events: true,
                 auto_approval_review: true,
                 thread_compact: false,
+                turn_steer: false,
             }
         }
 
@@ -14496,6 +15600,8 @@ mod tests {
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<RuntimeTurnStartRequest>>,
         cancel_calls: Mutex<Vec<RuntimeTurnCancelRequest>>,
+        steer_calls: Mutex<Vec<RuntimeTurnSteerRequest>>,
+        turn_steer: bool,
         result: Mutex<Option<Result<(), RuntimeBridgeError>>>,
         cancel_result: Mutex<Option<Result<(), RuntimeBridgeError>>>,
         completion: Mutex<Option<RuntimeTurnOutcome>>,
@@ -14504,31 +15610,29 @@ mod tests {
     impl RecordingRuntimeBridge {
         fn with_result(result: Result<(), RuntimeBridgeError>) -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
-                cancel_calls: Mutex::new(Vec::new()),
                 result: Mutex::new(Some(result)),
-                cancel_result: Mutex::new(None),
-                completion: Mutex::new(None),
+                ..Self::default()
             }
         }
 
         fn with_completion(completion: RuntimeTurnOutcome) -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
-                cancel_calls: Mutex::new(Vec::new()),
-                result: Mutex::new(None),
-                cancel_result: Mutex::new(None),
                 completion: Mutex::new(Some(completion)),
+                ..Self::default()
             }
         }
 
         fn with_cancel_result(result: Result<(), RuntimeBridgeError>) -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
-                cancel_calls: Mutex::new(Vec::new()),
-                result: Mutex::new(None),
                 cancel_result: Mutex::new(Some(result)),
-                completion: Mutex::new(None),
+                ..Self::default()
+            }
+        }
+
+        fn with_turn_steer() -> Self {
+            Self {
+                turn_steer: true,
+                ..Self::default()
             }
         }
     }
@@ -14655,6 +15759,13 @@ mod tests {
     }
 
     impl RuntimeBridge for RecordingRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                turn_steer: self.turn_steer,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
         fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
             if let Some(completion) = self.completion.lock().expect("completion lock").clone() {
                 push_test_runtime_outcome(&request, completion);
@@ -14679,6 +15790,14 @@ mod tests {
                 .unwrap_or(Ok(()))
         }
 
+        fn steer_turn(&self, request: RuntimeTurnSteerRequest) -> Result<(), RuntimeBridgeError> {
+            self.steer_calls
+                .lock()
+                .expect("steer calls lock")
+                .push(request);
+            Ok(())
+        }
+
         fn shutdown(&self) {}
     }
 
@@ -14698,6 +15817,48 @@ mod tests {
                     request.turn_id.clone(),
                     summary_index,
                     delta,
+                );
+            }
+            RuntimeTurnOutcome::ReasoningSummaryPartAdded { update } => {
+                request.updates.reasoning_summary_part_added(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::ReasoningTextDelta { update } => {
+                request.updates.reasoning_text_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::PlanUpdated { update } => {
+                request.updates.turn_plan_updated(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::DiffUpdated { update } => {
+                request.updates.turn_diff_updated(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::RawResponseItemCompleted { update } => {
+                request.updates.raw_response_item_completed(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::PlanDelta { update } => {
+                request.updates.plan_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
                 );
             }
             RuntimeTurnOutcome::ApprovalRequested { request: approval } => {

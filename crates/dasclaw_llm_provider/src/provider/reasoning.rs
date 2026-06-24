@@ -661,11 +661,12 @@ Respond in JSON format:
                     LlmStreamEvent::TextDelta(delta) => {
                         let _ = chunk_tx.send(delta);
                     }
-                    LlmStreamEvent::ReasoningSummaryDelta(_)
-                    | LlmStreamEvent::ToolCallInputDelta { .. } => {}
                     LlmStreamEvent::Completed(response) => {
                         completed = Some(response);
                         break;
+                    }
+                    event => {
+                        debug_assert!(is_non_text_provider_stream_event(&event));
                     }
                 }
             }
@@ -1435,6 +1436,20 @@ fn recover_tool_calls_from_content(
     }
 
     calls
+}
+
+fn is_non_text_provider_stream_event(event: &LlmStreamEvent) -> bool {
+    matches!(
+        event,
+        LlmStreamEvent::ReasoningSummaryDelta(_)
+            | LlmStreamEvent::ReasoningSummaryPartAdded { .. }
+            | LlmStreamEvent::ReasoningRawTextDelta { .. }
+            | LlmStreamEvent::PlanDelta { .. }
+            | LlmStreamEvent::TurnPlanUpdated { .. }
+            | LlmStreamEvent::TurnDiffUpdated { .. }
+            | LlmStreamEvent::RawResponseItemCompleted { .. }
+            | LlmStreamEvent::ToolCallInputDelta { .. }
+    )
 }
 
 /// `<tool_call>tool_list</tool_call>` or `<|tool_call|>` in the content field
@@ -3765,6 +3780,93 @@ That's my plan."#;
                     assert_eq!(tool_calls[0].name, "web_search");
                 }
                 _ => panic!("expected ToolCalls result"),
+            }
+        }
+
+        #[tokio::test]
+        async fn r5_structured_events_do_not_leak_into_legacy_text_chunks() {
+            struct R5StreamLlm;
+
+            #[async_trait]
+            impl LlmProvider for R5StreamLlm {
+                fn model_name(&self) -> &str {
+                    "r5-stream-llm"
+                }
+
+                fn cost_per_token(&self) -> (Decimal, Decimal) {
+                    (Decimal::ZERO, Decimal::ZERO)
+                }
+
+                async fn complete(
+                    &self,
+                    _req: crate::provider::CompletionRequest,
+                ) -> Result<crate::provider::CompletionResponse, LlmError> {
+                    unreachable!()
+                }
+
+                async fn complete_with_tools(
+                    &self,
+                    _req: ToolCompletionRequest,
+                ) -> Result<ToolCompletionResponse, LlmError> {
+                    unreachable!("streaming path should be exercised")
+                }
+
+                async fn stream_with_tools(
+                    &self,
+                    _request: ToolCompletionRequest,
+                ) -> Result<LlmStream, LlmError> {
+                    let (event_tx, event_rx) =
+                        tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(8);
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::TurnPlanUpdated {
+                            explanation: Some("legacy wrapper should ignore R5".to_string()),
+                            plan: Vec::new(),
+                        }))
+                        .await;
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::Completed(ToolCompletionResponse {
+                            content: Some("done".to_string()),
+                            reasoning: None,
+                            tool_calls: Vec::new(),
+                            input_tokens: 1,
+                            output_tokens: 1,
+                            finish_reason: FinishReason::Stop,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        })))
+                        .await;
+                    Ok(LlmStream::new(event_rx))
+                }
+
+                fn capabilities(&self) -> LlmProviderCapabilities {
+                    LlmProviderCapabilities {
+                        native_streaming: true,
+                    }
+                }
+            }
+
+            let llm = Arc::new(R5StreamLlm);
+            let reasoning = Reasoning::new(llm);
+            let context = ReasoningContext::new()
+                .with_message(ChatMessage::user("stream R5"))
+                .with_tools(vec![ToolDefinition {
+                    name: "dummy".to_string(),
+                    description: "A dummy tool".to_string(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }]);
+            let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let output = reasoning
+                .respond_with_tools_streaming(&context, chunk_tx)
+                .await
+                .unwrap();
+
+            assert!(
+                chunk_rx.try_recv().is_err(),
+                "R5 events are not text chunks"
+            );
+            match output.result {
+                RespondResult::Text(text) => assert_eq!(text, "done"),
+                _ => panic!("expected Text result"),
             }
         }
 

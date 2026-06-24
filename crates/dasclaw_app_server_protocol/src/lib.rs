@@ -39,6 +39,7 @@ pub mod method {
     pub const THREAD_READ: &str = "thread/read";
     pub const THREAD_TURNS_LIST: &str = "thread/turns/list";
     pub const TURN_START: &str = "turn/start";
+    pub const TURN_STEER: &str = "turn/steer";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const TURN_READ: &str = "turn/read";
     pub const MODEL_LIST: &str = "model/list";
@@ -94,13 +95,17 @@ pub mod event {
     pub const THREAD_TOKEN_USAGE_UPDATED: &str = "thread/tokenUsage/updated";
     pub const THREAD_COMPACTED: &str = "thread/compacted";
     pub const TURN_STARTED: &str = "turn/started";
+    pub const TURN_PLAN_UPDATED: &str = "turn/plan/updated";
+    pub const TURN_DIFF_UPDATED: &str = "turn/diff/updated";
     pub const TURN_COMPLETED: &str = "turn/completed";
     pub const ITEM_STARTED: &str = "item/started";
     pub const ITEM_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
     pub const ITEM_REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     pub const ITEM_REASONING_SUMMARY_PART_ADDED: &str = "item/reasoning/summaryPartAdded";
     pub const ITEM_REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
+    pub const ITEM_PLAN_DELTA: &str = "item/plan/delta";
     pub const ITEM_COMPLETED: &str = "item/completed";
+    pub const RAW_RESPONSE_ITEM_COMPLETED: &str = "rawResponseItem/completed";
     pub const ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL: &str =
         "item/commandExecution/requestApproval";
     pub const ITEM_COMMAND_EXECUTION_APPROVAL_SUBMITTED: &str =
@@ -703,11 +708,15 @@ impl CapabilityMatrix {
                     event::THREAD_STARTED,
                     event::TURN_STARTED,
                     event::TURN_COMPLETED,
+                    event::TURN_PLAN_UPDATED,
+                    event::TURN_DIFF_UPDATED,
                     event::ITEM_STARTED,
                     event::ITEM_AGENT_MESSAGE_DELTA,
                     event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
                     event::ITEM_REASONING_SUMMARY_PART_ADDED,
                     event::ITEM_REASONING_TEXT_DELTA,
+                    event::ITEM_PLAN_DELTA,
+                    event::RAW_RESPONSE_ITEM_COMPLETED,
                     event::ITEM_COMPLETED,
                     event::ERROR,
                 ],
@@ -846,6 +855,15 @@ impl CapabilityMatrix {
             &[],
             Some("runtime bridge reports sandbox-ready execution".to_string()),
         );
+        self
+    }
+
+    #[must_use]
+    pub fn with_runtime_turn_steer_ready(mut self) -> Self {
+        let method = method::TURN_STEER.to_string();
+        if !self.session.methods.contains(&method) {
+            self.session.methods.push(method);
+        }
         self
     }
 
@@ -1111,10 +1129,7 @@ impl CompatibilityProfile {
                 .collect(),
             aliases: Vec::new(),
             capability_opt_outs: vec![
-                CapabilityOptOut::phase_one("codex.rich_input"),
                 CapabilityOptOut::phase_one("codex.tool_calls"),
-                CapabilityOptOut::phase_one("codex.diff"),
-                CapabilityOptOut::phase_one("codex.plan"),
                 CapabilityOptOut::phase_one("tools"),
                 CapabilityOptOut::phase_one("mcp"),
                 CapabilityOptOut::phase_one("skills"),
@@ -1124,6 +1139,7 @@ impl CompatibilityProfile {
                 CapabilityOptOut::phase_one("jobs"),
                 CapabilityOptOut::phase_one("sandbox"),
                 CapabilityOptOut::phase_one("thread.compact"),
+                CapabilityOptOut::phase_one("codex.rich_input"),
             ],
             event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
         }
@@ -1137,11 +1153,15 @@ const CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS: &[&str] = &[
     event::THREAD_STARTED,
     event::TURN_STARTED,
     event::TURN_COMPLETED,
+    event::TURN_PLAN_UPDATED,
+    event::TURN_DIFF_UPDATED,
     event::ITEM_STARTED,
     event::ITEM_AGENT_MESSAGE_DELTA,
     event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
     event::ITEM_REASONING_SUMMARY_PART_ADDED,
     event::ITEM_REASONING_TEXT_DELTA,
+    event::ITEM_PLAN_DELTA,
+    event::RAW_RESPONSE_ITEM_COMPLETED,
     event::ITEM_COMPLETED,
     event::THREAD_STATUS_CHANGED,
     event::THREAD_ARCHIVED,
@@ -1441,6 +1461,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             true,
         ),
         MethodSchema::new(
+            method::TURN_STEER,
+            "session",
+            Some("TurnSteerParams"),
+            "TurnSteerResponse",
+            true,
+        ),
+        MethodSchema::new(
             method::TURN_INTERRUPT,
             "session",
             Some("TurnInterruptParams"),
@@ -1701,6 +1728,8 @@ fn phase_one_events() -> Vec<EventSchema> {
         ),
         EventSchema::new(event::TURN_STARTED, "session", "TurnStartedEvent"),
         EventSchema::new(event::TURN_COMPLETED, "session", "TurnCompletedEvent"),
+        EventSchema::new(event::TURN_PLAN_UPDATED, "session", "TurnPlanUpdatedEvent"),
+        EventSchema::new(event::TURN_DIFF_UPDATED, "session", "TurnDiffUpdatedEvent"),
         EventSchema::new(event::ITEM_STARTED, "session", "ItemStartedEvent"),
         EventSchema::new(
             event::ITEM_AGENT_MESSAGE_DELTA,
@@ -1721,6 +1750,12 @@ fn phase_one_events() -> Vec<EventSchema> {
             event::ITEM_REASONING_TEXT_DELTA,
             "session",
             "ReasoningTextDeltaEvent",
+        ),
+        EventSchema::new(event::ITEM_PLAN_DELTA, "session", "PlanDeltaEvent"),
+        EventSchema::new(
+            event::RAW_RESPONSE_ITEM_COMPLETED,
+            "session",
+            "RawResponseItemCompletedEvent",
         ),
         EventSchema::new(event::ITEM_COMPLETED, "session", "ItemCompletedEvent"),
         EventSchema::new(
@@ -2208,7 +2243,7 @@ pub struct TurnStartParams {
     pub permission_profile: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserInput {
     Text {
@@ -2219,6 +2254,16 @@ pub enum UserInput {
     Image {
         url: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSteerParams {
+    pub thread_id: String,
+    pub input: Vec<UserInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    pub expected_turn_id: String,
 }
 
 impl TurnStartParams {
@@ -2248,6 +2293,12 @@ pub enum TurnStatus {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartResponse {
     pub turn: CodexTurn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSteerResponse {
+    pub turn_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3056,6 +3107,38 @@ pub struct TurnCompletedEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TurnPlanUpdatedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnPlanStep {
+    pub step: String,
+    pub status: TurnPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiffUpdatedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
@@ -3097,6 +3180,23 @@ pub struct ReasoningTextDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub content_index: i64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawResponseItemCompletedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
     pub delta: String,
 }
 
@@ -3273,6 +3373,14 @@ impl ServerNotification {
         Self::new(event::TURN_COMPLETED, event)
     }
 
+    pub fn turn_plan_updated(event: TurnPlanUpdatedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::TURN_PLAN_UPDATED, event)
+    }
+
+    pub fn turn_diff_updated(event: TurnDiffUpdatedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::TURN_DIFF_UPDATED, event)
+    }
+
     pub fn item_started(event: ItemStartedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_STARTED, event)
     }
@@ -3295,6 +3403,16 @@ impl ServerNotification {
 
     pub fn reasoning_text_delta(event: ReasoningTextDeltaEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_REASONING_TEXT_DELTA, event)
+    }
+
+    pub fn raw_response_item_completed(
+        event: RawResponseItemCompletedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::RAW_RESPONSE_ITEM_COMPLETED, event)
+    }
+
+    pub fn plan_delta(event: PlanDeltaEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_PLAN_DELTA, event)
     }
 
     pub fn item_completed(event: ItemCompletedEvent) -> Result<Self, serde_json::Error> {
@@ -4339,6 +4457,13 @@ mod tests {
                 .contains(&method::TURN_START.to_string())
         );
         assert!(
+            !matrix
+                .session
+                .methods
+                .contains(&method::TURN_STEER.to_string()),
+            "turn/steer is routable but only advertised after runtime bridge feature readiness"
+        );
+        assert!(
             matrix
                 .session
                 .methods
@@ -4356,6 +4481,19 @@ mod tests {
                 .events
                 .contains(&event::TURN_COMPLETED.to_string())
         );
+        for event in [
+            event::TURN_PLAN_UPDATED,
+            event::TURN_DIFF_UPDATED,
+            event::ITEM_PLAN_DELTA,
+            event::RAW_RESPONSE_ITEM_COMPLETED,
+            event::ITEM_REASONING_SUMMARY_PART_ADDED,
+            event::ITEM_REASONING_TEXT_DELTA,
+        ] {
+            assert!(
+                matrix.session.events.contains(&event.to_string()),
+                "R5 implemented session event should be advertised: {event}"
+            );
+        }
         assert_eq!(matrix.approval.status, CapabilityStatus::Declared);
         assert_eq!(matrix.dlp_policy.status, CapabilityStatus::Declared);
         assert_eq!(matrix.model_provider.status, CapabilityStatus::Implemented);
@@ -4390,6 +4528,7 @@ mod tests {
         assert!(method_names.contains(&method::THREAD_READ));
         assert!(method_names.contains(&method::THREAD_TURNS_LIST));
         assert!(method_names.contains(&method::TURN_START));
+        assert!(method_names.contains(&method::TURN_STEER));
         assert!(method_names.contains(&method::TURN_INTERRUPT));
         assert!(method_names.contains(&method::TURN_READ));
         assert!(method_names.contains(&method::MODEL_LIST));
@@ -4405,8 +4544,12 @@ mod tests {
         assert!(event_names.contains(&event::THREAD_STARTED));
         assert!(event_names.contains(&event::TURN_STARTED));
         assert!(event_names.contains(&event::TURN_COMPLETED));
+        assert!(event_names.contains(&event::TURN_PLAN_UPDATED));
+        assert!(event_names.contains(&event::TURN_DIFF_UPDATED));
         assert!(event_names.contains(&event::ITEM_STARTED));
         assert!(event_names.contains(&event::ITEM_AGENT_MESSAGE_DELTA));
+        assert!(event_names.contains(&event::ITEM_PLAN_DELTA));
+        assert!(event_names.contains(&event::RAW_RESPONSE_ITEM_COMPLETED));
         assert!(event_names.contains(&event::ITEM_COMPLETED));
 
         assert!(!event_names.contains(&"thread/created"));
@@ -4504,6 +4647,25 @@ mod tests {
                 "implemented R4 capability should not remain opted out: {capability}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_turn_steer_capability_is_feature_gated() {
+        let base = CapabilityMatrix::phase_one();
+        assert!(
+            !base
+                .session
+                .methods
+                .contains(&method::TURN_STEER.to_string())
+        );
+
+        let ready = base.with_runtime_turn_steer_ready();
+        assert!(
+            ready
+                .session
+                .methods
+                .contains(&method::TURN_STEER.to_string())
+        );
     }
 
     #[test]
@@ -4746,19 +4908,54 @@ mod tests {
         );
         assert_eq!(profile.scope, CompatibilityProfileScope::ChatSessionSubset);
         assert!(profile.description.contains("chat-session subset"));
-        assert_eq!(
-            profile.methods,
-            vec![
-                method::INITIALIZE,
-                method::THREAD_START,
-                method::THREAD_READ,
-                method::THREAD_LIST,
-                method::THREAD_TURNS_LIST,
-                method::TURN_START,
-                method::TURN_INTERRUPT,
-                method::TURN_READ,
-                method::MODEL_LIST,
-            ]
+        for method in [
+            method::INITIALIZE,
+            method::THREAD_START,
+            method::THREAD_READ,
+            method::THREAD_LIST,
+            method::THREAD_TURNS_LIST,
+            method::TURN_START,
+            method::TURN_INTERRUPT,
+            method::TURN_READ,
+            method::MODEL_LIST,
+        ] {
+            assert!(
+                profile.methods.contains(&method.to_string()),
+                "implemented chat-session method should be in compatibility profile: {method}"
+            );
+        }
+        for event in [
+            event::TURN_PLAN_UPDATED,
+            event::TURN_DIFF_UPDATED,
+            event::RAW_RESPONSE_ITEM_COMPLETED,
+            event::ITEM_PLAN_DELTA,
+            event::ITEM_REASONING_SUMMARY_PART_ADDED,
+            event::ITEM_REASONING_TEXT_DELTA,
+        ] {
+            assert!(
+                profile.events.contains(&event.to_string()),
+                "implemented R5 event should be in compatibility profile: {event}"
+            );
+        }
+        for capability in ["codex.diff", "codex.plan"] {
+            assert!(
+                !profile
+                    .capability_opt_outs
+                    .iter()
+                    .any(|opt_out| opt_out.capability == capability),
+                "implemented R5/profile capability should not remain opted out: {capability}"
+            );
+        }
+        assert!(
+            !profile.methods.contains(&method::TURN_STEER.to_string()),
+            "turn/steer remains feature-gated and is not in the default chat-session profile"
+        );
+        assert!(
+            profile
+                .capability_opt_outs
+                .iter()
+                .any(|opt_out| opt_out.capability == "codex.rich_input"),
+            "full rich input remains opted out while runtime prompt injection requires text"
         );
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
             opt_out.capability == "codex.tool_calls"
@@ -4963,6 +5160,16 @@ mod tests {
             },
             JsonRpcRequest {
                 jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("steer")),
+                method: method::TURN_STEER.to_string(),
+                params: Some(serde_json::json!({
+                    "threadId": "thread_1",
+                    "expectedTurnId": "turn_1",
+                    "input": [{"type": "text", "text": "continue", "text_elements": []}]
+                })),
+            },
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
                 id: Some(serde_json::json!("interrupt")),
                 method: method::TURN_INTERRUPT.to_string(),
                 params: Some(serde_json::json!({"threadId": "thread_1", "turnId": "turn_1"})),
@@ -4980,6 +5187,7 @@ mod tests {
                 method::THREAD_START,
                 method::THREAD_READ,
                 method::TURN_START,
+                method::TURN_STEER,
                 method::TURN_INTERRUPT,
             ]
         );
@@ -5043,6 +5251,22 @@ mod tests {
                 },
             })
             .expect("turn/completed fixture should serialize"),
+            ServerNotification::turn_plan_updated(TurnPlanUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                explanation: Some("Adjusting plan".to_string()),
+                plan: vec![TurnPlanStep {
+                    step: "inspect current producer".to_string(),
+                    status: TurnPlanStepStatus::InProgress,
+                }],
+            })
+            .expect("turn/plan/updated fixture should serialize"),
+            ServerNotification::turn_diff_updated(TurnDiffUpdatedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                diff: "--- a/file\n+++ b/file\n".to_string(),
+            })
+            .expect("turn/diff/updated fixture should serialize"),
             ServerNotification::item_started(ItemStartedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
@@ -5079,6 +5303,19 @@ mod tests {
                 delta: "raw scratch".to_string(),
             })
             .expect("item/reasoning text fixture should serialize"),
+            ServerNotification::plan_delta(PlanDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:plan".to_string(),
+                delta: "- inspect\n".to_string(),
+            })
+            .expect("item/plan/delta fixture should serialize"),
+            ServerNotification::raw_response_item_completed(RawResponseItemCompletedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item: serde_json::json!({"id": "raw_1", "type": "reasoning"}),
+            })
+            .expect("rawResponseItem/completed fixture should serialize"),
             ServerNotification::item_completed(ItemCompletedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
@@ -5099,19 +5336,79 @@ mod tests {
             .map(|event| event.method.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(event_names, CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS);
+        for event_name in event_names {
+            assert!(
+                CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS.contains(&event_name),
+                "fixture event should be declared in the Codex v2 profile: {event_name}"
+            );
+        }
         assert_eq!(events[0].params["eventQueue"]["overflow"], "lag_disconnect");
         assert_eq!(events[3].params["thread"]["id"], "thread_1");
         assert_eq!(events[4].params["turn"]["id"], "turn_1");
         assert_eq!(events[5].params["turn"]["status"], "completed");
-        assert_eq!(events[6].params["item"]["type"], "agentMessage");
-        assert_eq!(events[7].params["delta"], "hel");
-        assert_eq!(events[8].params["delta"], "scratch");
-        assert_eq!(events[9].method, event::ITEM_REASONING_SUMMARY_PART_ADDED);
-        assert_eq!(events[9].params["summaryIndex"], 1);
-        assert_eq!(events[10].method, event::ITEM_REASONING_TEXT_DELTA);
-        assert_eq!(events[10].params["contentIndex"], 0);
-        assert_eq!(events[10].params["delta"], "raw scratch");
+        assert_eq!(events[6].method, event::TURN_PLAN_UPDATED);
+        assert_eq!(events[6].params["plan"][0]["status"], "inProgress");
+        assert_eq!(events[7].method, event::TURN_DIFF_UPDATED);
+        assert_eq!(events[7].params["diff"], "--- a/file\n+++ b/file\n");
+        assert_eq!(events[8].params["item"]["type"], "agentMessage");
+        assert_eq!(events[9].params["delta"], "hel");
+        assert_eq!(events[10].params["delta"], "scratch");
+        assert_eq!(events[11].method, event::ITEM_REASONING_SUMMARY_PART_ADDED);
+        assert_eq!(events[11].params["summaryIndex"], 1);
+        assert_eq!(events[12].method, event::ITEM_REASONING_TEXT_DELTA);
+        assert_eq!(events[12].params["contentIndex"], 0);
+        assert_eq!(events[12].params["delta"], "raw scratch");
+        assert_eq!(events[13].method, event::ITEM_PLAN_DELTA);
+        assert_eq!(events[13].params["delta"], "- inspect\n");
+        assert_eq!(events[14].method, event::RAW_RESPONSE_ITEM_COMPLETED);
+        assert_eq!(events[14].params["item"]["id"], "raw_1");
+    }
+
+    #[test]
+    fn r5_turn_steer_and_streaming_events_use_codex_v2_wire_shapes() {
+        assert_eq!(method::TURN_STEER, "turn/steer");
+        assert_eq!(event::TURN_PLAN_UPDATED, "turn/plan/updated");
+        assert_eq!(event::TURN_DIFF_UPDATED, "turn/diff/updated");
+        assert_eq!(event::ITEM_PLAN_DELTA, "item/plan/delta");
+        assert_eq!(
+            event::RAW_RESPONSE_ITEM_COMPLETED,
+            "rawResponseItem/completed"
+        );
+
+        let steer: TurnSteerParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "expectedTurnId": "turn_1",
+            "input": [{ "type": "text", "text": "continue with the safer option" }]
+        }))
+        .expect("turn/steer should accept Codex v2 UserInput arrays");
+        assert_eq!(steer.thread_id, "thread_1");
+        assert_eq!(steer.expected_turn_id, "turn_1");
+        assert_eq!(steer.input.len(), 1);
+
+        let plan = serde_json::to_value(TurnPlanUpdatedEvent {
+            thread_id: "thread_1".into(),
+            turn_id: "turn_1".into(),
+            explanation: Some("Adjusting plan".into()),
+            plan: vec![TurnPlanStep {
+                step: "inspect current producer".into(),
+                status: TurnPlanStepStatus::InProgress,
+            }],
+        })
+        .expect("turn plan update should serialize");
+        assert_eq!(plan["threadId"], "thread_1");
+        assert_eq!(plan["turnId"], "turn_1");
+        assert!(plan.get("thread_id").is_none());
+        assert!(plan.get("turn_id").is_none());
+        assert_eq!(plan["plan"][0]["status"], "inProgress");
+
+        let diff = serde_json::to_value(TurnDiffUpdatedEvent {
+            thread_id: "thread_1".into(),
+            turn_id: "turn_1".into(),
+            diff: "--- a/file\n+++ b/file\n".into(),
+        })
+        .expect("turn diff update should serialize");
+        assert!(diff.get("unifiedDiff").is_none());
+        assert_eq!(diff["diff"], "--- a/file\n+++ b/file\n");
     }
 
     #[test]

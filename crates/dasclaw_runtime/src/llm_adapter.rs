@@ -32,14 +32,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_core::agentic_loop::{AgentCallPolicy, ModelCallMode};
+use dasclaw_core::agentic_loop::{
+    AgentCallPolicy, AgentPlanStep, AgentPlanStepStatus, ModelCallMode,
+};
 use dasclaw_core::messages::{
     ReasoningSummary, ToolCompletionRequest, ToolCompletionResponse, sanitize_tool_messages,
 };
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_llm_provider::provider::provider::{LlmProvider, LlmStreamEvent};
+use dasclaw_llm_provider::provider::provider::{
+    LlmPlanStep, LlmPlanStepStatus, LlmProvider, LlmStreamEvent,
+};
 use dasclaw_llm_provider::provider::reasoning::clean_user_visible_response;
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
@@ -163,14 +167,75 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
                     }
                 }
                 LlmStreamEvent::ReasoningSummaryDelta(delta) => {
+                    let Some(event_tx) = event_tx.as_ref() else {
+                        continue;
+                    };
+                    if !emit_reasoning {
+                        continue;
+                    }
+                    if event_tx
+                        .send(AgentEvent::ReasoningSummaryChunk(delta))
+                        .await
+                        .is_err()
+                    {
+                        continue;
+                    }
+                }
+                LlmStreamEvent::ReasoningSummaryPartAdded {
+                    item_id,
+                    summary_index,
+                } => {
                     if emit_reasoning && let Some(event_tx) = event_tx.as_ref() {
-                        if event_tx
-                            .send(AgentEvent::ReasoningSummaryChunk(delta))
-                            .await
-                            .is_err()
-                        {
-                            continue;
-                        }
+                        let _ = event_tx
+                            .send(AgentEvent::ReasoningSummaryPartAdded {
+                                item_id,
+                                summary_index,
+                            })
+                            .await;
+                    }
+                }
+                LlmStreamEvent::ReasoningRawTextDelta {
+                    item_id,
+                    content_index,
+                    delta,
+                } => {
+                    if emit_reasoning && let Some(event_tx) = event_tx.as_ref() {
+                        let _ = event_tx
+                            .send(AgentEvent::ReasoningRawTextChunk {
+                                item_id,
+                                content_index,
+                                delta,
+                            })
+                            .await;
+                    }
+                }
+                LlmStreamEvent::PlanDelta { item_id, delta } => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        let _ = event_tx
+                            .send(AgentEvent::PlanDelta { item_id, delta })
+                            .await;
+                    }
+                }
+                LlmStreamEvent::TurnPlanUpdated { explanation, plan } => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        let _ = event_tx
+                            .send(AgentEvent::TurnPlanUpdated {
+                                explanation,
+                                plan: map_plan_steps(plan),
+                            })
+                            .await;
+                    }
+                }
+                LlmStreamEvent::TurnDiffUpdated { diff } => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        let _ = event_tx.send(AgentEvent::TurnDiffUpdated { diff }).await;
+                    }
+                }
+                LlmStreamEvent::RawResponseItemCompleted { item } => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        let _ = event_tx
+                            .send(AgentEvent::RawResponseItemCompleted { item })
+                            .await;
                     }
                 }
                 LlmStreamEvent::ToolCallInputDelta { .. } => {}
@@ -193,6 +258,23 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
                 "provider stream ended without a completed response".to_string(),
             )) as HostError
         })
+    }
+}
+
+fn map_plan_steps(plan: Vec<LlmPlanStep>) -> Vec<AgentPlanStep> {
+    plan.into_iter()
+        .map(|step| AgentPlanStep {
+            step: step.step,
+            status: map_plan_step_status(step.status),
+        })
+        .collect()
+}
+
+fn map_plan_step_status(status: LlmPlanStepStatus) -> AgentPlanStepStatus {
+    match status {
+        LlmPlanStepStatus::Pending => AgentPlanStepStatus::Pending,
+        LlmPlanStepStatus::InProgress => AgentPlanStepStatus::InProgress,
+        LlmPlanStepStatus::Completed => AgentPlanStepStatus::Completed,
     }
 }
 
@@ -1001,6 +1083,333 @@ mod tests {
         match output.result {
             RespondResult::Text(t) => assert_eq!(t, "final answer"),
             _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_plan_delta_streams_to_agent_event() {
+        let output_item_id = Some("item-1".to_string());
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::PlanDelta {
+                item_id: output_item_id.clone(),
+                delta: "write tests".to_string(),
+            },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("plan"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![crate::AgentEvent::PlanDelta {
+                item_id: output_item_id,
+                delta: "write tests".to_string(),
+            }]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_reasoning_raw_delta_streams_to_agent_event() {
+        let output_item_id = Some("reasoning-1".to_string());
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::ReasoningRawTextDelta {
+                item_id: output_item_id.clone(),
+                content_index: 2,
+                delta: "raw thought".to_string(),
+            },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider))
+            .with_reasoning_summary(ReasoningSummary::Auto);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("reason"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![crate::AgentEvent::ReasoningRawTextChunk {
+                item_id: output_item_id,
+                content_index: 2,
+                delta: "raw thought".to_string(),
+            }]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_reasoning_summary_part_added_streams_only_when_reasoning_enabled() {
+        let output_item_id = Some("summary-1".to_string());
+        let reasoning_event = LlmStreamEvent::ReasoningSummaryPartAdded {
+            item_id: output_item_id.clone(),
+            summary_index: 1,
+        };
+
+        let enabled_provider = Arc::new(ScriptedEventsProvider::new(vec![reasoning_event]));
+        let enabled_responder = LlmProviderResponder::new(Arc::clone(&enabled_provider))
+            .with_reasoning_summary(ReasoningSummary::Auto);
+        let mut enabled_ctx = ReasoningContext::new();
+        enabled_ctx.messages.push(ChatMessage::user("summary"));
+
+        let (enabled_tx, mut enabled_rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let enabled_output = enabled_responder
+            .respond_streaming(&mut enabled_ctx, enabled_tx)
+            .await
+            .unwrap();
+        let enabled_events = collect_agent_events(&mut enabled_rx).await;
+
+        assert_eq!(
+            enabled_events,
+            vec![crate::AgentEvent::ReasoningSummaryPartAdded {
+                item_id: output_item_id.clone(),
+                summary_index: 1,
+            }]
+        );
+        match enabled_output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+
+        let disabled_provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::ReasoningSummaryPartAdded {
+                item_id: output_item_id,
+                summary_index: 1,
+            },
+        ]));
+        let disabled_responder = LlmProviderResponder::new(Arc::clone(&disabled_provider));
+        let mut disabled_ctx = ReasoningContext::new();
+        disabled_ctx.messages.push(ChatMessage::user("summary"));
+
+        let (disabled_tx, mut disabled_rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let disabled_output = disabled_responder
+            .respond_streaming(&mut disabled_ctx, disabled_tx)
+            .await
+            .unwrap();
+        let disabled_events = collect_agent_events(&mut disabled_rx).await;
+
+        assert!(disabled_events.is_empty());
+        match disabled_output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_reasoning_raw_delta_is_suppressed_when_reasoning_disabled() {
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::ReasoningRawTextDelta {
+                item_id: Some("reasoning-1".to_string()),
+                content_index: 2,
+                delta: "raw thought".to_string(),
+            },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("reason"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert!(events.is_empty());
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_turn_plan_update_streams_to_agent_event() {
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::TurnPlanUpdated {
+                explanation: Some("next step".to_string()),
+                plan: vec![LlmPlanStep {
+                    step: "write implementation".to_string(),
+                    status: LlmPlanStepStatus::InProgress,
+                }],
+            },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("plan"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![crate::AgentEvent::TurnPlanUpdated {
+                explanation: Some("next step".to_string()),
+                plan: vec![AgentPlanStep {
+                    step: "write implementation".to_string(),
+                    status: AgentPlanStepStatus::InProgress,
+                }],
+            }]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_turn_diff_update_streams_to_agent_event() {
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::TurnDiffUpdated {
+                diff: "diff --git a/file b/file".to_string(),
+            },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("diff"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![crate::AgentEvent::TurnDiffUpdated {
+                diff: "diff --git a/file b/file".to_string(),
+            }]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_raw_response_item_completed_streams_to_agent_event() {
+        let item = serde_json::json!({
+            "id": "item-1",
+            "type": "message",
+        });
+        let provider = Arc::new(ScriptedEventsProvider::new(vec![
+            LlmStreamEvent::RawResponseItemCompleted { item: item.clone() },
+        ]));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("raw"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![crate::AgentEvent::RawResponseItemCompleted { item }]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "done"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_reasoning_tag_still_emits_summary_chunk_only() {
+        let provider = Arc::new(StreamingMockProvider {
+            chunks: vec!["<think>private</think>final".into()],
+            reasoning_chunks: Vec::new(),
+        });
+        let responder = LlmProviderResponder::new(Arc::clone(&provider))
+            .with_reasoning_summary(ReasoningSummary::Auto);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("legacy"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+        let events = collect_agent_events(&mut rx).await;
+
+        assert_eq!(
+            events,
+            vec![
+                crate::AgentEvent::ReasoningSummaryChunk("private".to_string()),
+                crate::AgentEvent::TextChunk("final".to_string()),
+            ]
+        );
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "final"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    async fn collect_agent_events(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::AgentEvent>,
+    ) -> Vec<crate::AgentEvent> {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    }
+
+    /// Scripted stream used only to prove adapter forwarding.
+    /// Real provider production is covered by provider fixture tests and
+    /// app-server provider-backed integration tests.
+    struct ScriptedEventsProvider {
+        events: Mutex<Vec<LlmStreamEvent>>,
+    }
+
+    impl ScriptedEventsProvider {
+        fn new(events: Vec<LlmStreamEvent>) -> Self {
+            Self {
+                events: Mutex::new(events),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ScriptedEventsProvider {
+        fn model_name(&self) -> &str {
+            "scripted-events"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            unreachable!()
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            unreachable!("streaming path should be exercised")
+        }
+
+        async fn stream_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<LlmStream, LlmError> {
+            let (event_tx, event_rx) =
+                tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(16);
+            let events = std::mem::take(&mut *self.events.lock().unwrap());
+            for event in events {
+                let _ = event_tx.send(Ok(event)).await;
+            }
+            let _ = event_tx
+                .send(Ok(LlmStreamEvent::Completed(text_response("done"))))
+                .await;
+            Ok(LlmStream::new(event_rx))
         }
     }
 

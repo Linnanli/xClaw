@@ -151,6 +151,12 @@ impl ThreadLifecycleHost {
         let (output, error) = match update.outcome {
             RuntimeTurnOutcome::Delta { .. }
             | RuntimeTurnOutcome::ReasoningSummaryDelta { .. }
+            | RuntimeTurnOutcome::ReasoningSummaryPartAdded { .. }
+            | RuntimeTurnOutcome::ReasoningTextDelta { .. }
+            | RuntimeTurnOutcome::PlanUpdated { .. }
+            | RuntimeTurnOutcome::DiffUpdated { .. }
+            | RuntimeTurnOutcome::RawResponseItemCompleted { .. }
+            | RuntimeTurnOutcome::PlanDelta { .. }
             | RuntimeTurnOutcome::ApprovalRequested { .. }
             | RuntimeTurnOutcome::ToolResult { .. }
             | RuntimeTurnOutcome::CommandOutputDelta { .. }

@@ -11,6 +11,7 @@
 use async_trait::async_trait;
 use futures::Stream;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -39,12 +40,50 @@ pub struct LlmProviderCapabilities {
 pub enum LlmStreamEvent {
     TextDelta(String),
     ReasoningSummaryDelta(String),
+    ReasoningSummaryPartAdded {
+        item_id: Option<String>,
+        summary_index: i64,
+    },
+    ReasoningRawTextDelta {
+        item_id: Option<String>,
+        content_index: i64,
+        delta: String,
+    },
+    PlanDelta {
+        item_id: Option<String>,
+        delta: String,
+    },
+    TurnPlanUpdated {
+        explanation: Option<String>,
+        plan: Vec<LlmPlanStep>,
+    },
+    TurnDiffUpdated {
+        diff: String,
+    },
+    RawResponseItemCompleted {
+        item: serde_json::Value,
+    },
     ToolCallInputDelta {
         id: String,
         name: Option<String>,
         delta: String,
     },
     Completed(ToolCompletionResponse),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmPlanStep {
+    pub step: String,
+    pub status: LlmPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LlmPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
 }
 
 /// Unified provider stream. Stream construction failures are returned

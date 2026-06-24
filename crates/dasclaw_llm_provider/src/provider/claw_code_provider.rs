@@ -464,7 +464,11 @@ impl MessageStreamAccumulator {
                         vec![LlmStreamEvent::TextDelta(text.clone())]
                     }
                     OutputContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
-                        vec![LlmStreamEvent::ReasoningSummaryDelta(thinking.clone())]
+                        vec![LlmStreamEvent::ReasoningRawTextDelta {
+                            item_id: None,
+                            content_index: i64::from(event.index),
+                            delta: thinking.clone(),
+                        }]
                     }
                     _ => Vec::new(),
                 };
@@ -478,12 +482,19 @@ impl MessageStreamAccumulator {
                 };
                 match event.delta {
                     ContentBlockDelta::TextDelta { text } => {
+                        // This normalized claw-code stream exposes text/thinking/tool deltas, not
+                        // turn-level plan/diff or raw response item completion events. Do not
+                        // synthesize those R5 events from ordinary assistant text.
                         active.push_text(&text);
                         vec![LlmStreamEvent::TextDelta(text)]
                     }
                     ContentBlockDelta::ThinkingDelta { thinking } => {
                         active.push_thinking(&thinking);
-                        vec![LlmStreamEvent::ReasoningSummaryDelta(thinking)]
+                        vec![LlmStreamEvent::ReasoningRawTextDelta {
+                            item_id: None,
+                            content_index: i64::from(event.index),
+                            delta: thinking,
+                        }]
                     }
                     ContentBlockDelta::InputJsonDelta { partial_json } => {
                         active.push_input_json(&partial_json);
@@ -1200,6 +1211,84 @@ mod tests {
                 if provider == "dasclaw_llm_provider"
                     && reason.contains("invalid streamed tool input JSON")
         ));
+    }
+
+    #[test]
+    fn claw_code_provider_fixture_emits_reasoning_raw_text_delta() {
+        let mut accumulator = MessageStreamAccumulator::new("claude-sonnet".to_string());
+        accumulator
+            .ingest(StreamEvent::ContentBlockStart(
+                crate::ContentBlockStartEvent {
+                    index: 0,
+                    content_block: OutputContentBlock::Thinking {
+                        thinking: String::new(),
+                        signature: None,
+                    },
+                },
+            ))
+            .expect("thinking block start should ingest");
+
+        let events = accumulator
+            .ingest(StreamEvent::ContentBlockDelta(
+                crate::ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::ThinkingDelta {
+                        thinking: "raw reasoning".into(),
+                    },
+                },
+            ))
+            .expect("thinking delta fixture should ingest");
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::ReasoningRawTextDelta {
+                    item_id: None,
+                    content_index: 0,
+                    delta,
+                } if delta == "raw reasoning"
+            )
+        }));
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                LlmStreamEvent::ReasoningSummaryDelta(delta)
+                    if delta == "raw reasoning"
+            )
+        }));
+    }
+
+    #[test]
+    fn provider_fixture_emits_plan_or_diff_only_when_source_event_exists() {
+        let mut accumulator = MessageStreamAccumulator::new("claude-sonnet".to_string());
+        accumulator
+            .ingest(StreamEvent::ContentBlockStart(
+                crate::ContentBlockStartEvent {
+                    index: 0,
+                    content_block: OutputContentBlock::Text {
+                        text: String::new(),
+                    },
+                },
+            ))
+            .expect("text block start should ingest");
+
+        let events = accumulator
+            .ingest(StreamEvent::ContentBlockDelta(
+                crate::ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::TextDelta {
+                        text: "Plan: do not synthesize this into a turn plan".into(),
+                    },
+                },
+            ))
+            .expect("text delta fixture should ingest");
+
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            LlmStreamEvent::PlanDelta { .. }
+                | LlmStreamEvent::TurnPlanUpdated { .. }
+                | LlmStreamEvent::TurnDiffUpdated { .. }
+        )));
     }
 
     #[test]
