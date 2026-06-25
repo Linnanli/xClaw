@@ -1,16 +1,23 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use dasclaw_app_server_protocol::{CommandExecParams, CommandExecResponse};
+use dasclaw_protocol::approvals::{GuardianAssessmentAction, GuardianAssessmentEvent};
 
 use crate::AppServerError;
 use crate::app_services::CommandExecService;
 
+#[derive(Debug, Clone)]
+pub struct PendingGuardianAction {
+    pub thread_id: String,
+    pub event: GuardianAssessmentEvent,
+}
+
 #[derive(Clone)]
 pub struct ThreadActionService {
     command_exec: Arc<dyn CommandExecService>,
-    pending_guardian: Arc<Mutex<HashMap<String, Vec<serde_json::Value>>>>,
+    pending_guardian: Arc<Mutex<HashMap<String, HashMap<String, PendingGuardianAction>>>>,
 }
 
 impl ThreadActionService {
@@ -38,11 +45,11 @@ impl ThreadActionService {
         self.run_command_exec(CommandExecParams {
             command,
             cwd: Some(cwd.to_string()),
-            timeout_ms: None,
+            timeout_ms: Some(30_000),
             disable_timeout: None,
             output_bytes_cap: None,
             disable_output_cap: None,
-            env: Default::default(),
+            env: BTreeMap::new(),
             process_id: None,
             sandbox_policy: None,
             permission_profile: None,
@@ -58,10 +65,10 @@ impl ThreadActionService {
         Ok(command_output(response))
     }
 
-    pub fn stash_pending_guardian(
+    pub fn stash_guardian_action(
         &self,
-        thread_id: impl Into<String>,
-        event: serde_json::Value,
+        thread_id: &str,
+        event: GuardianAssessmentEvent,
     ) -> Result<(), AppServerError> {
         let mut pending = self.pending_guardian.lock().map_err(|_| {
             AppServerError::service_degraded(
@@ -69,21 +76,65 @@ impl ThreadActionService {
                 "pending guardian store lock is poisoned",
             )
         })?;
-        pending.entry(thread_id.into()).or_default().push(event);
+        pending.entry(thread_id.to_string()).or_default().insert(
+            event.id.clone(),
+            PendingGuardianAction {
+                thread_id: thread_id.to_string(),
+                event,
+            },
+        );
         Ok(())
     }
 
-    pub fn take_pending_guardian(
+    pub fn take_guardian_action(
         &self,
         thread_id: &str,
-    ) -> Result<Vec<serde_json::Value>, AppServerError> {
+        event_id: &str,
+    ) -> Result<Option<PendingGuardianAction>, AppServerError> {
         let mut pending = self.pending_guardian.lock().map_err(|_| {
             AppServerError::service_degraded(
                 "thread_actions",
                 "pending guardian store lock is poisoned",
             )
         })?;
-        Ok(pending.remove(thread_id).unwrap_or_default())
+        let Some(thread_pending) = pending.get_mut(thread_id) else {
+            return Ok(None);
+        };
+        let Some(action) = thread_pending.remove(event_id) else {
+            return Ok(None);
+        };
+        if thread_pending.is_empty() {
+            pending.remove(thread_id);
+        }
+        if action.thread_id != thread_id {
+            return Err(AppServerError::invalid_request(
+                "thread_actions",
+                "guardian action belongs to a different thread",
+            ));
+        }
+        Ok(Some(action))
+    }
+
+    pub fn replay_guardian_action(
+        &self,
+        pending: PendingGuardianAction,
+    ) -> Result<String, AppServerError> {
+        match pending.event.action {
+            GuardianAssessmentAction::Command { command, cwd, .. } => {
+                let cwd = cwd.as_path().to_string_lossy().into_owned();
+                self.run_shell_command(&cwd, &command)
+            }
+            GuardianAssessmentAction::Execve {
+                program, argv, cwd, ..
+            } => {
+                let cwd = cwd.as_path().to_string_lossy().into_owned();
+                self.run_execve_command(&cwd, program, argv)
+            }
+            _ => Err(AppServerError::capability_unavailable(
+                "thread_actions",
+                "guardian replay currently supports command-like actions only",
+            )),
+        }
     }
 }
 

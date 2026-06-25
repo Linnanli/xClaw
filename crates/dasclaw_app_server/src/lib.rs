@@ -111,7 +111,7 @@ use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thread_action_service::ThreadActionService;
+use thread_action_service::{PendingGuardianAction, ThreadActionService};
 use thread_lifecycle::{
     ThreadCreation, ThreadFork, ThreadLifecycleHost, ThreadSummary, TurnSummary,
 };
@@ -1323,9 +1323,17 @@ impl AppServer {
             turn: started_turn,
         });
 
-        let output = self
-            .thread_actions
-            .run_shell_command(cwd, &params.command)?;
+        let output = match self.thread_actions.run_shell_command(cwd, &params.command) {
+            Ok(output) => output,
+            Err(error) => {
+                self.fail_pending_turn(
+                    params.thread_id.clone(),
+                    turn_id.clone(),
+                    error.public_message().to_string(),
+                );
+                return Err(error);
+            }
+        };
         let completed =
             self.threads
                 .complete_synthetic_turn(&params.thread_id, &turn_id, output.clone())?;
@@ -1345,7 +1353,49 @@ impl AppServer {
     ) -> Result<Value, AppServerError> {
         self.require_initialized("session")?;
         self.thread_summary_or_error(&params.thread_id)?;
-        let _ = params.event;
+        let event = serde_json::from_value::<dasclaw_protocol::approvals::GuardianAssessmentEvent>(
+            params.event,
+        )
+        .map_err(|error| {
+            AppServerError::invalid_request("session", format!("invalid guardian event: {error}"))
+        })?;
+        let pending = self
+            .thread_actions
+            .take_guardian_action(&params.thread_id, &event.id)?
+            .unwrap_or(PendingGuardianAction {
+                thread_id: params.thread_id.clone(),
+                event,
+            });
+        let turn_id = self.threads.next_turn_id();
+        self.threads
+            .record_started_turn(&params.thread_id, turn_id.clone())?;
+        let started_turn = self.codex_turn_view(&params.thread_id, &turn_id)?;
+        self.notifications.emit_turn_started(TurnStartedEvent {
+            thread_id: params.thread_id.clone(),
+            turn: started_turn,
+        });
+
+        let output = match self.thread_actions.replay_guardian_action(pending) {
+            Ok(output) => output,
+            Err(error) => {
+                self.fail_pending_turn(
+                    params.thread_id.clone(),
+                    turn_id.clone(),
+                    error.public_message().to_string(),
+                );
+                return Err(error);
+            }
+        };
+        let completed =
+            self.threads
+                .complete_synthetic_turn(&params.thread_id, &turn_id, output.clone())?;
+        if !output.is_empty() {
+            self.emit_codex_agent_message_delta(params.thread_id.clone(), turn_id.clone(), output);
+        }
+        self.notifications.emit_turn_completed(TurnCompletedEvent {
+            thread_id: params.thread_id,
+            turn: codex_turn_from_summary(completed),
+        });
         Ok(serde_json::json!({}))
     }
 
@@ -11766,7 +11816,15 @@ mod tests {
 
     #[test]
     fn json_rpc_thread_approve_guardian_denied_action_replays_stashed_command_action() {
-        let mut server = initialized_codex_server();
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::ready_buffered(),
+        );
+        let mut server = initialized_codex_server().with_app_services(services);
         let thread = json_rpc_value(
             server
                 .handle_json_rpc(
@@ -11788,9 +11846,117 @@ mod tests {
                 ))
                 .expect("thread/approveGuardianDeniedAction should return a JSON-RPC response"),
         );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
 
         assert_eq!(response["id"], "guardian");
         assert_eq!(response["result"], serde_json::json!({}));
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"item/agentMessage/delta"));
+        assert!(methods.contains(&"turn/completed"));
+        let delta = notifications
+            .iter()
+            .find(|notification| notification.method == "item/agentMessage/delta")
+            .expect("guardian replay should emit an agent message delta");
+        assert_eq!(delta.params["delta"], "test");
+    }
+
+    #[test]
+    fn json_rpc_thread_shell_command_failure_marks_started_turn_failed() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
+        );
+        let mut server = initialized_codex_server().with_app_services(services);
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"shell","method":"thread/shellCommand","params":{{"threadId":"{thread_id}","command":"printf ready"}}}}"#
+                ))
+                .expect("thread/shellCommand should return a JSON-RPC error response"),
+        );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["id"], "shell");
+        assert_eq!(response["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"item/completed"));
+        assert!(methods.contains(&"turn/completed"));
+        assert!(methods.contains(&"error"));
+        assert!(!methods.contains(&"item/agentMessage/delta"));
+        assert_turn_status_and_ready(&mut server, &thread_id, "turn_1", TurnStatus::Failed);
+    }
+
+    #[test]
+    fn json_rpc_guardian_replay_failure_marks_started_turn_failed() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
+        );
+        let mut server = initialized_codex_server().with_app_services(services);
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let guardian_event = seed_guardian_command_event_for_test(&mut server, &thread_id);
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{guardian_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC error response"),
+        );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"item/completed"));
+        assert!(methods.contains(&"turn/completed"));
+        assert!(methods.contains(&"error"));
+        assert!(!methods.contains(&"item/agentMessage/delta"));
+        assert_turn_status_and_ready(&mut server, &thread_id, "turn_1", TurnStatus::Failed);
     }
 
     #[test]
@@ -19561,7 +19727,7 @@ mod tests {
             })
             .expect("thread must exist before seeding guardian command event");
 
-        serde_json::json!({
+        let event = serde_json::json!({
             "id": "guardian_1",
             "turn_id": "turn_1",
             "status": "denied",
@@ -19575,7 +19741,17 @@ mod tests {
                 "command": "printf ready",
                 "cwd": "/tmp/workspace"
             }
-        })
+        });
+        let parsed =
+            serde_json::from_value::<dasclaw_protocol::approvals::GuardianAssessmentEvent>(
+                event.clone(),
+            )
+            .expect("guardian event should parse");
+        server
+            .thread_actions
+            .stash_guardian_action(thread_id, parsed)
+            .expect("guardian event should stash");
+        event
     }
 
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
