@@ -18,7 +18,9 @@ use dasclaw_app_server_protocol::{
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
 use dasclaw_pty::{PtyExitStatus, PtySize, PtySpawnOptions, StreamingPty};
-use dasclaw_shell_tools::{SandboxedShellExecutor, ShellExecError};
+use dasclaw_shell_tools::{
+    SandboxedShellExecutor, ShellExecError, build_sandboxed_shell_launch_spec,
+};
 use dasclaw_workspace_cap::WorkspaceCapability;
 use dasclaw_workspace_cap::policy::SandboxPolicy;
 use uuid::Uuid;
@@ -333,11 +335,6 @@ impl AppServerCommandExecService {
         if !tty && params.size.is_some() {
             return Err(command_unavailable("size requires tty support"));
         }
-        if params.sandbox_policy.is_some() || params.permission_profile.is_some() {
-            return Err(command_unavailable(
-                "sandboxPolicy/permissionProfile are not supported by streaming command exec until sandboxed streaming is implemented",
-            ));
-        }
         if params.disable_output_cap.unwrap_or(false) {
             return Err(command_unavailable(
                 "disableOutputCap is not supported by streaming command exec",
@@ -350,13 +347,30 @@ impl AppServerCommandExecService {
         &self,
         params: CommandExecParams,
     ) -> Result<CommandExecResponse, AppServerError> {
-        if !params.tty.unwrap_or(false) {
-            return self.exec_pipe_streaming(params);
-        }
-
         let process_id = Self::validate_streaming_exec_options(&params)?;
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
+        let policy = resolve_policy_override(
+            params.sandbox_policy.clone(),
+            params.permission_profile.clone(),
+            &cwd,
+            COMMAND_EXEC_CAPABILITY,
+        )?
+        .unwrap_or_else(SandboxPolicy::new_read_only_policy);
+        if matches!(policy, SandboxPolicy::DangerFullAccess) {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "danger-full-access is not supported for streaming command exec",
+            ));
+        }
+
+        if !params.tty.unwrap_or(false) {
+            return self.exec_pipe_streaming(params, process_id, cwd);
+        }
+
         let env = Self::env(params.env);
+        let command = Self::command_line(&params.command)?;
+        let launch_spec = build_sandboxed_shell_launch_spec(&command, &cwd, policy, env)
+            .map_err(map_streaming_launch_error)?;
         let stream_stdin = params.stream_stdin.unwrap_or(params.tty.unwrap_or(false));
         let size = params
             .size
@@ -390,10 +404,10 @@ impl AppServerCommandExecService {
 
         let process = dasclaw_pty::default_backend()
             .spawn_process(PtySpawnOptions {
-                program: params.command[0].clone(),
-                args: params.command[1..].to_vec(),
+                program: launch_spec.program,
+                args: launch_spec.args,
                 cwd: Some(cwd),
-                env,
+                env: launch_spec.env,
                 size: PtySize {
                     rows: size.rows,
                     cols: size.cols,
@@ -457,9 +471,9 @@ impl AppServerCommandExecService {
     fn exec_pipe_streaming(
         &self,
         params: CommandExecParams,
+        process_id: String,
+        cwd: PathBuf,
     ) -> Result<CommandExecResponse, AppServerError> {
-        let process_id = Self::validate_streaming_exec_options(&params)?;
-        let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let env = Self::env(params.env);
         let stream_stdin = params.stream_stdin.unwrap_or(false);
         let stream_output = params.stream_stdout_stderr.unwrap_or(false);
@@ -1345,6 +1359,18 @@ fn map_exec_error(error: ShellExecError) -> AppServerError {
     }
 }
 
+fn map_streaming_launch_error(error: ShellExecError) -> AppServerError {
+    match error {
+        ShellExecError::FullAccessNotPermitted => AppServerError::invalid_request(
+            COMMAND_EXEC_CAPABILITY,
+            "danger-full-access is not supported for streaming command exec",
+        ),
+        ShellExecError::Timeout(_) | ShellExecError::ExecutionFailed(_) => {
+            command_unavailable(error.to_string())
+        }
+    }
+}
+
 fn command_unavailable(message: impl Into<String>) -> AppServerError {
     AppServerError::capability_unavailable(COMMAND_EXEC_CAPABILITY, message)
 }
@@ -1484,7 +1510,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn command_service_rejects_streaming_permission_profile_override() {
+    fn command_service_rejects_streaming_disabled_permission_profile_override() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
         let mut params = exec_params(vec!["sh", "-c", "printf ready"]);
@@ -1495,12 +1521,12 @@ mod tests {
 
         let error = service
             .exec(params)
-            .expect_err("permissionProfile override unsupported");
+            .expect_err("disabled permissionProfile must fail closed");
 
         assert!(
             error
                 .to_string()
-                .contains("sandboxPolicy/permissionProfile are not supported by streaming")
+                .contains("danger-full-access is not supported for streaming command exec")
         );
         assert!(service.drain_output_delta_events().is_empty());
     }
@@ -1588,6 +1614,49 @@ mod tests {
         assert!(availability.write);
         assert!(availability.terminate);
         assert!(availability.resize);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_control_audit_redacts_payload_but_records_outcome() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_audit_write_redaction";
+        let secret = "secret-stdin-token";
+        let mut params = exec_params(vec![
+            "sh",
+            "-c",
+            "printf ready; IFS= read -r line; printf done",
+        ]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode(format!("{secret}\n"))),
+                close_stdin: None,
+            })
+            .expect("write succeeds");
+
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec succeeds");
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
+
+        assert_eq!(response.exit_code, 0);
+        assert!(audit_text.contains("\"operation\":\"write\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(!audit_text.contains(secret));
     }
 
     #[cfg(unix)]
@@ -2123,10 +2192,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn command_service_streaming_override_rejection_redacts_policy_payload() {
+    fn command_service_streaming_override_redacts_policy_payload() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
-        let mut params = exec_params(vec!["sh", "-c", "printf should-not-run"]);
+        let mut params = exec_params(vec!["sh", "-c", "printf sandbox-override-accepted"]);
         params.process_id = Some("pipe_sensitive_policy".to_string());
         params.stream_stdout_stderr = Some(true);
         params.sandbox_policy = Some(serde_json::json!({
@@ -2134,18 +2203,14 @@ mod tests {
             "writable_roots": ["/tmp/do-not-leak-sensitive-root"]
         }));
 
-        let error = service
-            .exec(params)
-            .expect_err("streaming sandbox override must fail safe");
-        let error_text = error.to_string();
+        let response = service.exec(params).expect("streaming sandbox override");
         let audit_text = serde_json::to_string(&service.drain_audit_entries())
             .expect("audit entries should serialize");
 
-        assert!(error_text.contains("sandboxPolicy/permissionProfile"));
-        assert!(!error_text.contains("do-not-leak-sensitive-root"));
+        assert_eq!(response.exit_code, 0);
         assert!(!audit_text.contains("do-not-leak-sensitive-root"));
         assert!(audit_text.contains("\"hasSandboxPolicy\":true"));
-        assert!(audit_text.contains("\"outcome\":\"rejected\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
     }
 
     #[cfg(unix)]
@@ -2378,24 +2443,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn streaming_command_rejects_sandbox_override_until_pty_is_sandboxed() {
+    fn streaming_command_accepts_read_only_sandbox_override() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
         let mut params = exec_params(vec!["sh", "-c", "printf hi"]);
         params.process_id = Some("proc_sandbox".to_string());
         params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
         params.sandbox_policy = Some(serde_json::json!({ "type": "read-only" }));
 
-        let error = service
-            .exec(params)
-            .expect_err("streaming sandbox unavailable");
-        assert!(
-            format!("{error:?}")
-                .contains("sandboxPolicy/permissionProfile are not supported by streaming"),
-            "{error:?}"
-        );
+        let response = service.exec(params).expect("streaming sandbox override");
+        assert_eq!(response.exit_code, 0);
     }
 
     #[cfg(unix)]

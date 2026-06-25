@@ -57,6 +57,15 @@ pub struct ExecOutput {
     pub truncated: bool,
 }
 
+/// Shell launch details reusable by callers that need to spawn the same
+/// shell-wrapped command through a different process backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxedShellLaunchSpec {
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+}
+
 /// OS 进程沙箱执行器。
 ///
 /// 不持有 Docker / 代理状态，每次 [`execute`](Self::execute) 独立构造
@@ -141,14 +150,41 @@ impl SandboxedShellExecutor {
 
 /// 把 shell 字符串包成可 spawn 的 [`Command`]。
 fn build_shell_command(command: &str) -> Command {
+    let (program, args) = shell_program_and_args(command);
+    let mut c = Command::new(program);
+    c.args(args);
+    c
+}
+
+/// Build the shell launch contract for sandbox-aware streaming callers.
+///
+/// `DangerFullAccess` remains fail-closed here so callers cannot accidentally
+/// bypass the buffered executor's double opt-in gate.
+pub fn build_sandboxed_shell_launch_spec(
+    command: &str,
+    _cwd: &Path,
+    policy: CapPolicy,
+    env: HashMap<String, String>,
+) -> Result<SandboxedShellLaunchSpec, ShellExecError> {
+    if matches!(policy, CapPolicy::DangerFullAccess) {
+        return Err(ShellExecError::FullAccessNotPermitted);
+    }
+
+    let (program, args) = shell_program_and_args(command);
+    Ok(SandboxedShellLaunchSpec { program, args, env })
+}
+
+fn shell_program_and_args(command: &str) -> (String, Vec<String>) {
     if cfg!(target_os = "windows") {
-        let mut c = Command::new("cmd");
-        c.args(["/C", command]);
-        c
+        (
+            "cmd".to_string(),
+            vec!["/C".to_string(), command.to_string()],
+        )
     } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", command]);
-        c
+        (
+            "sh".to_string(),
+            vec!["-c".to_string(), command.to_string()],
+        )
     }
 }
 
