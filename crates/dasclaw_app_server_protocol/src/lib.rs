@@ -31,6 +31,8 @@ pub mod method {
     pub const THREAD_ROLLBACK: &str = "thread/rollback";
     pub const THREAD_LOADED_LIST: &str = "thread/loaded/list";
     pub const THREAD_INJECT_ITEMS: &str = "thread/inject_items";
+    pub const THREAD_SHELL_COMMAND: &str = "thread/shellCommand";
+    pub const THREAD_APPROVE_GUARDIAN_DENIED_ACTION: &str = "thread/approveGuardianDeniedAction";
     pub const THREAD_GOAL_SET: &str = "thread/goal/set";
     pub const THREAD_GOAL_GET: &str = "thread/goal/get";
     pub const THREAD_GOAL_CLEAR: &str = "thread/goal/clear";
@@ -1267,6 +1269,8 @@ impl CompatibilityProfile {
                 method::THREAD_ROLLBACK.to_string(),
                 method::THREAD_LOADED_LIST.to_string(),
                 method::THREAD_INJECT_ITEMS.to_string(),
+                method::THREAD_SHELL_COMMAND.to_string(),
+                method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION.to_string(),
                 method::THREAD_GOAL_SET.to_string(),
                 method::THREAD_GOAL_GET.to_string(),
                 method::THREAD_GOAL_CLEAR.to_string(),
@@ -1610,6 +1614,20 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "thread_lifecycle",
             Some("ThreadInjectItemsParams"),
             "ThreadInjectItemsResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_SHELL_COMMAND,
+            "session",
+            Some("ThreadShellCommandParams"),
+            "EmptyResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION,
+            "session",
+            Some("ThreadApproveGuardianDeniedActionParams"),
+            "EmptyResponse",
             true,
         ),
         MethodSchema::new(
@@ -2754,6 +2772,20 @@ pub struct ThreadInjectItemsParams {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadInjectItemsResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadShellCommandParams {
+    pub thread_id: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadApproveGuardianDeniedActionParams {
+    pub thread_id: String,
+    pub event: serde_json::Value,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

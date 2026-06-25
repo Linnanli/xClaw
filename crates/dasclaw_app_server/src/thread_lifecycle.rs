@@ -216,6 +216,41 @@ impl ThreadLifecycleHost {
         Ok(Some(summary))
     }
 
+    pub fn complete_synthetic_turn(
+        &mut self,
+        thread_id: &str,
+        turn_id: &str,
+        output: String,
+    ) -> Result<TurnSummary, AppServerError> {
+        let mut next = self.clone();
+        let turn = next
+            .turns
+            .iter_mut()
+            .find(|turn| turn.thread_id == thread_id && turn.turn_id == turn_id)
+            .ok_or_else(|| {
+                AppServerError::invalid_request(
+                    "thread_lifecycle",
+                    format!("unknown turn id: {turn_id}"),
+                )
+            })?;
+        if turn.status != TurnStatus::Pending {
+            return Err(AppServerError::invalid_request(
+                "thread_lifecycle",
+                format!("turn is not pending: {turn_id}"),
+            ));
+        }
+
+        turn.status = TurnStatus::Completed;
+        turn.output = Some(output.clone());
+        turn.error = None;
+        turn.items = vec![CodexThreadItem::completed_agent_message(turn_id, output)];
+
+        let summary = turn.to_summary();
+        next.touch_thread(thread_id)?;
+        self.commit(next)?;
+        Ok(summary)
+    }
+
     #[must_use]
     pub fn turn_is_pending(&self, thread_id: &str, turn_id: &str) -> bool {
         self.turns.iter().any(|turn| {

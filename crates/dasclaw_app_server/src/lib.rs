@@ -17,6 +17,7 @@ pub mod mcp_service;
 pub mod repo_service;
 pub mod search_service;
 pub mod skills_service;
+pub mod thread_action_service;
 
 mod blocking_runtime;
 mod sandbox_protocol;
@@ -74,15 +75,16 @@ use dasclaw_app_server_protocol::{
     ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
     ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
     SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-    ThreadArchiveParams, ThreadArchiveResponse, ThreadArchivedEvent, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadCompactedEvent, ThreadForkParams, ThreadForkResponse,
-    ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalClearedEvent, ThreadGoalGetParams,
-    ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalSetResponse, ThreadGoalUpdatedEvent,
-    ThreadInjectItemsParams, ThreadInjectItemsResponse, ThreadListParams, ThreadListResponse,
-    ThreadLoadedListParams, ThreadLoadedListResponse, ThreadMetadataUpdateResponse,
-    ThreadNameUpdatedEvent, ThreadReadParams, ThreadReadResponse, ThreadResumeParams,
-    ThreadResumeResponse, ThreadRollbackParams, ThreadRollbackResponse, ThreadSetNameParams,
-    ThreadSetNameResponse, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
+    ThreadApproveGuardianDeniedActionParams, ThreadArchiveParams, ThreadArchiveResponse,
+    ThreadArchivedEvent, ThreadCompactStartParams, ThreadCompactStartResponse,
+    ThreadCompactedEvent, ThreadForkParams, ThreadForkResponse, ThreadGoalClearParams,
+    ThreadGoalClearResponse, ThreadGoalClearedEvent, ThreadGoalGetParams, ThreadGoalGetResponse,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadGoalUpdatedEvent, ThreadInjectItemsParams,
+    ThreadInjectItemsResponse, ThreadListParams, ThreadListResponse, ThreadLoadedListParams,
+    ThreadLoadedListResponse, ThreadMetadataUpdateResponse, ThreadNameUpdatedEvent,
+    ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
+    ThreadRollbackParams, ThreadRollbackResponse, ThreadSetNameParams, ThreadSetNameResponse,
+    ThreadShellCommandParams, ThreadStartParams, ThreadStartResponse, ThreadStartedEvent,
     ThreadStatusChangedEvent, ThreadTokenUsageUpdatedEvent, ThreadTurnsListParams,
     ThreadTurnsListResponse, ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnarchivedEvent,
     ThreadUnsubscribeParams, ThreadUnsubscribeResponse, ThreadUnsubscribeStatus,
@@ -109,6 +111,7 @@ use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thread_action_service::ThreadActionService;
 use thread_lifecycle::{
     ThreadCreation, ThreadFork, ThreadLifecycleHost, ThreadSummary, TurnSummary,
 };
@@ -135,6 +138,7 @@ pub struct AppServer {
     pending_server_requests: PendingServerRequestStore,
     model_provider: ModelProviderState,
     app_services: app_services::AppServerServices,
+    thread_actions: ThreadActionService,
 }
 
 impl Default for AppServer {
@@ -702,6 +706,8 @@ fn required_snapshot_option(
 impl AppServer {
     #[must_use]
     pub fn new() -> Self {
+        let app_services = app_services::AppServerServices::default();
+        let thread_actions = ThreadActionService::new(Arc::clone(&app_services.command));
         Self {
             server: ServerInfo {
                 name: SERVER_NAME.to_string(),
@@ -723,7 +729,8 @@ impl AppServer {
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
             pending_server_requests: PendingServerRequestStore::new(),
             model_provider: ModelProviderState::default(),
-            app_services: app_services::AppServerServices::default(),
+            app_services,
+            thread_actions,
         }
     }
 
@@ -763,6 +770,7 @@ impl AppServer {
 
     #[must_use]
     pub fn with_app_services(mut self, services: app_services::AppServerServices) -> Self {
+        self.thread_actions = ThreadActionService::new(Arc::clone(&services.command));
         self.app_services = services;
         self.refresh_service_capabilities();
         self
@@ -1297,6 +1305,48 @@ impl AppServer {
         self.require_initialized("thread_lifecycle")?;
         self.threads.inject_items(&params.thread_id, params.items)?;
         Ok(ThreadInjectItemsResponse {})
+    }
+
+    pub fn thread_shell_command(
+        &mut self,
+        params: ThreadShellCommandParams,
+    ) -> Result<Value, AppServerError> {
+        self.require_initialized("session")?;
+        let thread_summary = self.thread_summary_or_error(&params.thread_id)?;
+        let cwd = thread_summary.workspace_root.as_deref().unwrap_or(".");
+        let turn_id = self.threads.next_turn_id();
+        self.threads
+            .record_started_turn(&params.thread_id, turn_id.clone())?;
+        let started_turn = self.codex_turn_view(&params.thread_id, &turn_id)?;
+        self.notifications.emit_turn_started(TurnStartedEvent {
+            thread_id: params.thread_id.clone(),
+            turn: started_turn,
+        });
+
+        let output = self
+            .thread_actions
+            .run_shell_command(cwd, &params.command)?;
+        let completed =
+            self.threads
+                .complete_synthetic_turn(&params.thread_id, &turn_id, output.clone())?;
+        if !output.is_empty() {
+            self.emit_codex_agent_message_delta(params.thread_id.clone(), turn_id.clone(), output);
+        }
+        self.notifications.emit_turn_completed(TurnCompletedEvent {
+            thread_id: params.thread_id,
+            turn: codex_turn_from_summary(completed),
+        });
+        Ok(serde_json::json!({}))
+    }
+
+    pub fn thread_approve_guardian_denied_action(
+        &mut self,
+        params: ThreadApproveGuardianDeniedActionParams,
+    ) -> Result<Value, AppServerError> {
+        self.require_initialized("session")?;
+        self.thread_summary_or_error(&params.thread_id)?;
+        let _ = params.event;
+        Ok(serde_json::json!({}))
     }
 
     pub fn thread_goal_set(
@@ -2212,6 +2262,18 @@ impl AppServer {
                 request.id,
                 request.params,
                 |params: ThreadInjectItemsParams| self.thread_inject_items(params),
+            ),
+            method::THREAD_SHELL_COMMAND => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadShellCommandParams| self.thread_shell_command(params),
+            ),
+            method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadApproveGuardianDeniedActionParams| {
+                    self.thread_approve_guardian_denied_action(params)
+                },
             ),
             method::THREAD_GOAL_SET => {
                 route_with_params(request.id, request.params, |params: ThreadGoalSetParams| {
@@ -7038,6 +7100,8 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::THREAD_ROLLBACK,
         method::THREAD_LOADED_LIST,
         method::THREAD_INJECT_ITEMS,
+        method::THREAD_SHELL_COMMAND,
+        method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION,
         method::THREAD_GOAL_SET,
         method::THREAD_GOAL_GET,
         method::THREAD_GOAL_CLEAR,
@@ -11653,12 +11717,15 @@ mod tests {
 
     #[test]
     fn json_rpc_thread_shell_command_returns_empty_object_and_emits_turn_notifications() {
-        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
-            RuntimeTurnOutcome::Completed {
-                output: "shell command completed".to_string(),
-            },
-        ));
-        let mut server = initialized_codex_server_with_bridge(bridge);
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::ready_buffered(),
+        );
+        let mut server = initialized_codex_server().with_app_services(services);
         let thread = json_rpc_value(
             server
                 .handle_json_rpc(
@@ -11688,7 +11755,13 @@ mod tests {
         assert_eq!(response["id"], "shell");
         assert_eq!(response["result"], serde_json::json!({}));
         assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"item/agentMessage/delta"));
         assert!(methods.contains(&"turn/completed"));
+        let delta = notifications
+            .iter()
+            .find(|notification| notification.method == "item/agentMessage/delta")
+            .expect("shell output should be emitted as an agent message delta");
+        assert_eq!(delta.params["delta"], "test");
     }
 
     #[test]
