@@ -5051,13 +5051,21 @@ mod tests {
 
     #[test]
     fn protocol_declares_thread_shell_command_and_guardian_replay_methods() {
+        assert_eq!(method::THREAD_SHELL_COMMAND, "thread/shellCommand");
+        assert_eq!(
+            method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION,
+            "thread/approveGuardianDeniedAction"
+        );
+
         let methods = phase_one_methods()
             .into_iter()
             .map(|method| method.method)
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(methods.contains(method::THREAD_SHELL_COMMAND));
+        assert!(methods.contains("thread/shellCommand"));
         assert!(methods.contains(method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION));
+        assert!(methods.contains("thread/approveGuardianDeniedAction"));
     }
 
     #[test]
@@ -5103,9 +5111,28 @@ mod tests {
         let value =
             serde_json::to_value(params).expect("guardian replay params serialize back to JSON");
 
-        assert_eq!(value["threadId"], "thread_1");
-        assert_eq!(value["event"]["id"], "guardian_1");
-        assert_eq!(value["event"]["action"]["type"], "command");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "event": {
+                    "id": "guardian_1",
+                    "turn_id": "turn_1",
+                    "status": "denied",
+                    "risk_level": "high",
+                    "user_authorization": "low",
+                    "rationale": "command denied by guardian",
+                    "decision_source": "agent",
+                    "action": {
+                        "type": "command",
+                        "source": "shell",
+                        "command": "rm -rf target",
+                        "cwd": "/tmp/workspace"
+                    }
+                }
+            })
+        );
+        assert!(value.get("thread_id").is_none());
     }
 
     #[test]
