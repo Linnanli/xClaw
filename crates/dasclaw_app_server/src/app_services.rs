@@ -129,6 +129,10 @@ pub trait FsService: Send + Sync {
         Vec::new()
     }
 
+    fn drain_audit_entries(&self) -> Vec<LogEntryEvent> {
+        Vec::new()
+    }
+
     fn is_ready(&self) -> bool {
         self.health().status == ServiceStatus::Ready
     }
@@ -151,6 +155,10 @@ pub trait CommandExecService: Send + Sync {
     ) -> Result<CommandExecResizeResponse, AppServerError>;
 
     fn drain_output_delta_events(&self) -> Vec<CommandExecOutputDeltaNotification> {
+        Vec::new()
+    }
+
+    fn drain_audit_entries(&self) -> Vec<LogEntryEvent> {
         Vec::new()
     }
 
@@ -325,10 +333,18 @@ impl AppServerServices {
         self.filesystem.drain_changed_events()
     }
 
+    pub fn drain_fs_audit_entries(&self) -> Vec<LogEntryEvent> {
+        self.filesystem.drain_audit_entries()
+    }
+
     pub fn drain_command_exec_output_delta_events(
         &self,
     ) -> Vec<CommandExecOutputDeltaNotification> {
         self.command.drain_output_delta_events()
+    }
+
+    pub fn drain_command_exec_audit_entries(&self) -> Vec<LogEntryEvent> {
+        self.command.drain_audit_entries()
     }
 
     pub fn drain_search_events(&self) -> Vec<SearchNotification> {

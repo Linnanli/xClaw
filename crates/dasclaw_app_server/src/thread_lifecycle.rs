@@ -10,7 +10,10 @@ use dasclaw_app_server_protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AppServerError, RuntimeSandboxContext, RuntimeTurnOutcome, RuntimeTurnUpdate};
+use crate::{
+    AppServerError, RuntimeSandboxContext, RuntimeThreadCompactResult, RuntimeThreadCompactTurn,
+    RuntimeTurnOutcome, RuntimeTurnUpdate,
+};
 
 const SNAPSHOT_VERSION: u32 = 1;
 
@@ -281,6 +284,19 @@ impl ThreadLifecycleHost {
             .collect()
     }
 
+    pub fn compact_turn_snapshot(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<RuntimeThreadCompactTurn>, AppServerError> {
+        self.ensure_no_pending_turns(thread_id)?;
+        Ok(self
+            .turns
+            .iter()
+            .filter(|turn| turn.thread_id == thread_id)
+            .map(RuntimeThreadCompactTurn::from)
+            .collect())
+    }
+
     #[must_use]
     pub fn turn_summary(&self, thread_id: &str, turn_id: &str) -> Option<TurnSummary> {
         self.turns
@@ -437,15 +453,28 @@ impl ThreadLifecycleHost {
         Ok(token_usage)
     }
 
-    pub fn record_compacted_turn(
+    pub fn record_compacted_turn_result(
         &mut self,
         thread_id: &str,
-        turn_id: String,
+        result: RuntimeThreadCompactResult,
     ) -> Result<(), AppServerError> {
+        self.ensure_no_pending_turns(thread_id)?;
         let mut next = self.clone();
-        let thread = next.thread_mut(thread_id)?;
-        thread.compacted_turn_id = Some(turn_id);
-        thread.updated_at = unix_timestamp();
+        let now = unix_timestamp();
+        {
+            let thread = next.thread_mut(thread_id)?;
+            thread.compacted_turn_id = Some(result.turn_id.clone());
+            thread.updated_at = now;
+        }
+        next.next_turn_id += 1;
+        next.turns.push(TurnRecord {
+            thread_id: thread_id.to_string(),
+            turn_id: result.turn_id,
+            status: TurnStatus::Completed,
+            output: Some(result.output),
+            items: result.items,
+            error: None,
+        });
         self.commit(next)
     }
 
@@ -901,6 +930,18 @@ impl From<PersistedTurnRecord> for TurnRecord {
             output: record.output,
             items: record.items,
             error: record.error,
+        }
+    }
+}
+
+impl From<&TurnRecord> for RuntimeThreadCompactTurn {
+    fn from(record: &TurnRecord) -> Self {
+        Self {
+            turn_id: record.turn_id.clone(),
+            status: record.status,
+            output: record.output.clone(),
+            items: record.items.clone(),
+            error: record.error.clone(),
         }
     }
 }

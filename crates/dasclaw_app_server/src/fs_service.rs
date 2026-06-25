@@ -11,8 +11,8 @@ use dasclaw_app_server_protocol::{
     FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryEntry,
     FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse,
     FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams,
-    FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FsWriteMode, ServiceHealth,
-    ServiceName,
+    FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, FsWriteMode, LogEntryEvent, LogLevel,
+    ServiceHealth, ServiceName,
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
 
@@ -25,6 +25,7 @@ pub struct AppServerFsService {
     lexical_root: PathBuf,
     watches: Mutex<HashMap<String, FsWatch>>,
     events: Mutex<Vec<FsChangedNotification>>,
+    audit_entries: Mutex<Vec<LogEntryEvent>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,7 @@ impl AppServerFsService {
             lexical_root,
             watches: Mutex::new(HashMap::new()),
             events: Mutex::new(Vec::new()),
+            audit_entries: Mutex::new(Vec::new()),
         }
     }
 
@@ -225,6 +227,27 @@ impl AppServerFsService {
                 .extend(emitted);
         }
     }
+
+    fn push_audit(
+        &self,
+        operation: &'static str,
+        outcome: &'static str,
+        mut fields: serde_json::Map<String, serde_json::Value>,
+    ) {
+        fields.insert("operation".to_string(), operation.into());
+        fields.insert("outcome".to_string(), outcome.into());
+
+        self.audit_entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(LogEntryEvent {
+                level: LogLevel::Info,
+                target: "audit.filesystem".to_string(),
+                message: "filesystem audit".to_string(),
+                time: crate::unix_timestamp_string(),
+                fields,
+            });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,189 +298,329 @@ impl FsService for AppServerFsService {
     }
 
     fn read_file(&self, params: FsReadFileParams) -> Result<FsReadFileResponse, AppServerError> {
-        let path = self
-            .resolve_existing(&params.path)
-            .map_err(ResolveError::into_app_error)?;
-        let bytes =
-            fs::read(path.canonical).map_err(|error| filesystem_unavailable(error.to_string()))?;
-        let start = params.offset.unwrap_or(0).min(bytes.len());
-        let end = params
-            .length
-            .map(|length| start.saturating_add(length).min(bytes.len()))
-            .unwrap_or(bytes.len());
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        fields.insert("hasOffset".to_string(), params.offset.is_some().into());
+        fields.insert("hasLength".to_string(), params.length.is_some().into());
+        let result = (|| {
+            let path = self
+                .resolve_existing(&params.path)
+                .map_err(ResolveError::into_app_error)?;
+            let bytes = fs::read(path.canonical)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            let start = params.offset.unwrap_or(0).min(bytes.len());
+            let end = params
+                .length
+                .map(|length| start.saturating_add(length).min(bytes.len()))
+                .unwrap_or(bytes.len());
 
-        Ok(FsReadFileResponse {
-            data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
-        })
+            Ok(FsReadFileResponse {
+                data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
+            })
+        })();
+        self.push_audit(
+            "read",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn write_file(&self, params: FsWriteFileParams) -> Result<FsWriteFileResponse, AppServerError> {
-        let path = self
-            .resolve_for_create(&params.path)
-            .map_err(ResolveError::into_app_error)?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(params.data_base64)
-            .map_err(|error| filesystem_unavailable(error.to_string()))?;
-
         let mode = params.mode.unwrap_or_default();
-        let mut options = OpenOptions::new();
-        options.write(true);
-        match mode {
-            FsWriteMode::Create => {
-                options.create_new(true);
-            }
-            FsWriteMode::Overwrite => {
-                options.create(true).truncate(true);
-            }
-            FsWriteMode::Append => {
-                options.create(true).append(true);
-            }
-        }
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        fields.insert("mode".to_string(), format!("{mode:?}").into());
+        let result = (|| {
+            let path = self
+                .resolve_for_create(&params.path)
+                .map_err(ResolveError::into_app_error)?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(params.data_base64)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            fields.insert("bytes".to_string(), bytes.len().into());
 
-        let mut file = options
-            .open(path)
-            .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        file.write_all(&bytes)
-            .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        self.poll_watches();
-        Ok(FsWriteFileResponse {})
+            let mut options = OpenOptions::new();
+            options.write(true);
+            match mode {
+                FsWriteMode::Create => {
+                    options.create_new(true);
+                }
+                FsWriteMode::Overwrite => {
+                    options.create(true).truncate(true);
+                }
+                FsWriteMode::Append => {
+                    options.create(true).append(true);
+                }
+            }
+
+            let mut file = options
+                .open(path)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            file.write_all(&bytes)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            self.poll_watches();
+            Ok(FsWriteFileResponse {})
+        })();
+        self.push_audit(
+            "write",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, AppServerError> {
-        if params.recursive.unwrap_or(false) {
-            let path = self
-                .resolve_for_recursive_create(&params.path)
-                .map_err(ResolveError::into_app_error)?;
-            fs::create_dir_all(path)
-        } else {
-            let path = self
-                .resolve_for_create(&params.path)
-                .map_err(ResolveError::into_app_error)?;
-            fs::create_dir(path)
-        }
-        .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        self.poll_watches();
-        Ok(FsCreateDirectoryResponse {})
+        let recursive = params.recursive.unwrap_or(false);
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        fields.insert("recursive".to_string(), recursive.into());
+        let result = (|| {
+            if recursive {
+                let path = self
+                    .resolve_for_recursive_create(&params.path)
+                    .map_err(ResolveError::into_app_error)?;
+                fs::create_dir_all(path)
+            } else {
+                let path = self
+                    .resolve_for_create(&params.path)
+                    .map_err(ResolveError::into_app_error)?;
+                fs::create_dir(path)
+            }
+            .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            self.poll_watches();
+            Ok(FsCreateDirectoryResponse {})
+        })();
+        self.push_audit(
+            "createDirectory",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn get_metadata(
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, AppServerError> {
-        let path = self
-            .resolve_existing(&params.path)
-            .map_err(ResolveError::into_app_error)?;
-        let metadata = fs::symlink_metadata(path.original)
-            .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        Ok(FsGetMetadataResponse {
-            is_file: metadata.is_file(),
-            is_directory: metadata.is_dir(),
-            is_symlink: metadata.file_type().is_symlink(),
-            created_at_ms: system_time_ms(metadata.created().unwrap_or(UNIX_EPOCH)),
-            modified_at_ms: system_time_ms(metadata.modified().unwrap_or(UNIX_EPOCH)),
-        })
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        let result = (|| {
+            let path = self
+                .resolve_existing(&params.path)
+                .map_err(ResolveError::into_app_error)?;
+            let metadata = fs::symlink_metadata(path.original)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            Ok(FsGetMetadataResponse {
+                is_file: metadata.is_file(),
+                is_directory: metadata.is_dir(),
+                is_symlink: metadata.file_type().is_symlink(),
+                created_at_ms: system_time_ms(metadata.created().unwrap_or(UNIX_EPOCH)),
+                modified_at_ms: system_time_ms(metadata.modified().unwrap_or(UNIX_EPOCH)),
+            })
+        })();
+        self.push_audit(
+            "metadata",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn read_directory(
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, AppServerError> {
-        let path = self
-            .resolve_existing(&params.path)
-            .map_err(ResolveError::into_app_error)?;
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(path.canonical)
-            .map_err(|error| filesystem_unavailable(error.to_string()))?
-        {
-            let entry = entry.map_err(|error| filesystem_unavailable(error.to_string()))?;
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| filesystem_unavailable(error.to_string()))?;
-            entries.push(FsReadDirectoryEntry {
-                file_name: entry.file_name().to_string_lossy().to_string(),
-                is_file: metadata.is_file(),
-                is_directory: metadata.is_dir(),
-            });
-        }
-        entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
-        Ok(FsReadDirectoryResponse { entries })
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        let result = (|| {
+            let path = self
+                .resolve_existing(&params.path)
+                .map_err(ResolveError::into_app_error)?;
+            let mut entries = Vec::new();
+            for entry in fs::read_dir(path.canonical)
+                .map_err(|error| filesystem_unavailable(error.to_string()))?
+            {
+                let entry = entry.map_err(|error| filesystem_unavailable(error.to_string()))?;
+                let metadata = fs::symlink_metadata(entry.path())
+                    .map_err(|error| filesystem_unavailable(error.to_string()))?;
+                entries.push(FsReadDirectoryEntry {
+                    file_name: entry.file_name().to_string_lossy().to_string(),
+                    is_file: metadata.is_file(),
+                    is_directory: metadata.is_dir(),
+                });
+            }
+            entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+            Ok(FsReadDirectoryResponse { entries })
+        })();
+        self.push_audit(
+            "readDirectory",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn remove(&self, params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
-        let path = match self.resolve_existing(&params.path) {
-            Ok(path) => path,
-            Err(ResolveError::NotFound(_)) if params.force.unwrap_or(false) => {
-                return Ok(FsRemoveResponse {});
-            }
-            Err(error) => return Err(error.into_app_error()),
-        };
+        let recursive = params.recursive.unwrap_or(false);
+        let force = params.force.unwrap_or(false);
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        fields.insert("recursive".to_string(), recursive.into());
+        fields.insert("force".to_string(), force.into());
+        let result = (|| {
+            let path = match self.resolve_existing(&params.path) {
+                Ok(path) => path,
+                Err(ResolveError::NotFound(_)) if force => {
+                    return Ok(FsRemoveResponse {});
+                }
+                Err(error) => return Err(error.into_app_error()),
+            };
 
-        if path.canonical.is_dir() {
-            if params.recursive.unwrap_or(false) {
-                fs::remove_dir_all(path.canonical)
+            if path.canonical.is_dir() {
+                if recursive {
+                    fs::remove_dir_all(path.canonical)
+                } else {
+                    fs::remove_dir(path.canonical)
+                }
             } else {
-                fs::remove_dir(path.canonical)
+                fs::remove_file(path.canonical)
             }
-        } else {
-            fs::remove_file(path.canonical)
-        }
-        .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        self.poll_watches();
-        Ok(FsRemoveResponse {})
+            .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            self.poll_watches();
+            Ok(FsRemoveResponse {})
+        })();
+        self.push_audit(
+            "remove",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
-        let source = self
-            .resolve_existing(&params.source_path)
-            .map_err(ResolveError::into_app_error)?;
-        let destination = self
-            .resolve_for_create(&params.destination_path)
-            .map_err(ResolveError::into_app_error)?;
+        let recursive = params.recursive.unwrap_or(false);
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasSourcePath".to_string(), true.into());
+        fields.insert("hasDestinationPath".to_string(), true.into());
+        fields.insert("recursive".to_string(), recursive.into());
+        let result = (|| {
+            let source = self
+                .resolve_existing(&params.source_path)
+                .map_err(ResolveError::into_app_error)?;
+            let destination = self
+                .resolve_for_create(&params.destination_path)
+                .map_err(ResolveError::into_app_error)?;
 
-        if source.canonical.is_dir() {
-            if !params.recursive.unwrap_or(false) {
-                return Err(filesystem_unavailable(
-                    "recursive=true is required for directory copies",
-                ));
+            if source.canonical.is_dir() {
+                if !recursive {
+                    return Err(filesystem_unavailable(
+                        "recursive=true is required for directory copies",
+                    ));
+                }
+                copy_dir_recursive(&source.canonical, &destination)?;
+            } else {
+                fs::copy(source.canonical, destination)
+                    .map_err(|error| filesystem_unavailable(error.to_string()))?;
             }
-            copy_dir_recursive(&source.canonical, &destination)?;
-        } else {
-            fs::copy(source.canonical, destination)
-                .map_err(|error| filesystem_unavailable(error.to_string()))?;
-        }
-        self.poll_watches();
-        Ok(FsCopyResponse {})
+            self.poll_watches();
+            Ok(FsCopyResponse {})
+        })();
+        self.push_audit(
+            "copy",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
-        let path = self
-            .resolve_existing(&params.path)
-            .map_err(ResolveError::into_app_error)?;
-        let watch = FsWatch {
-            display_path: params.path.clone(),
-            last_state: Self::metadata_state(&path.canonical),
-            path: path.canonical,
-        };
-        self.watches
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .insert(params.watch_id, watch);
-        Ok(FsWatchResponse { path: params.path })
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasPath".to_string(), true.into());
+        fields.insert("hasWatchId".to_string(), true.into());
+        let result = (|| {
+            let path = self
+                .resolve_existing(&params.path)
+                .map_err(ResolveError::into_app_error)?;
+            let watch = FsWatch {
+                display_path: params.path.clone(),
+                last_state: Self::metadata_state(&path.canonical),
+                path: path.canonical,
+            };
+            self.watches
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert(params.watch_id, watch);
+            Ok(FsWatchResponse { path: params.path })
+        })();
+        self.push_audit(
+            "watch",
+            if result.is_ok() {
+                "completed"
+            } else {
+                "rejected"
+            },
+            fields,
+        );
+        result
     }
 
     fn unwatch(&self, params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
-        self.watches
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&params.watch_id);
-        Ok(FsUnwatchResponse {})
+        let mut fields = serde_json::Map::new();
+        fields.insert("hasWatchId".to_string(), true.into());
+        let result = {
+            self.watches
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .remove(&params.watch_id);
+            Ok(FsUnwatchResponse {})
+        };
+        self.push_audit("unwatch", "completed", fields);
+        result
     }
 
     fn drain_changed_events(&self) -> Vec<FsChangedNotification> {
         self.poll_watches();
         self.events
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain(..)
+            .collect()
+    }
+
+    fn drain_audit_entries(&self) -> Vec<LogEntryEvent> {
+        self.audit_entries
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .drain(..)
@@ -626,6 +789,31 @@ mod tests {
             .read_file(read_params("data.bin"))
             .expect("read overwritten");
         assert_eq!(read.data_base64, b64(b"reset"));
+    }
+
+    #[test]
+    fn fs_service_audit_redacts_paths_and_file_contents() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+        let path_secret = "path-secret-token.txt";
+        let content_secret = b"content-secret-token";
+
+        service
+            .write_file(write_params(path_secret, content_secret, None))
+            .expect("write file");
+        service
+            .read_file(read_params(path_secret))
+            .expect("read file");
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
+
+        assert!(audit_text.contains("audit.filesystem"));
+        assert!(audit_text.contains("\"operation\":\"write\""));
+        assert!(audit_text.contains("\"operation\":\"read\""));
+        assert!(audit_text.contains("\"bytes\""));
+        assert!(!audit_text.contains(path_secret));
+        assert!(!audit_text.contains("content-secret-token"));
+        assert!(!audit_text.contains(&b64(content_secret)));
     }
 
     #[test]

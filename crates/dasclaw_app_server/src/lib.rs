@@ -1361,14 +1361,23 @@ impl AppServer {
                 "runtime bridge does not support thread compact",
             ));
         }
+        let compacted_turn_id = self.threads.next_turn_id();
+        let turns = self.threads.compact_turn_snapshot(&params.thread_id)?;
         let result = self
             .runtime_bridge
             .compact_thread(RuntimeThreadCompactRequest {
                 thread_id: params.thread_id.clone(),
+                compacted_turn_id: compacted_turn_id.clone(),
+                turns,
             })
             .map_err(AppServerError::runtime_bridge)?;
+        if result.turn_id != compacted_turn_id {
+            return Err(AppServerError::runtime_bridge(RuntimeBridgeError::fatal(
+                "runtime compact returned an unexpected turn id",
+            )));
+        }
         self.threads
-            .record_compacted_turn(&params.thread_id, result.turn_id.clone())?;
+            .record_compacted_turn_result(&params.thread_id, result.clone())?;
         self.notifications
             .emit_thread_compacted(ThreadCompactedEvent {
                 thread_id: params.thread_id,
@@ -2915,6 +2924,12 @@ impl AppServer {
         for entry in self.app_services.drain_log_entries() {
             self.notifications.emit_log_entry(entry);
         }
+        for entry in self.app_services.drain_command_exec_audit_entries() {
+            self.notifications.emit_log_entry(entry);
+        }
+        for entry in self.app_services.drain_fs_audit_entries() {
+            self.notifications.emit_log_entry(entry);
+        }
         for event in self.app_services.drain_mcp_tool_call_progress_events() {
             self.notifications.emit_mcp_tool_call_progress(event);
         }
@@ -3773,7 +3788,7 @@ where
                             detached_inflight += 1;
                             if let Some(process_id) = process_id {
                                 let detached_written = wait_for_detached_command_process(
-                                    &server,
+                                    &mut server,
                                     &process_id,
                                     &detached_response_receiver,
                                     &mut writer,
@@ -3895,7 +3910,7 @@ where
 }
 
 fn wait_for_detached_command_process<W>(
-    server: &AppServer,
+    server: &mut AppServer,
     process_id: &str,
     detached_response_receiver: &mpsc::Receiver<DetachedResponse>,
     writer: &mut W,
@@ -3907,6 +3922,10 @@ where
     let mut detached_written = 0_usize;
     while Instant::now() < deadline {
         if server.app_services.command.has_active_process(process_id) {
+            break;
+        }
+        let notification_write = write_pending_notifications(server, writer)?;
+        if notification_write.should_disconnect {
             break;
         }
         let written = write_detached_responses(detached_response_receiver, writer)?;
@@ -4037,11 +4056,24 @@ pub struct RuntimeTurnSteerRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeThreadCompactRequest {
     pub thread_id: String,
+    pub compacted_turn_id: String,
+    pub turns: Vec<RuntimeThreadCompactTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeThreadCompactTurn {
+    pub turn_id: String,
+    pub status: TurnStatus,
+    pub output: Option<String>,
+    pub items: Vec<CodexThreadItem>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeThreadCompactResult {
     pub turn_id: String,
+    pub output: String,
+    pub items: Vec<CodexThreadItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4196,6 +4228,7 @@ pub struct RuntimeClientRequestContext {
     thread_id: String,
     turn_id: String,
     cwd: PathBuf,
+    sandbox_context: RuntimeSandboxContext,
     updates: RuntimeTurnUpdateSink,
     pending_requests: PendingRuntimeClientRequests,
     hook_registry: Option<Arc<dasclaw_hooks::HookRegistry>>,
@@ -4388,6 +4421,9 @@ impl RuntimeClientToolExecutor {
         namespace: Option<String>,
         tool: String,
     ) -> dasclaw_core::messages::ToolResult {
+        if let Err(message) = self.enforce_dynamic_tool_sandbox(call) {
+            return error_tool_result(call, &message);
+        }
         let response = self
             .context
             .request_dynamic_tool(call, namespace, tool)
@@ -4441,6 +4477,9 @@ impl RuntimeClientToolExecutor {
         &self,
         call: &dasclaw_core::messages::ToolCall,
     ) -> Result<dasclaw_core::messages::ToolResult, dasclaw_core::traits::HostError> {
+        if let Err(message) = self.enforce_file_change_sandbox(call) {
+            return Ok(error_tool_result(call, &message));
+        }
         let decision = self.context.request_file_change_approval(call).await;
         match decision {
             FileChangeApprovalDecision::Accept | FileChangeApprovalDecision::AcceptForSession => {
@@ -4487,6 +4526,107 @@ impl RuntimeClientToolExecutor {
                 other => other.to_string(),
             })
     }
+
+    fn enforce_file_change_sandbox(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<(), String> {
+        let Some(policy) = self.enforceable_sandbox_policy()? else {
+            return Ok(());
+        };
+        let policy_cwd = sandbox_policy_cwd(&self.context.cwd)?;
+        let Some(target) = sandbox_target_path(&call.arguments, &policy_cwd) else {
+            return Err(format!(
+                "{} requires a path before it can be checked against the sandbox policy",
+                call.name
+            ));
+        };
+        if policy.is_path_writable(&target, &policy_cwd) {
+            self.enforce_canonical_file_change_sandbox(policy, &target, &policy_cwd)
+        } else {
+            Err(format!(
+                "sandbox policy denies file change outside writable roots: {}",
+                target.display()
+            ))
+        }
+    }
+
+    fn enforce_canonical_file_change_sandbox(
+        &self,
+        policy: &dasclaw_workspace_cap::policy::SandboxPolicy,
+        target: &std::path::Path,
+        cwd: &std::path::Path,
+    ) -> Result<(), String> {
+        let canonical_target = sandbox_canonical_candidate(target)?;
+        let roots = policy.get_writable_roots_with_cwd(cwd);
+
+        for root in &roots {
+            for read_only in &root.read_only_subpaths {
+                if canonical_target.starts_with(sandbox_canonical_candidate(read_only)?) {
+                    return Err(format!(
+                        "sandbox policy denies file change outside writable roots: {}",
+                        target.display()
+                    ));
+                }
+            }
+        }
+
+        for root in roots {
+            if canonical_target.starts_with(sandbox_canonical_candidate(&root.root)?) {
+                return Ok(());
+            }
+        }
+
+        Err(format!(
+            "sandbox policy denies file change outside writable roots: {}",
+            target.display()
+        ))
+    }
+
+    fn enforce_dynamic_tool_sandbox(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<(), String> {
+        if self.context.sandbox_context.is_empty() {
+            return Ok(());
+        }
+        self.enforceable_sandbox_policy()?;
+        Err(format!(
+            "sandbox context is active; dynamic client tool `{}` is not sandbox-aware",
+            call.name
+        ))
+    }
+
+    fn enforce_fallback_sandbox(
+        &self,
+        call: &dasclaw_core::messages::ToolCall,
+    ) -> Result<(), String> {
+        if self.context.sandbox_context.is_empty() {
+            return Ok(());
+        }
+        self.enforceable_sandbox_policy()?;
+        Err(format!(
+            "sandbox context is active; fallback tool `{}` is not sandbox-aware",
+            call.name
+        ))
+    }
+
+    fn enforceable_sandbox_policy(
+        &self,
+    ) -> Result<Option<&dasclaw_workspace_cap::policy::SandboxPolicy>, String> {
+        if self.context.sandbox_context.is_empty() {
+            return Ok(None);
+        }
+        let Some(policy) = self.context.sandbox_context.policy.as_ref() else {
+            return Err(
+                "sandbox context is active but no enforceable policy was resolved".to_string(),
+            );
+        };
+        if !is_supported_runtime_sandbox_policy(policy) {
+            return Err("sandbox policy is not supported for app-server runtime tools".to_string());
+        }
+        Ok(Some(policy))
+    }
 }
 
 #[async_trait::async_trait]
@@ -4507,7 +4647,12 @@ impl dasclaw_runtime::ToolExecutor for RuntimeClientToolExecutor {
             RuntimeClientToolKind::Permissions => Ok(self.execute_permissions(call).await),
             RuntimeClientToolKind::FileChange => self.execute_file_change(call).await,
             RuntimeClientToolKind::Fallback => match &self.fallback {
-                Some(fallback) => fallback.execute(call).await,
+                Some(fallback) => {
+                    if let Err(message) = self.enforce_fallback_sandbox(call) {
+                        return Ok(error_tool_result(call, &message));
+                    }
+                    fallback.execute(call).await
+                }
                 None => Ok(error_tool_result(
                     call,
                     &format!("unknown tool: {}", call.name),
@@ -4597,6 +4742,54 @@ fn error_tool_result(
         content: message.to_string(),
         is_error: true,
     }
+}
+
+fn sandbox_target_path(arguments: &Value, cwd: &std::path::Path) -> Option<PathBuf> {
+    let path = string_field(arguments, "path")
+        .or_else(|| string_field(arguments, "file_path"))
+        .or_else(|| string_field(arguments, "target_path"))?;
+    Some(dasclaw_absolute_path::AbsolutePathBuf::resolve_path_against_base(path, cwd).into())
+}
+
+fn sandbox_policy_cwd(cwd: &std::path::Path) -> Result<PathBuf, String> {
+    dasclaw_absolute_path::AbsolutePathBuf::from_absolute_path(cwd)
+        .map(Into::into)
+        .map_err(|error| format!("failed to resolve sandbox cwd: {error}"))
+}
+
+fn sandbox_canonical_candidate(path: &std::path::Path) -> Result<PathBuf, String> {
+    let mut ancestor = path;
+    let mut tail = Vec::new();
+    while !ancestor.exists() {
+        let file_name = ancestor
+            .file_name()
+            .ok_or_else(|| "sandbox path has no existing ancestor".to_string())?;
+        tail.push(file_name.to_os_string());
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| "sandbox path has no existing ancestor".to_string())?;
+    }
+
+    let mut guarded = ancestor.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize sandbox path ancestor {}: {error}",
+            ancestor.display()
+        )
+    })?;
+    for part in tail.iter().rev() {
+        guarded.push(part);
+    }
+    Ok(guarded)
+}
+
+fn is_supported_runtime_sandbox_policy(
+    policy: &dasclaw_workspace_cap::policy::SandboxPolicy,
+) -> bool {
+    matches!(
+        policy,
+        dasclaw_workspace_cap::policy::SandboxPolicy::ReadOnly { .. }
+            | dasclaw_workspace_cap::policy::SandboxPolicy::WorkspaceWrite { .. }
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5172,11 +5365,12 @@ impl DasclawAgentRuntimeBridge {
             features: RuntimeBridgeFeatures {
                 approval: true,
                 tools: true,
-                sandbox: false,
+                sandbox: true,
                 dynamic_tool_call: true,
                 tool_user_input: true,
                 permissions_approval: true,
                 file_change_approval: true,
+                thread_compact: true,
                 turn_steer: true,
                 ..RuntimeBridgeFeatures::default()
             },
@@ -5326,22 +5520,38 @@ impl DasclawAgentRuntimeBridge {
     }
 }
 
+fn validate_runtime_sandbox_context(
+    context: &RuntimeSandboxContext,
+) -> Result<(), RuntimeBridgeError> {
+    if context.is_empty() {
+        return Ok(());
+    }
+    let Some(policy) = context.policy.as_ref() else {
+        return Err(RuntimeBridgeError::fatal(
+            "runtime sandbox context is missing an enforceable policy",
+        ));
+    };
+    if !is_supported_runtime_sandbox_policy(policy) {
+        return Err(RuntimeBridgeError::fatal(
+            "runtime sandbox context policy is not supported for app-server turns",
+        ));
+    }
+    Ok(())
+}
+
 impl RuntimeBridge for DasclawAgentRuntimeBridge {
     fn features(&self) -> RuntimeBridgeFeatures {
         self.features
     }
 
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
-        if !request.sandbox_context.is_empty() {
-            return Err(RuntimeBridgeError::fatal(
-                "runtime bridge does not support sandbox context enforcement",
-            ));
-        }
+        validate_runtime_sandbox_context(&request.sandbox_context)?;
         let token = CancellationToken::new();
         let client_request_context = RuntimeClientRequestContext {
             thread_id: request.thread_id.clone(),
             turn_id: request.turn_id.clone(),
             cwd: request.cwd.clone(),
+            sandbox_context: request.sandbox_context.clone(),
             updates: request.updates.clone(),
             pending_requests: Arc::clone(&self.pending_client_requests),
             hook_registry: request.hook_registry.clone(),
@@ -5667,6 +5877,21 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         Ok(())
     }
 
+    fn compact_thread(
+        &self,
+        request: RuntimeThreadCompactRequest,
+    ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
+        let output = deterministic_local_compaction_output(&request);
+        Ok(RuntimeThreadCompactResult {
+            turn_id: request.compacted_turn_id.clone(),
+            items: vec![CodexThreadItem::completed_agent_message(
+                request.compacted_turn_id,
+                output.clone(),
+            )],
+            output,
+        })
+    }
+
     fn resolve_approval(
         &self,
         decision: RuntimeApprovalDecision,
@@ -5758,6 +5983,66 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
 
 fn runtime_tool_item_id(turn_id: &str, tool_name: &str) -> String {
     format!("{turn_id}:tool:{tool_name}")
+}
+
+fn deterministic_local_compaction_output(request: &RuntimeThreadCompactRequest) -> String {
+    let completed_turns = request
+        .turns
+        .iter()
+        .filter(|turn| turn.status == TurnStatus::Completed)
+        .collect::<Vec<_>>();
+    let mut lines = vec![
+        "Deterministic local compaction".to_string(),
+        format!("Thread: {}", request.thread_id),
+        format!("Compacted completed turns: {}", completed_turns.len()),
+        "No model-generated summary was produced.".to_string(),
+    ];
+    if let (Some(first), Some(last)) = (completed_turns.first(), completed_turns.last()) {
+        lines.push(format!(
+            "Compacted turn range: {}..{}",
+            first.turn_id, last.turn_id
+        ));
+    }
+    for turn in completed_turns {
+        lines.push(format!(
+            "- {}: {}",
+            turn.turn_id,
+            compact_turn_preview(turn).unwrap_or_else(|| "<empty>".to_string())
+        ));
+    }
+    lines.join("\n")
+}
+
+fn compact_turn_preview(turn: &RuntimeThreadCompactTurn) -> Option<String> {
+    let text = turn
+        .output
+        .as_deref()
+        .filter(|output| !output.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            turn.items.iter().find_map(|item| match item {
+                CodexThreadItem::AgentMessage { text, .. } if !text.trim().is_empty() => {
+                    Some(text.clone())
+                }
+                CodexThreadItem::AgentMessage { .. }
+                | CodexThreadItem::Reasoning { .. }
+                | CodexThreadItem::EnteredReviewMode { .. }
+                | CodexThreadItem::ExitedReviewMode { .. } => None,
+            })
+        })?;
+    Some(compact_preview_text(&text))
+}
+
+fn compact_preview_text(text: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 160;
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let preview = chars.by_ref().take(MAX_PREVIEW_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
 }
 
 fn tool_call_started_delta(tool_name: &str) -> String {
@@ -7117,6 +7402,10 @@ mod tests {
 
         assert_eq!(
             server.capabilities.approval.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            server.capabilities.sandbox.status,
             CapabilityStatus::Implemented
         );
         for event in [
@@ -8657,6 +8946,8 @@ mod tests {
 
     #[test]
     fn app_server_real_p5_filesystem_json_rpc_routes_read_write_and_containment() {
+        use base64::Engine as _;
+
         let temp = TestDir::new("app_server_real_p5_filesystem_routes");
         let outside = TestDir::new("app_server_real_p5_filesystem_outside");
         let services = app_services::AppServerServices::for_tests(
@@ -8688,6 +8979,36 @@ mod tests {
                 r#"{"jsonrpc":"2.0","id":"read","method":"fs/readFile","params":{"path":"dir/source.txt"}}"#,
             )
             .expect("fs/readFile should return a structured response");
+        let secret_path = "path-secret-token.txt";
+        let secret_content = "content-secret-token";
+        let secret_write = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "secret-write",
+                    "method": "fs/writeFile",
+                    "params": {
+                        "path": secret_path,
+                        "dataBase64": base64::engine::general_purpose::STANDARD
+                            .encode(secret_content),
+                    },
+                })
+                .to_string(),
+            )
+            .expect("secret fs/writeFile should return a structured response");
+        let secret_read = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "secret-read",
+                    "method": "fs/readFile",
+                    "params": {
+                        "path": secret_path,
+                    },
+                })
+                .to_string(),
+            )
+            .expect("secret fs/readFile should return a structured response");
         let list_before_copy = server
             .handle_json_rpc(
                 r#"{"jsonrpc":"2.0","id":"list","method":"fs/readDirectory","params":{"path":"dir"}}"#,
@@ -8738,6 +9059,10 @@ mod tests {
             serde_json::from_str(&create_dir).expect("mkdir response JSON");
         let write_value: Value = serde_json::from_str(&write).expect("write response JSON");
         let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
+        let secret_write_value: Value =
+            serde_json::from_str(&secret_write).expect("secret write response JSON");
+        let secret_read_value: Value =
+            serde_json::from_str(&secret_read).expect("secret read response JSON");
         let list_before_value: Value =
             serde_json::from_str(&list_before_copy).expect("list response JSON");
         let metadata_value: Value =
@@ -8754,6 +9079,11 @@ mod tests {
         assert!(create_dir_value.get("error").is_none());
         assert!(write_value.get("error").is_none());
         assert_eq!(read_value["result"]["dataBase64"], "cm91dGUtZmlsZQ==");
+        assert!(secret_write_value.get("error").is_none());
+        assert_eq!(
+            secret_read_value["result"]["dataBase64"],
+            base64::engine::general_purpose::STANDARD.encode(secret_content)
+        );
         assert_eq!(
             list_before_value["result"]["entries"][0]["fileName"],
             "source.txt"
@@ -8783,6 +9113,27 @@ mod tests {
             "CAPABILITY_UNAVAILABLE"
         );
         assert_eq!(outside_value["error"]["data"]["capability"], "filesystem");
+
+        let audit_text = serde_json::to_string(
+            &server
+                .drain_notifications()
+                .iter()
+                .filter(|notification| {
+                    notification.method == event::LOG_ENTRY
+                        && notification.params["target"] == "audit.filesystem"
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("audit notifications should serialize");
+        assert!(audit_text.contains("\"operation\":\"write\""));
+        assert!(audit_text.contains("\"operation\":\"read\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(audit_text.contains("\"outcome\":\"rejected\""));
+        assert!(!audit_text.contains(secret_path));
+        assert!(!audit_text.contains(secret_content));
+        assert!(
+            !audit_text.contains(&base64::engine::general_purpose::STANDARD.encode(secret_content))
+        );
     }
 
     #[test]
@@ -8809,14 +9160,6 @@ mod tests {
             )
             .expect("command/exec should return a structured response");
         let unsupported_options = [
-            (
-                "stream",
-                serde_json::json!({
-                    "command": ["echo", "nope"],
-                    "processId": "route_proc_stream",
-                    "streamStdoutStderr": true,
-                }),
-            ),
             (
                 "timeout",
                 serde_json::json!({
@@ -9086,6 +9429,132 @@ mod tests {
         assert!(resize_value["result"].is_object());
         assert!(write_value["result"].is_object());
         assert_eq!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_real_p5_non_tty_streaming_route_splits_stdout_stderr() {
+        use base64::Engine as _;
+
+        let temp = TestDir::new("app_server_real_p5_non_tty_streaming_route");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let exec = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"cmd-pipe","method":"command/exec","params":{"command":["sh","-c","printf route-stdout; printf route-stderr >&2"],"processId":"route_pipe_split","streamStdoutStderr":true}}"#,
+            )
+            .expect("command/exec should return a structured response");
+        let notifications = server.drain_notifications();
+
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        let output_delta = notifications
+            .iter()
+            .filter(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
+            .collect::<Vec<_>>();
+        let stdout = output_delta
+            .iter()
+            .filter(|notification| notification.params["stream"] == "stdout")
+            .flat_map(|notification| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(
+                        notification.params["deltaBase64"]
+                            .as_str()
+                            .unwrap_or_default(),
+                    )
+                    .expect("stdout delta should be base64")
+            })
+            .collect::<Vec<_>>();
+        let stderr = output_delta
+            .iter()
+            .filter(|notification| notification.params["stream"] == "stderr")
+            .flat_map(|notification| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(
+                        notification.params["deltaBase64"]
+                            .as_str()
+                            .unwrap_or_default(),
+                    )
+                    .expect("stderr delta should be base64")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(exec_value["result"]["exitCode"], 0);
+        assert_eq!(exec_value["result"]["stdout"], "");
+        assert_eq!(exec_value["result"]["stderr"], "");
+        assert_eq!(
+            String::from_utf8(stdout).expect("stdout utf8"),
+            "route-stdout"
+        );
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr utf8"),
+            "route-stderr"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_real_p5_command_exec_audit_notification_redacts_sensitive_data() {
+        let temp = TestDir::new("app_server_real_p5_command_exec_audit");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let exec = server
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "cmd-audit",
+                    "method": "command/exec",
+                    "params": {
+                        "command": ["sh", "-c", "printf audit-stdout-secret"],
+                        "processId": "route_audit_proc",
+                        "env": {"SECRET_TOKEN": "audit-env-secret"}
+                    }
+                })
+                .to_string(),
+            )
+            .expect("command/exec should return a structured response");
+        let notifications = server.drain_notifications();
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        let audit_text = serde_json::to_string(
+            &notifications
+                .iter()
+                .filter(|notification| {
+                    notification.method == event::LOG_ENTRY
+                        && notification.params["target"] == "audit.command_exec"
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("audit notifications should serialize");
+
+        assert_eq!(exec_value["result"]["stdout"], "audit-stdout-secret");
+        assert!(audit_text.contains("route_audit_proc"));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(!audit_text.contains("audit-stdout-secret"));
+        assert!(!audit_text.contains("audit-env-secret"));
+        assert!(!audit_text.contains("SECRET_TOKEN"));
     }
 
     #[cfg(unix)]
@@ -12142,14 +12611,153 @@ mod tests {
                 .expect("thread summary")
                 .compacted_turn_id
                 .as_deref(),
-            Some("turn_compacted")
+            Some("turn_1")
         );
         let notifications = json_rpc_values(server.drain_json_rpc_notifications());
         assert!(notifications.iter().any(|line| {
             line["method"] == "thread/compacted"
                 && line["params"]["threadId"] == "thread_1"
-                && line["params"]["turnId"] == "turn_compacted"
+                && line["params"]["turnId"] == "turn_1"
         }));
+    }
+
+    #[test]
+    fn thread_compact_start_with_real_runtime_persists_deterministic_compaction_turn() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let snapshot_path = dir.path().join("threads.json");
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|_token| {
+            Err(RuntimeBridgeError::fatal(
+                "agent factory must not run for local compact",
+            ))
+        }));
+        let mut server = AppServer::with_runtime_bridge(bridge)
+            .with_thread_snapshot_path(&snapshot_path)
+            .expect("thread snapshot path");
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        server.drain_notifications();
+        let thread_id = create_completed_thread_with_turns(&mut server, 3);
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"compact","method":"thread/compact/start","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/compact/start should return a response");
+        let value: Value = serde_json::from_str(&response).expect("compact response JSON");
+
+        assert_eq!(value["result"], serde_json::json!({}));
+        let compacted_turn_id = server
+            .threads
+            .summary(&thread_id)
+            .expect("thread summary")
+            .compacted_turn_id
+            .expect("compacted turn id");
+        assert_eq!(compacted_turn_id, "turn_4");
+        let compacted = server
+            .threads
+            .turn_summary(&thread_id, &compacted_turn_id)
+            .expect("compacted turn should be in history");
+        assert_eq!(compacted.status, TurnStatus::Completed);
+        let output = compacted.output.expect("compaction output");
+        assert!(output.contains("Deterministic local compaction"));
+        assert!(output.contains("Compacted completed turns: 3"));
+        assert!(!output.contains("LLM summary"));
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/compacted"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["turnId"] == "turn_4"
+        }));
+
+        let reloaded =
+            ThreadLifecycleHost::with_snapshot_path(snapshot_path).expect("reload snapshot");
+        assert_eq!(
+            reloaded
+                .summary(&thread_id)
+                .expect("reloaded summary")
+                .compacted_turn_id
+                .as_deref(),
+            Some("turn_4")
+        );
+        assert_eq!(
+            reloaded
+                .turn_summary(&thread_id, "turn_4")
+                .expect("reloaded compacted turn")
+                .status,
+            TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn thread_compact_start_runtime_failure_does_not_update_snapshot() {
+        let bridge = Arc::new(FailingCompactRuntimeBridge);
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = create_completed_thread_with_turns(&mut server, 2);
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"compact","method":"thread/compact/start","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/compact/start should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("compact response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "SERVICE_DEGRADED");
+        assert_eq!(
+            server
+                .threads
+                .summary(&thread_id)
+                .expect("thread summary")
+                .compacted_turn_id,
+            None
+        );
+        assert_eq!(server.threads.list_turns(&thread_id).len(), 2);
+        assert!(
+            !json_rpc_values(server.drain_json_rpc_notifications())
+                .iter()
+                .any(|line| line["method"] == "thread/compacted")
+        );
+    }
+
+    #[test]
+    fn thread_compact_start_rejects_runtime_turn_id_mismatch_without_snapshot_update() {
+        let bridge = Arc::new(MismatchedCompactRuntimeBridge);
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = create_completed_thread_with_turns(&mut server, 2);
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"compact","method":"thread/compact/start","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/compact/start should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("compact response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "SERVICE_DEGRADED");
+        assert_eq!(
+            server
+                .threads
+                .summary(&thread_id)
+                .expect("thread summary")
+                .compacted_turn_id,
+            None
+        );
+        assert_eq!(server.threads.list_turns(&thread_id).len(), 2);
+        assert!(
+            !json_rpc_values(server.drain_json_rpc_notifications())
+                .iter()
+                .any(|line| line["method"] == "thread/compacted")
+        );
     }
 
     #[test]
@@ -14177,6 +14785,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 cwd: PathBuf::from("."),
+                sandbox_context: RuntimeSandboxContext::empty(),
                 updates: RuntimeTurnUpdateSink::new(),
                 pending_requests: Arc::new(Mutex::new(HashMap::new())),
                 hook_registry: Some(registry),
@@ -14213,6 +14822,272 @@ mod tests {
             Some("blocked by policy")
         );
         assert_eq!(completed.run.entries[0].kind, HookOutputEntryKind::Stop);
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_read_only_blocks_file_change_before_approval() {
+        let runtime = test_tokio_runtime();
+        let fallback = Arc::new(CountingExecutor::new());
+        let updates = RuntimeTurnUpdateSink::new();
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                PathBuf::from("/workspace"),
+                RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::ReadOnly),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::new_read_only_policy(),
+                    ),
+                },
+                updates.clone(),
+            ),
+            Some(fallback.clone()),
+        );
+        let call = file_change_call("/workspace/allowed.txt");
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("sandbox denial should be returned as tool result")
+        });
+
+        assert!(result.is_error);
+        assert!(result.content.contains("sandbox policy denies file change"));
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert!(
+            updates.drain().is_empty(),
+            "sandbox denial must happen before user approval"
+        );
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_workspace_write_allows_cwd_file_change_after_approval() {
+        let runtime = test_tokio_runtime();
+        let fallback = Arc::new(CountingExecutor::new());
+        let pending_requests = Arc::new(Mutex::new(HashMap::new()));
+        let updates = RuntimeTurnUpdateSink::new();
+        let context = RuntimeClientRequestContext {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            cwd: PathBuf::from("/workspace"),
+            sandbox_context: RuntimeSandboxContext {
+                sandbox: Some(SandboxMode::WorkspaceWrite),
+                policy: Some(
+                    dasclaw_workspace_cap::policy::SandboxPolicy::new_workspace_write_policy(),
+                ),
+            },
+            updates: updates.clone(),
+            pending_requests: Arc::clone(&pending_requests),
+            hook_registry: None,
+        };
+        let executor = RuntimeClientToolExecutor::new(context, Some(fallback.clone()));
+        let call = file_change_call("src/main.rs");
+
+        let result = runtime.block_on(async {
+            let handle = tokio::spawn(async move {
+                dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                    .await
+                    .expect("file change should execute after approval")
+            });
+            for _ in 0..100 {
+                let maybe_request = pending_requests
+                    .lock()
+                    .expect("pending requests lock")
+                    .remove("call-file");
+                if let Some(PendingRuntimeClientRequest::FileChange { sender, .. }) = maybe_request
+                {
+                    sender
+                        .send(FileChangeApprovalDecision::Accept)
+                        .expect("file-change waiter should be open");
+                    return handle.await.expect("file-change task should join");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("timed out waiting for file-change approval request");
+        });
+
+        assert!(!result.is_error);
+        assert_eq!(result.content, "ran apply_patch");
+        assert_eq!(fallback.call_count_blocking(), 1);
+        assert!(updates.drain().iter().any(|update| {
+            matches!(
+                update.outcome,
+                RuntimeTurnOutcome::FileChangeApprovalRequested { .. }
+            )
+        }));
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_workspace_write_blocks_outside_cwd_file_change() {
+        let runtime = test_tokio_runtime();
+        let fallback = Arc::new(CountingExecutor::new());
+        let updates = RuntimeTurnUpdateSink::new();
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                PathBuf::from("/workspace"),
+                RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::WorkspaceWrite),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::new_workspace_write_policy(),
+                    ),
+                },
+                updates.clone(),
+            ),
+            Some(fallback.clone()),
+        );
+        let call = file_change_call("/outside/file.txt");
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("sandbox denial should be returned as tool result")
+        });
+
+        assert!(result.is_error);
+        assert!(result.content.contains("outside writable roots"));
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert!(updates.drain().is_empty());
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_workspace_write_blocks_parent_dir_escape() {
+        let runtime = test_tokio_runtime();
+        let fallback = Arc::new(CountingExecutor::new());
+        let updates = RuntimeTurnUpdateSink::new();
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                PathBuf::from("/workspace/project"),
+                RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::WorkspaceWrite),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::new_workspace_write_policy(),
+                    ),
+                },
+                updates.clone(),
+            ),
+            Some(fallback.clone()),
+        );
+        let call = file_change_call("../outside.txt");
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("sandbox denial should be returned as tool result")
+        });
+
+        assert!(result.is_error);
+        assert!(result.content.contains("outside writable roots"));
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert!(updates.drain().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_client_tool_executor_workspace_write_blocks_symlink_escape() {
+        let runtime = test_tokio_runtime();
+        let cwd = tempfile::tempdir().expect("cwd tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::os::unix::fs::symlink(outside.path(), cwd.path().join("link"))
+            .expect("create symlink escape");
+        let fallback = Arc::new(CountingExecutor::new());
+        let updates = RuntimeTurnUpdateSink::new();
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                cwd.path().to_path_buf(),
+                RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::WorkspaceWrite),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::WorkspaceWrite {
+                            writable_roots: Vec::new(),
+                            network_access: false,
+                            exclude_tmpdir_env_var: true,
+                            exclude_slash_tmp: true,
+                        },
+                    ),
+                },
+                updates.clone(),
+            ),
+            Some(fallback.clone()),
+        );
+        let call = file_change_call("link/outside.txt");
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("sandbox denial should be returned as tool result")
+        });
+
+        assert!(result.is_error);
+        assert!(result.content.contains("outside writable roots"));
+        assert_eq!(fallback.call_count_blocking(), 0);
+        assert!(updates.drain().is_empty());
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_blocks_dynamic_client_tool_with_sandbox_context() {
+        let runtime = test_tokio_runtime();
+        let updates = RuntimeTurnUpdateSink::new();
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                PathBuf::from("/workspace"),
+                RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::WorkspaceWrite),
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::new_workspace_write_policy(),
+                    ),
+                },
+                updates.clone(),
+            ),
+            None,
+        );
+        let call = ToolCall {
+            id: "call-client".to_string(),
+            name: "client.open_url".to_string(),
+            arguments: serde_json::json!({"url": "https://example.com"}),
+            reasoning: None,
+        };
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("sandbox denial should be returned as tool result")
+        });
+
+        assert!(result.is_error);
+        assert!(result.content.contains("not sandbox-aware"));
+        assert!(
+            updates.drain().is_empty(),
+            "sandbox denial must happen before client dynamic tool request"
+        );
+    }
+
+    #[test]
+    fn runtime_client_tool_executor_keeps_legacy_fallback_without_sandbox_context() {
+        let runtime = test_tokio_runtime();
+        let fallback = Arc::new(CountingExecutor::new());
+        let executor = RuntimeClientToolExecutor::new(
+            runtime_client_context_for_test(
+                PathBuf::from("/workspace"),
+                RuntimeSandboxContext::empty(),
+                RuntimeTurnUpdateSink::new(),
+            ),
+            Some(fallback.clone()),
+        );
+        let call = ToolCall {
+            id: "call-legacy".to_string(),
+            name: "shell.exec".to_string(),
+            arguments: serde_json::json!({"command": "pwd"}),
+            reasoning: None,
+        };
+
+        let result = runtime.block_on(async {
+            dasclaw_runtime::ToolExecutor::execute(&executor, &call)
+                .await
+                .expect("legacy fallback should still run")
+        });
+
+        assert!(!result.is_error);
+        assert_eq!(result.content, "ran shell.exec");
+        assert_eq!(fallback.call_count_blocking(), 1);
     }
 
     #[test]
@@ -14599,6 +15474,62 @@ mod tests {
     }
 
     #[test]
+    fn provider_runtime_bridge_advertises_thread_compact_when_owner_is_ready() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let mut server = AppServer::with_runtime_bridge(Arc::new(
+            DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
+        ))
+        .with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+
+        let capabilities = server.capabilities().capabilities;
+
+        assert_eq!(
+            capabilities.thread_compact.status,
+            CapabilityStatus::Implemented
+        );
+        assert!(
+            capabilities
+                .thread_compact
+                .methods
+                .contains(&method::THREAD_COMPACT_START.to_string())
+        );
+        assert!(
+            capabilities
+                .thread_compact
+                .events
+                .contains(&event::THREAD_COMPACTED.to_string())
+        );
+    }
+
+    #[test]
+    fn noop_runtime_bridge_keeps_thread_compact_declared_until_owner_exists() {
+        let mut server = initialized_server();
+        let capabilities = server.capabilities().capabilities;
+
+        assert_eq!(
+            capabilities.thread_compact.status,
+            CapabilityStatus::Declared
+        );
+        assert!(capabilities.thread_compact.methods.is_empty());
+        assert!(capabilities.thread_compact.events.is_empty());
+    }
+
+    #[test]
     fn real_r6_model_delivery_features_do_not_advertise_producer_readiness() {
         let bridge = Arc::new(ModelDeliveryRuntimeBridge);
         let mut server = initialized_server_with_bridge(bridge);
@@ -14802,13 +15733,18 @@ mod tests {
     }
 
     #[test]
-    fn dasclaw_runtime_bridge_rejects_unenforced_sandbox_context() {
-        let factory_called = Arc::new(Mutex::new(false));
-        let factory_called_clone = Arc::clone(&factory_called);
-        let bridge = DasclawAgentRuntimeBridge::new(move |_token| {
-            *factory_called_clone.lock().expect("factory called lock") = true;
-            Err(RuntimeBridgeError::fatal("factory should not be called"))
-        });
+    fn dasclaw_runtime_bridge_passes_enforced_sandbox_context_to_agent_factory() {
+        let captured_contexts = Arc::new(Mutex::new(Vec::new()));
+        let factory_contexts = Arc::clone(&captured_contexts);
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            move |_token, _snapshot, _reasoning_summary, context| {
+                factory_contexts
+                    .lock()
+                    .expect("factory contexts lock")
+                    .push(context.sandbox_context.clone());
+                Err(RuntimeBridgeError::fatal("test factory stops before run"))
+            },
+        );
 
         let error = bridge
             .start_turn(RuntimeTurnStartRequest {
@@ -14827,12 +15763,100 @@ mod tests {
                 updates: RuntimeTurnUpdateSink::new(),
                 hook_registry: None,
             })
-            .expect_err("real runtime bridge must reject unenforced sandbox context");
+            .expect_err("test factory should stop before spawning");
 
-        assert_eq!(
-            error.message,
-            "runtime bridge does not support sandbox context enforcement"
+        assert_eq!(error.message, "test factory stops before run");
+        let contexts = captured_contexts.lock().expect("captured contexts lock");
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].sandbox, Some(SandboxMode::WorkspaceWrite));
+        assert!(matches!(
+            contexts[0].policy,
+            Some(dasclaw_workspace_cap::policy::SandboxPolicy::WorkspaceWrite { .. })
+        ));
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_rejects_danger_full_access_sandbox_context_before_factory() {
+        let factory_called = Arc::new(Mutex::new(false));
+        let factory_called_clone = Arc::clone(&factory_called);
+        let bridge = DasclawAgentRuntimeBridge::new_with_runtime_context(
+            move |_token, _snapshot, _reasoning_summary, _context| {
+                *factory_called_clone.lock().expect("factory called lock") = true;
+                Err(RuntimeBridgeError::fatal("factory should not be called"))
+            },
         );
+
+        let error = bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                cwd: PathBuf::from("."),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                sandbox_context: RuntimeSandboxContext {
+                    sandbox: Some(SandboxMode::DangerFullAccess),
+                    policy: Some(dasclaw_workspace_cap::policy::SandboxPolicy::DangerFullAccess),
+                },
+                updates: RuntimeTurnUpdateSink::new(),
+                hook_registry: None,
+            })
+            .expect_err("danger-full-access must fail closed before factory creation");
+
+        assert!(
+            error.message.contains("not supported"),
+            "unexpected error: {error:?}"
+        );
+        assert!(!*factory_called.lock().expect("factory called lock"));
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_default_features_include_thread_compact_owner() {
+        let bridge = DasclawAgentRuntimeBridge::new(|_token| {
+            Err(RuntimeBridgeError::fatal("factory should not be used"))
+        });
+
+        assert!(bridge.features().thread_compact);
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_compacts_thread_snapshot_without_calling_agent_factory() {
+        let factory_called = Arc::new(Mutex::new(false));
+        let factory_called_clone = Arc::clone(&factory_called);
+        let bridge = DasclawAgentRuntimeBridge::new(move |_token| {
+            *factory_called_clone.lock().expect("factory called lock") = true;
+            Err(RuntimeBridgeError::fatal("factory should not be called"))
+        });
+
+        let result = bridge
+            .compact_thread(RuntimeThreadCompactRequest {
+                thread_id: "thread_1".to_string(),
+                compacted_turn_id: "turn_compacted".to_string(),
+                turns: vec![
+                    RuntimeThreadCompactTurn {
+                        turn_id: "turn_1".to_string(),
+                        status: TurnStatus::Completed,
+                        output: Some("first answer".to_string()),
+                        items: Vec::new(),
+                        error: None,
+                    },
+                    RuntimeThreadCompactTurn {
+                        turn_id: "turn_2".to_string(),
+                        status: TurnStatus::Completed,
+                        output: Some("second answer".to_string()),
+                        items: Vec::new(),
+                        error: None,
+                    },
+                ],
+            })
+            .expect("local compact should succeed");
+
+        assert_eq!(result.turn_id, "turn_compacted");
+        assert!(result.output.contains("Deterministic local compaction"));
+        assert!(result.output.contains("Compacted completed turns: 2"));
+        assert!(result.output.contains("turn_1"));
+        assert!(result.output.contains("turn_2"));
+        assert_eq!(result.items.len(), 1);
         assert!(!*factory_called.lock().expect("factory called lock"));
     }
 
@@ -17859,6 +18883,140 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stdio_non_tty_stdin_only_command_exec_accepts_write_and_returns_output() {
+        use base64::Engine as _;
+
+        let temp = TestDir::new("stdio_non_tty_stdin_only_command_exec_accepts_write");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "cmd",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "IFS= read -r line; printf 'got:%s' \"$line\"; printf 'err:%s' \"$line\" >&2"],
+                "processId": "stdio_pipe_stdin_proc",
+                "streamStdin": true,
+                "timeoutMs": 500
+            }
+        });
+        let write = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "write",
+            "method": "command/exec/write",
+            "params": {
+                "processId": "stdio_pipe_stdin_proc",
+                "deltaBase64": base64::engine::general_purpose::STANDARD.encode("hello\n"),
+                "closeStdin": true
+            }
+        });
+
+        let input = format!("{initialize}\n{exec}\n{write}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            values
+                .iter()
+                .any(|value| value["id"] == "write" && value["result"].is_object()),
+            "expected successful write response in stdio output: {text}"
+        );
+        assert!(
+            values.iter().any(|value| {
+                value["id"] == "cmd"
+                    && value["result"]["exitCode"] == 0
+                    && value["result"]["stdout"] == "got:hello"
+                    && value["result"]["stderr"] == "err:hello"
+            }),
+            "expected stdin-only pipe command response in stdio output: {text}"
+        );
+        assert!(
+            !values
+                .iter()
+                .any(|value| value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA),
+            "stdin-only streaming must not emit outputDelta: {text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_non_tty_streaming_request_writes_output_delta_before_final_response() {
+        let temp = TestDir::new("stdio_non_tty_streaming_request_ordering");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "cmd",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "printf pipe-note"],
+                "processId": "stdio_pipe_order_proc",
+                "streamStdoutStderr": true,
+                "timeoutMs": 1_000
+            }
+        });
+
+        let input = format!("{initialize}\n{exec}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+        let output_delta_index = values
+            .iter()
+            .position(|value| {
+                value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA
+                    && value["params"]["processId"] == "stdio_pipe_order_proc"
+            })
+            .unwrap_or_else(|| panic!("expected outputDelta notification: {text}"));
+        let final_response_index = values
+            .iter()
+            .position(|value| value["id"] == "cmd" && value["result"]["exitCode"] == 0)
+            .unwrap_or_else(|| panic!("expected final command response: {text}"));
+
+        assert!(
+            output_delta_index < final_response_index,
+            "outputDelta must be written before final command response: {text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stdio_streaming_command_exec_notification_eof_does_not_wait_forever() {
         let temp = TestDir::new("stdio_streaming_command_exec_notification_eof");
         let services = app_services::AppServerServices::for_tests(
@@ -17904,6 +19062,70 @@ mod tests {
                     && value["params"]["processId"] == "stdio_notification_proc"
             }),
             "expected outputDelta notification in stdio output: {text}"
+        );
+        assert!(
+            !values
+                .iter()
+                .any(|value| value.get("id").is_some_and(|id| id == "cmd")),
+            "command/exec notification must not emit a response: {text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_non_tty_streaming_command_exec_notification_eof_drains_split_output() {
+        let temp = TestDir::new("stdio_non_tty_streaming_command_exec_notification_eof");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec_notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "printf pipe-note; printf pipe-err >&2"],
+                "processId": "stdio_pipe_notification_proc",
+                "streamStdoutStderr": true,
+                "timeoutMs": 1_000
+            }
+        });
+
+        let input = format!("{initialize}\n{exec_notification}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete after notification EOF");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            values.iter().any(|value| {
+                value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA
+                    && value["params"]["processId"] == "stdio_pipe_notification_proc"
+                    && value["params"]["stream"] == "stdout"
+            }),
+            "expected stdout outputDelta notification in stdio output: {text}"
+        );
+        assert!(
+            values.iter().any(|value| {
+                value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA
+                    && value["params"]["processId"] == "stdio_pipe_notification_proc"
+                    && value["params"]["stream"] == "stderr"
+            }),
+            "expected stderr outputDelta notification in stdio output: {text}"
         );
         assert!(
             !values
@@ -18792,6 +20014,35 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
         }
     }
 
+    fn runtime_client_context_for_test(
+        cwd: PathBuf,
+        sandbox_context: RuntimeSandboxContext,
+        updates: RuntimeTurnUpdateSink,
+    ) -> RuntimeClientRequestContext {
+        RuntimeClientRequestContext {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            cwd,
+            sandbox_context,
+            updates,
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            hook_registry: None,
+        }
+    }
+
+    fn file_change_call(path: &str) -> ToolCall {
+        ToolCall {
+            id: "call-file".to_string(),
+            name: "apply_patch".to_string(),
+            arguments: serde_json::json!({
+                "tool_call_id": "call-file",
+                "path": path,
+                "reason": "apply patch"
+            }),
+            reasoning: None,
+        }
+    }
+
     struct AlwaysApprovePolicy;
 
     #[async_trait::async_trait]
@@ -19279,7 +20530,75 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
     #[derive(Debug)]
     struct CompactRuntimeBridge;
 
+    #[derive(Debug)]
+    struct FailingCompactRuntimeBridge;
+
+    #[derive(Debug)]
+    struct MismatchedCompactRuntimeBridge;
+
     impl RuntimeBridge for CompactRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                thread_compact: true,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn compact_thread(
+            &self,
+            request: RuntimeThreadCompactRequest,
+        ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
+            Ok(RuntimeThreadCompactResult {
+                turn_id: request.compacted_turn_id,
+                output: "compact bridge summary".to_string(),
+                items: Vec::new(),
+            })
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    impl RuntimeBridge for FailingCompactRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                thread_compact: true,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn compact_thread(
+            &self,
+            _request: RuntimeThreadCompactRequest,
+        ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
+            Err(RuntimeBridgeError::retryable("compact failed"))
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    impl RuntimeBridge for MismatchedCompactRuntimeBridge {
         fn features(&self) -> RuntimeBridgeFeatures {
             RuntimeBridgeFeatures {
                 thread_compact: true,
@@ -19303,7 +20622,9 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
             _request: RuntimeThreadCompactRequest,
         ) -> Result<RuntimeThreadCompactResult, RuntimeBridgeError> {
             Ok(RuntimeThreadCompactResult {
-                turn_id: "turn_compacted".to_string(),
+                turn_id: "turn_from_wrong_owner".to_string(),
+                output: "bad compact id".to_string(),
+                items: Vec::new(),
             })
         }
 

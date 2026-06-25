@@ -2,6 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Child, ChildStdin, Command as ProcessCommand, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,7 +13,8 @@ use dasclaw_app_server_protocol::{
     CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecOutputStream,
     CommandExecParams, CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
     CommandExecTerminalSize, CommandExecTerminateParams, CommandExecTerminateResponse,
-    CommandExecWriteParams, CommandExecWriteResponse, ServiceHealth, ServiceName,
+    CommandExecWriteParams, CommandExecWriteResponse, LogEntryEvent, LogLevel, ServiceHealth,
+    ServiceName,
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
 use dasclaw_pty::{PtyExitStatus, PtySize, PtySpawnOptions, StreamingPty};
@@ -44,6 +46,7 @@ pub struct AppServerCommandExecService {
     completed: Arc<Mutex<CompletedCommands>>,
     running: Arc<Mutex<HashMap<String, RunningProcess>>>,
     output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
+    audit_entries: Arc<Mutex<Vec<LogEntryEvent>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +124,7 @@ impl AppServerCommandExecService {
             completed: Arc::new(Mutex::new(CompletedCommands::default())),
             running: Arc::new(Mutex::new(HashMap::new())),
             output_delta_events: Arc::new(Mutex::new(Vec::new())),
+            audit_entries: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -325,22 +329,18 @@ impl AppServerCommandExecService {
                 "streaming command exec processId must not contain leading or trailing whitespace",
             ));
         }
-        if !params.tty.unwrap_or(false)
-            && (params.stream_stdin.unwrap_or(false)
-                || params.stream_stdout_stderr.unwrap_or(false))
-        {
-            return Err(command_unavailable(
-                "non-tty command streaming requires a streaming pipe backend",
-            ));
+        let tty = params.tty.unwrap_or(false);
+        if !tty && params.size.is_some() {
+            return Err(command_unavailable("size requires tty support"));
         }
         if params.sandbox_policy.is_some() || params.permission_profile.is_some() {
             return Err(command_unavailable(
-                "sandboxPolicy/permissionProfile are not supported by PTY streaming command exec until sandboxed PTY is implemented",
+                "sandboxPolicy/permissionProfile are not supported by streaming command exec until sandboxed streaming is implemented",
             ));
         }
         if params.disable_output_cap.unwrap_or(false) {
             return Err(command_unavailable(
-                "disableOutputCap is not supported by PTY streaming command exec",
+                "disableOutputCap is not supported by streaming command exec",
             ));
         }
         Ok(process_id.clone())
@@ -350,6 +350,10 @@ impl AppServerCommandExecService {
         &self,
         params: CommandExecParams,
     ) -> Result<CommandExecResponse, AppServerError> {
+        if !params.tty.unwrap_or(false) {
+            return self.exec_pipe_streaming(params);
+        }
+
         let process_id = Self::validate_streaming_exec_options(&params)?;
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let env = Self::env(params.env);
@@ -418,8 +422,9 @@ impl AppServerCommandExecService {
                 }),
             );
 
-        let reader_thread = spawn_pty_reader(
+        let reader_thread = spawn_output_reader(
             process_id.clone(),
+            CommandExecOutputStream::Stdout,
             process.reader,
             Arc::clone(&self.output_delta_events),
             params.output_bytes_cap,
@@ -432,6 +437,144 @@ impl AppServerCommandExecService {
             stdout: String::new(),
             stderr: String::new(),
         };
+        self.running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&process_id);
+        self.completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                process_id,
+                CompletedCommand {
+                    response: response.clone(),
+                },
+            );
+
+        Ok(response)
+    }
+
+    fn exec_pipe_streaming(
+        &self,
+        params: CommandExecParams,
+    ) -> Result<CommandExecResponse, AppServerError> {
+        let process_id = Self::validate_streaming_exec_options(&params)?;
+        let cwd = self.resolve_cwd(params.cwd.as_deref())?;
+        let env = Self::env(params.env);
+        let stream_stdin = params.stream_stdin.unwrap_or(false);
+        let stream_output = params.stream_stdout_stderr.unwrap_or(false);
+        let timeout = if params.disable_timeout.unwrap_or(false) {
+            None
+        } else {
+            Some(
+                params
+                    .timeout_ms
+                    .map(Duration::from_millis)
+                    .unwrap_or(DEFAULT_TIMEOUT),
+            )
+        };
+
+        let mut running = self
+            .running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match running.entry(process_id.clone()) {
+            Entry::Occupied(_) => {
+                return Err(command_unavailable(format!(
+                    "command process is already running: {process_id}"
+                )));
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(RunningProcess::Reserved);
+            }
+        }
+        drop(running);
+
+        let mut command = ProcessCommand::new(&params.command[0]);
+        command
+            .args(&params.command[1..])
+            .current_dir(cwd)
+            .envs(env);
+        command.stdin(if stream_stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut child = command.spawn().map_err(|error| {
+            self.running
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .remove(&process_id);
+            command_unavailable(error.to_string())
+        })?;
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let (control_tx, control_rx) = mpsc::channel();
+        self.running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                process_id.clone(),
+                RunningProcess::Active(RunningCommand {
+                    control_tx,
+                    tty: false,
+                    stream_stdin,
+                }),
+            );
+
+        let stdout_reader = stdout.map(|stdout| {
+            spawn_pipe_output_reader(
+                process_id.clone(),
+                CommandExecOutputStream::Stdout,
+                Box::new(stdout),
+                Arc::clone(&self.output_delta_events),
+                params.output_bytes_cap,
+                stream_output,
+            )
+        });
+        let stderr_reader = stderr.map(|stderr| {
+            spawn_pipe_output_reader(
+                process_id.clone(),
+                CommandExecOutputStream::Stderr,
+                Box::new(stderr),
+                Arc::clone(&self.output_delta_events),
+                params.output_bytes_cap,
+                stream_output,
+            )
+        });
+
+        let exit_code = drive_pipe_process(child, stdin, control_rx, timeout);
+        let stdout = stdout_reader
+            .and_then(|reader_thread| reader_thread.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_reader
+            .and_then(|reader_thread| reader_thread.join().ok())
+            .unwrap_or_default();
+
+        let response = Self::apply_output_cap(
+            if stream_output {
+                None
+            } else {
+                params.output_bytes_cap
+            },
+            CommandExecResponse {
+                exit_code,
+                stdout: if stream_output {
+                    String::new()
+                } else {
+                    String::from_utf8_lossy(&stdout).into_owned()
+                },
+                stderr: if stream_output {
+                    String::new()
+                } else {
+                    String::from_utf8_lossy(&stderr).into_owned()
+                },
+            },
+        );
         self.running
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -466,6 +609,94 @@ impl AppServerCommandExecService {
                 )),
             })
     }
+
+    fn push_exec_audit(
+        &self,
+        operation: &'static str,
+        outcome: &'static str,
+        metadata: CommandAuditMetadata,
+        exit_code: Option<i32>,
+    ) {
+        let mut fields = serde_json::Map::new();
+        fields.insert("processId".to_string(), metadata.process_id.into());
+        fields.insert("operation".to_string(), operation.into());
+        fields.insert("outcome".to_string(), outcome.into());
+        fields.insert("tty".to_string(), metadata.tty.into());
+        fields.insert("streaming".to_string(), metadata.streaming.into());
+        fields.insert(
+            "hasSandboxPolicy".to_string(),
+            metadata.has_sandbox_policy.into(),
+        );
+        fields.insert(
+            "hasPermissionProfile".to_string(),
+            metadata.has_permission_profile.into(),
+        );
+        if let Some(exit_code) = exit_code {
+            fields.insert("exitCode".to_string(), exit_code.into());
+        }
+
+        self.audit_entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(LogEntryEvent {
+                level: LogLevel::Info,
+                target: "audit.command_exec".to_string(),
+                message: "command execution audit".to_string(),
+                time: crate::unix_timestamp_string(),
+                fields,
+            });
+    }
+
+    fn push_control_audit(
+        &self,
+        operation: &'static str,
+        outcome: &'static str,
+        process_id: &str,
+        tty: Option<bool>,
+        extra_fields: serde_json::Map<String, serde_json::Value>,
+    ) {
+        let mut fields = serde_json::Map::new();
+        fields.insert("processId".to_string(), process_id.to_string().into());
+        fields.insert("operation".to_string(), operation.into());
+        fields.insert("outcome".to_string(), outcome.into());
+        fields.insert("streaming".to_string(), true.into());
+        if let Some(tty) = tty {
+            fields.insert("tty".to_string(), tty.into());
+        }
+        fields.extend(extra_fields);
+
+        self.audit_entries
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(LogEntryEvent {
+                level: LogLevel::Info,
+                target: "audit.command_exec".to_string(),
+                message: "command execution audit".to_string(),
+                time: crate::unix_timestamp_string(),
+                fields,
+            });
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CommandAuditMetadata {
+    process_id: String,
+    tty: bool,
+    streaming: bool,
+    has_sandbox_policy: bool,
+    has_permission_profile: bool,
+}
+
+impl CommandAuditMetadata {
+    fn from_params(params: &CommandExecParams, process_id: String, streaming: bool) -> Self {
+        Self {
+            process_id,
+            tty: params.tty.unwrap_or(false),
+            streaming,
+            has_sandbox_policy: params.sandbox_policy.is_some(),
+            has_permission_profile: params.permission_profile.is_some(),
+        }
+    }
 }
 
 impl CommandExecService for AppServerCommandExecService {
@@ -474,7 +705,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} cwd_guard=root-contained buffered_sandbox=policy-override/default-read-only streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
+                    "root={} cwd_guard=root-contained buffered_sandbox=policy-override/default-read-only streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty-or-pipe tty=true non_tty_streaming=true",
                     self.root.display()
                 ));
                 health
@@ -492,52 +723,74 @@ impl CommandExecService for AppServerCommandExecService {
                 "workspace capability unavailable: {message}"
             )));
         }
-        if Self::streaming_requested(&params) {
-            return self.exec_streaming(params);
+        let streaming = Self::streaming_requested(&params);
+        let audit_process_id = if streaming {
+            params
+                .process_id
+                .clone()
+                .unwrap_or_else(|| "<missing>".to_string())
+        } else {
+            Self::process_id(&params)
+        };
+        let audit = CommandAuditMetadata::from_params(&params, audit_process_id.clone(), streaming);
+        self.push_exec_audit("exec", "started", audit.clone(), None);
+
+        let result = if streaming {
+            self.exec_streaming(params)
+        } else {
+            (|| {
+                Self::reject_unsupported_buffered_exec_options(&params)?;
+
+                let cwd = self.resolve_cwd(params.cwd.as_deref())?;
+                let command = Self::command_line(&params.command)?;
+                let output_bytes_cap = params.output_bytes_cap;
+                let policy = resolve_policy_override(
+                    params.sandbox_policy,
+                    params.permission_profile,
+                    &cwd,
+                    COMMAND_EXEC_CAPABILITY,
+                )?
+                .unwrap_or_else(SandboxPolicy::new_read_only_policy);
+                let env = Self::env(params.env);
+                let timeout = params
+                    .timeout_ms
+                    .map(Duration::from_millis)
+                    .unwrap_or(DEFAULT_TIMEOUT);
+
+                let response = self.runtime()?.block_on("command/exec", async move {
+                    let executor = SandboxedShellExecutor::new(timeout, false, None);
+                    let output = executor
+                        .execute(&command, &cwd, policy, env)
+                        .await
+                        .map_err(map_exec_error)?;
+                    Ok(CommandExecResponse {
+                        exit_code: output.exit_code as i32,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    })
+                })?;
+                let response = Self::apply_output_cap(output_bytes_cap, response);
+
+                self.completed
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .insert(
+                        audit_process_id.clone(),
+                        CompletedCommand {
+                            response: response.clone(),
+                        },
+                    );
+                Ok(response)
+            })()
+        };
+
+        match &result {
+            Ok(response) => {
+                self.push_exec_audit("exec", "completed", audit, Some(response.exit_code));
+            }
+            Err(_) => self.push_exec_audit("exec", "rejected", audit, None),
         }
-        Self::reject_unsupported_buffered_exec_options(&params)?;
-
-        let cwd = self.resolve_cwd(params.cwd.as_deref())?;
-        let process_id = Self::process_id(&params);
-        let command = Self::command_line(&params.command)?;
-        let output_bytes_cap = params.output_bytes_cap;
-        let policy = resolve_policy_override(
-            params.sandbox_policy,
-            params.permission_profile,
-            &cwd,
-            COMMAND_EXEC_CAPABILITY,
-        )?
-        .unwrap_or_else(SandboxPolicy::new_read_only_policy);
-        let env = Self::env(params.env);
-        let timeout = params
-            .timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(DEFAULT_TIMEOUT);
-
-        let response = self.runtime()?.block_on("command/exec", async move {
-            let executor = SandboxedShellExecutor::new(timeout, false, None);
-            let output = executor
-                .execute(&command, &cwd, policy, env)
-                .await
-                .map_err(map_exec_error)?;
-            Ok(CommandExecResponse {
-                exit_code: output.exit_code as i32,
-                stdout: output.stdout,
-                stderr: output.stderr,
-            })
-        })?;
-        let response = Self::apply_output_cap(output_bytes_cap, response);
-
-        self.completed
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .insert(
-                process_id.clone(),
-                CompletedCommand {
-                    response: response.clone(),
-                },
-            );
-        Ok(response)
+        result
     }
 
     fn write(
@@ -545,14 +798,38 @@ impl CommandExecService for AppServerCommandExecService {
         params: CommandExecWriteParams,
     ) -> Result<CommandExecWriteResponse, AppServerError> {
         let close_stdin = params.close_stdin.unwrap_or(false);
+        let mut audit_fields = serde_json::Map::new();
+        audit_fields.insert("closeStdin".to_string(), close_stdin.into());
         if params.delta_base64.is_none() && !close_stdin {
+            self.push_control_audit("write", "rejected", &params.process_id, None, audit_fields);
             return Err(AppServerError::invalid_request(
                 COMMAND_EXEC_CAPABILITY,
                 "command write requires deltaBase64 or closeStdin=true",
             ));
         }
 
-        let Some((sender, _tty, stream_stdin)) = self.running_command(&params.process_id) else {
+        let decoded = if let Some(delta_base64) = params.delta_base64 {
+            let decoded = BASE64_STANDARD.decode(delta_base64).map_err(|_| {
+                self.push_control_audit(
+                    "write",
+                    "rejected",
+                    &params.process_id,
+                    None,
+                    audit_fields.clone(),
+                );
+                AppServerError::invalid_request(
+                    COMMAND_EXEC_CAPABILITY,
+                    "deltaBase64 must be valid base64",
+                )
+            })?;
+            audit_fields.insert("bytes".to_string(), decoded.len().into());
+            Some(decoded)
+        } else {
+            None
+        };
+
+        let Some((sender, tty, stream_stdin)) = self.running_command(&params.process_id) else {
+            self.push_control_audit("write", "rejected", &params.process_id, None, audit_fields);
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
@@ -560,27 +837,49 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         };
         if !stream_stdin {
+            self.push_control_audit(
+                "write",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                audit_fields,
+            );
             return Err(command_unavailable(
                 "command stdin write requires streamStdin=true for the active process",
             ));
         }
 
-        if let Some(delta_base64) = params.delta_base64 {
-            let decoded = BASE64_STANDARD.decode(delta_base64).map_err(|_| {
-                AppServerError::invalid_request(
-                    COMMAND_EXEC_CAPABILITY,
-                    "deltaBase64 must be valid base64",
-                )
-            })?;
-            sender
-                .send(CommandControl::Write(decoded))
-                .map_err(|_| command_unavailable("command process is no longer writable"))?;
+        if let Some(decoded) = decoded {
+            if sender.send(CommandControl::Write(decoded)).is_err() {
+                self.push_control_audit(
+                    "write",
+                    "rejected",
+                    &params.process_id,
+                    Some(tty),
+                    audit_fields,
+                );
+                return Err(command_unavailable("command process is no longer writable"));
+            }
         }
         if close_stdin {
-            sender
-                .send(CommandControl::CloseStdin)
-                .map_err(|_| command_unavailable("command process is no longer writable"))?;
+            if sender.send(CommandControl::CloseStdin).is_err() {
+                self.push_control_audit(
+                    "write",
+                    "rejected",
+                    &params.process_id,
+                    Some(tty),
+                    audit_fields,
+                );
+                return Err(command_unavailable("command process is no longer writable"));
+            }
         }
+        self.push_control_audit(
+            "write",
+            "completed",
+            &params.process_id,
+            Some(tty),
+            audit_fields,
+        );
         Ok(CommandExecWriteResponse::default())
     }
 
@@ -588,16 +887,37 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecTerminateParams,
     ) -> Result<CommandExecTerminateResponse, AppServerError> {
-        let Some((sender, _tty, _stream_stdin)) = self.running_command(&params.process_id) else {
+        let Some((sender, tty, _stream_stdin)) = self.running_command(&params.process_id) else {
+            self.push_control_audit(
+                "terminate",
+                "rejected",
+                &params.process_id,
+                None,
+                serde_json::Map::new(),
+            );
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
                 "command termination is unavailable for completed non-interactive executions",
             ));
         };
-        sender
-            .send(CommandControl::Terminate)
-            .map_err(|_| command_unavailable("command process is no longer running"))?;
+        if sender.send(CommandControl::Terminate).is_err() {
+            self.push_control_audit(
+                "terminate",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                serde_json::Map::new(),
+            );
+            return Err(command_unavailable("command process is no longer running"));
+        }
+        self.push_control_audit(
+            "terminate",
+            "completed",
+            &params.process_id,
+            Some(tty),
+            serde_json::Map::new(),
+        );
         Ok(CommandExecTerminateResponse::default())
     }
 
@@ -605,7 +925,11 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecResizeParams,
     ) -> Result<CommandExecResizeResponse, AppServerError> {
+        let mut audit_fields = serde_json::Map::new();
+        audit_fields.insert("rows".to_string(), params.size.rows.into());
+        audit_fields.insert("cols".to_string(), params.size.cols.into());
         if params.size.rows == 0 || params.size.cols == 0 {
+            self.push_control_audit("resize", "rejected", &params.process_id, None, audit_fields);
             return Err(AppServerError::invalid_request(
                 COMMAND_EXEC_CAPABILITY,
                 "command resize rows and cols must be greater than zero",
@@ -613,6 +937,7 @@ impl CommandExecService for AppServerCommandExecService {
         }
 
         let Some((sender, tty, _stream_stdin)) = self.running_command(&params.process_id) else {
+            self.push_control_audit("resize", "rejected", &params.process_id, None, audit_fields);
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
@@ -620,23 +945,72 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         };
         if !tty {
+            self.push_control_audit(
+                "resize",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                audit_fields,
+            );
             return Err(command_unavailable(
                 "command resize is unavailable without an active PTY session",
             ));
         }
         let (ack_tx, ack_rx) = mpsc::channel();
-        sender
+        if sender
             .send(CommandControl::Resize(params.size, ack_tx))
-            .map_err(|_| command_unavailable("command PTY session is no longer active"))?;
-        ack_rx
+            .is_err()
+        {
+            self.push_control_audit(
+                "resize",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                audit_fields,
+            );
+            return Err(command_unavailable(
+                "command PTY session is no longer active",
+            ));
+        }
+        let result = ack_rx
             .recv()
             .map_err(|_| command_unavailable("command PTY session is no longer active"))?
-            .map_err(command_unavailable)?;
+            .map_err(command_unavailable);
+        match result {
+            Ok(()) => {
+                self.push_control_audit(
+                    "resize",
+                    "completed",
+                    &params.process_id,
+                    Some(tty),
+                    audit_fields,
+                );
+                Ok(CommandExecResizeResponse::default())
+            }
+            Err(error) => {
+                self.push_control_audit(
+                    "resize",
+                    "rejected",
+                    &params.process_id,
+                    Some(tty),
+                    audit_fields,
+                );
+                Err(error)
+            }
+        }?;
         Ok(CommandExecResizeResponse::default())
     }
 
     fn drain_output_delta_events(&self) -> Vec<CommandExecOutputDeltaNotification> {
         self.output_delta_events
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain(..)
+            .collect()
+    }
+
+    fn drain_audit_entries(&self) -> Vec<LogEntryEvent> {
+        self.audit_entries
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .drain(..)
@@ -661,8 +1035,9 @@ impl CommandExecService for AppServerCommandExecService {
     }
 }
 
-fn spawn_pty_reader(
+fn spawn_output_reader(
     process_id: String,
+    stream: CommandExecOutputStream,
     mut reader: Box<dyn Read + Send>,
     output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
     output_bytes_cap: Option<usize>,
@@ -697,18 +1072,136 @@ fn spawn_pty_reader(
             }
 
             emitted += emit.len();
-            let event = CommandExecOutputDeltaNotification {
-                process_id: process_id.clone(),
-                stream: CommandExecOutputStream::Stdout,
-                delta_base64: BASE64_STANDARD.encode(emit),
-                cap_reached,
-            };
             output_delta_events
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
-                .push(event);
+                .push(CommandExecOutputDeltaNotification {
+                    process_id: process_id.clone(),
+                    stream,
+                    delta_base64: BASE64_STANDARD.encode(emit),
+                    cap_reached,
+                });
         }
     })
+}
+
+fn spawn_pipe_output_reader(
+    process_id: String,
+    stream: CommandExecOutputStream,
+    mut reader: Box<dyn Read + Send>,
+    output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
+    output_bytes_cap: Option<usize>,
+    emit_events: bool,
+) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = [0_u8; 8192];
+        let mut emitted = 0_usize;
+        let mut collected = Vec::new();
+
+        loop {
+            let read = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(_) => break,
+            };
+
+            let chunk = &buf[..read];
+            if !emit_events {
+                collected.extend_from_slice(chunk);
+                continue;
+            }
+
+            let (emit, cap_reached) = match output_bytes_cap {
+                Some(cap) if emitted >= cap => (&[][..], false),
+                Some(cap) => {
+                    let remaining = cap - emitted;
+                    if chunk.len() >= remaining {
+                        (&chunk[..remaining], true)
+                    } else {
+                        (chunk, false)
+                    }
+                }
+                None => (chunk, false),
+            };
+
+            if emit.is_empty() {
+                continue;
+            }
+
+            emitted += emit.len();
+            output_delta_events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(CommandExecOutputDeltaNotification {
+                    process_id: process_id.clone(),
+                    stream,
+                    delta_base64: BASE64_STANDARD.encode(emit),
+                    cap_reached,
+                });
+        }
+
+        collected
+    })
+}
+
+fn drive_pipe_process(
+    mut child: Child,
+    stdin: Option<ChildStdin>,
+    control_rx: mpsc::Receiver<CommandControl>,
+    timeout: Option<Duration>,
+) -> i32 {
+    let started = Instant::now();
+    let mut stdin = stdin;
+    loop {
+        while let Ok(command) = control_rx.try_recv() {
+            match command {
+                CommandControl::Write(bytes) => {
+                    let Some(writer) = stdin.as_mut() else {
+                        continue;
+                    };
+                    if writer.write_all(&bytes).is_err() {
+                        let _ = child.kill();
+                        return wait_for_child_after_kill(&mut child);
+                    }
+                }
+                CommandControl::CloseStdin => {
+                    stdin.take();
+                }
+                CommandControl::Terminate => {
+                    let _ = child.kill();
+                    return wait_for_child_after_kill(&mut child);
+                }
+                CommandControl::Resize(_, ack_tx) => {
+                    let _ = ack_tx.send(Err(
+                        "command resize is unavailable without an active PTY session".to_string(),
+                    ));
+                }
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => return child_exit_code(status),
+            Ok(None) => {}
+            Err(_) => return -1,
+        }
+
+        if let Some(timeout) = timeout
+            && started.elapsed() >= timeout
+        {
+            let _ = child.kill();
+            return wait_for_child_after_kill(&mut child);
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_child_after_kill(child: &mut Child) -> i32 {
+    child.wait().map(child_exit_code).unwrap_or(-1)
+}
+
+fn child_exit_code(status: std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
 }
 
 fn drive_pty_process(
@@ -920,6 +1413,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn wait_for_active_process(service: &AppServerCommandExecService, process_id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if service.has_active_process(process_id) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("timed out waiting for active process {process_id}");
+    }
+
+    #[cfg(unix)]
+    fn decode_stream(
+        events: &[CommandExecOutputDeltaNotification],
+        stream: CommandExecOutputStream,
+    ) -> String {
+        let bytes = events
+            .iter()
+            .filter(|event| event.stream == stream)
+            .flat_map(|event| {
+                BASE64_STANDARD
+                    .decode(&event.delta_base64)
+                    .expect("valid delta base64")
+            })
+            .collect::<Vec<_>>();
+        String::from_utf8(bytes).expect("stream output should be utf8")
+    }
+
     #[test]
     fn command_service_exec_captures_stdout_without_streaming_delta() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -935,20 +1457,29 @@ mod tests {
         assert!(service.drain_output_delta_events().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn command_service_rejects_stream_stdout_stderr_without_tty_backend() {
+    fn command_service_streams_stdout_stderr_without_tty_backend() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
-        let mut params = exec_params(vec!["echo", "hello"]);
+        let mut params = exec_params(vec!["sh", "-c", "printf hello; printf err >&2"]);
         params.process_id = Some("non_tty_stdout".to_string());
         params.stream_stdout_stderr = Some(true);
 
-        let error = service
-            .exec(params)
-            .expect_err("non-tty streaming stdout/stderr unsupported");
+        let response = service.exec(params).expect("non-tty streaming succeeds");
+        let events = service.drain_output_delta_events();
 
-        assert!(error.to_string().contains("streaming pipe backend"));
-        assert!(service.drain_output_delta_events().is_empty());
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, "");
+        assert_eq!(response.stderr, "");
+        assert_eq!(
+            decode_stream(&events, CommandExecOutputStream::Stdout),
+            "hello"
+        );
+        assert_eq!(
+            decode_stream(&events, CommandExecOutputStream::Stderr),
+            "err"
+        );
     }
 
     #[cfg(unix)]
@@ -969,7 +1500,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("sandboxPolicy/permissionProfile are not supported by PTY streaming")
+                .contains("sandboxPolicy/permissionProfile are not supported by streaming")
         );
         assert!(service.drain_output_delta_events().is_empty());
     }
@@ -1407,29 +1938,241 @@ mod tests {
         assert!(completed.contains_key(&format!("completed_{MAX_COMPLETED_COMMANDS}")));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn command_service_non_tty_streaming_fails_safe_until_pipe_backend_exists() {
+    fn command_service_non_tty_streaming_splits_stdout_and_stderr() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
-        let mut stdout = exec_params(vec!["printf", "hello"]);
-        stdout.process_id = Some("pipe_stdout".to_string());
-        stdout.stream_stdout_stderr = Some(true);
+        let mut params = exec_params(vec![
+            "sh",
+            "-c",
+            "printf stdout-line; printf stderr-line >&2",
+        ]);
+        params.process_id = Some("pipe_split".to_string());
+        params.stream_stdout_stderr = Some(true);
+
+        let response = service.exec(params).expect("non-tty streaming succeeds");
+        let events = service.drain_output_delta_events();
+        let stdout = decode_stream(&events, CommandExecOutputStream::Stdout);
+        let stderr = decode_stream(&events, CommandExecOutputStream::Stderr);
+
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, "");
+        assert_eq!(response.stderr, "");
+        assert_eq!(stdout, "stdout-line");
+        assert_eq!(stderr, "stderr-line");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_non_tty_streaming_accepts_stdin_and_close() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pipe_stdin_session";
+        let mut params = exec_params(vec![
+            "sh",
+            "-c",
+            "IFS= read -r line; printf 'got:%s' \"$line\"",
+        ]);
+        params.process_id = Some(process_id.to_string());
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_active_process(&service, process_id);
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("pipe input\n")),
+                close_stdin: Some(true),
+            })
+            .expect("write succeeds for pipe streaming");
+
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("non-tty streaming exec succeeds");
+        let events = service.drain_output_delta_events();
+        let stdout = decode_stream(&events, CommandExecOutputStream::Stdout);
+
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(stdout, "got:pipe input");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_non_tty_stdin_only_captures_final_stdout_and_stderr() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pipe_stdin_only_session";
+        let mut params = exec_params(vec![
+            "sh",
+            "-c",
+            "IFS= read -r line; printf 'out:%s' \"$line\"; printf 'err:%s' \"$line\" >&2",
+        ]);
+        params.process_id = Some(process_id.to_string());
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(false);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_active_process(&service, process_id);
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("pipe input\n")),
+                close_stdin: Some(true),
+            })
+            .expect("write succeeds for stdin-only pipe streaming");
+
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("stdin-only pipe exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, "out:pipe input");
+        assert_eq!(response.stderr, "err:pipe input");
+        assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_non_tty_resize_fails_safe() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pipe_resize_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        params.process_id = Some(process_id.to_string());
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
 
         let error = service
-            .exec(stdout)
-            .expect_err("non-tty output streaming needs pipe backend");
+            .resize(CommandExecResizeParams {
+                process_id: process_id.to_string(),
+                size: CommandExecTerminalSize { cols: 80, rows: 24 },
+            })
+            .expect_err("pipe streaming resize must fail safe");
+        assert!(error.to_string().contains("without an active PTY session"));
 
-        assert!(error.to_string().contains("streaming pipe backend"));
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate active pipe process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("non-tty streaming exec returns terminated result");
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
 
-        let mut stdin = exec_params(vec!["cat"]);
-        stdin.process_id = Some("pipe_stdin".to_string());
-        stdin.stream_stdin = Some(true);
+        assert_ne!(response.exit_code, 0);
+        assert!(audit_text.contains("\"operation\":\"resize\""));
+        assert!(audit_text.contains("\"operation\":\"terminate\""));
+        assert!(audit_text.contains("\"outcome\":\"rejected\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_override_rejection_redacts_policy_payload() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf should-not-run"]);
+        params.process_id = Some("pipe_sensitive_policy".to_string());
+        params.stream_stdout_stderr = Some(true);
+        params.sandbox_policy = Some(serde_json::json!({
+            "type": "workspace-write",
+            "writable_roots": ["/tmp/do-not-leak-sensitive-root"]
+        }));
 
         let error = service
-            .exec(stdin)
-            .expect_err("non-tty stdin streaming needs pipe backend");
+            .exec(params)
+            .expect_err("streaming sandbox override must fail safe");
+        let error_text = error.to_string();
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
 
-        assert!(error.to_string().contains("streaming pipe backend"));
+        assert!(error_text.contains("sandboxPolicy/permissionProfile"));
+        assert!(!error_text.contains("do-not-leak-sensitive-root"));
+        assert!(!audit_text.contains("do-not-leak-sensitive-root"));
+        assert!(audit_text.contains("\"hasSandboxPolicy\":true"));
+        assert!(audit_text.contains("\"outcome\":\"rejected\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_exec_audit_redacts_command_env_and_output() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf stdout-secret"]);
+        params.process_id = Some("audit_proc".to_string());
+        params.env.insert(
+            "SECRET_TOKEN".to_string(),
+            Some("env-secret-token".to_string()),
+        );
+
+        let response = service.exec(params).expect("exec succeeds");
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
+
+        assert_eq!(response.stdout, "stdout-secret");
+        assert!(audit_text.contains("audit.command_exec"));
+        assert!(audit_text.contains("\"processId\":\"audit_proc\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(!audit_text.contains("stdout-secret"));
+        assert!(!audit_text.contains("env-secret-token"));
+        assert!(!audit_text.contains("SECRET_TOKEN"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_control_audit_redacts_stdin_payload() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "audit_control_proc";
+        let stdin_secret = "stdin-secret-token";
+        let mut params = exec_params(vec!["sh", "-c", "IFS= read -r line; printf ready"]);
+        params.process_id = Some(process_id.to_string());
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_active_process(&service, process_id);
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode(format!("{stdin_secret}\n"))),
+                close_stdin: Some(true),
+            })
+            .expect("write succeeds");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("exec succeeds");
+        let audit_text = serde_json::to_string(&service.drain_audit_entries())
+            .expect("audit entries should serialize");
+
+        assert_eq!(response.exit_code, 0);
+        assert!(audit_text.contains("\"operation\":\"write\""));
+        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(audit_text.contains("\"bytes\""));
+        assert!(!audit_text.contains(stdin_secret));
+        assert!(!audit_text.contains(&BASE64_STANDARD.encode(stdin_secret)));
     }
 
     #[cfg(unix)]
@@ -1613,7 +2356,7 @@ mod tests {
             .expect_err("streaming sandbox unavailable");
         assert!(
             format!("{error:?}")
-                .contains("sandboxPolicy/permissionProfile are not supported by PTY streaming"),
+                .contains("sandboxPolicy/permissionProfile are not supported by streaming"),
             "{error:?}"
         );
     }
