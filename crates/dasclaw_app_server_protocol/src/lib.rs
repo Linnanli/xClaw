@@ -1150,7 +1150,9 @@ pub struct McpServiceAvailability {
     pub reload: bool,
     pub tool_call: bool,
     pub resource_read: bool,
+    pub oauth_login: bool,
     pub tool_call_progress_events: bool,
+    pub oauth_login_completed_events: bool,
     pub startup_status_events: bool,
 }
 
@@ -1170,6 +1172,9 @@ impl McpServiceAvailability {
         if self.tool_call {
             methods.push(method::MCP_SERVER_TOOL_CALL);
         }
+        if self.oauth_login {
+            methods.push(method::MCP_SERVER_OAUTH_LOGIN);
+        }
         methods
     }
 
@@ -1178,6 +1183,9 @@ impl McpServiceAvailability {
         let mut events = Vec::new();
         if self.tool_call_progress_events {
             events.push(event::ITEM_MCP_TOOL_CALL_PROGRESS);
+        }
+        if self.oauth_login_completed_events {
+            events.push(event::MCP_SERVER_OAUTH_LOGIN_COMPLETED);
         }
         if self.startup_status_events {
             events.push(event::MCP_SERVER_STARTUP_STATUS_UPDATED);
@@ -4594,6 +4602,8 @@ pub struct McpServerOauthLoginParams {
 #[serde(rename_all = "camelCase")]
 pub struct McpServerOauthLoginResponse {
     pub authorization_url: String,
+    pub callback_url: String,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7201,6 +7211,8 @@ mod tests {
                     tool_call: true,
                     resource_read: true,
                     tool_call_progress_events: true,
+                    oauth_login: false,
+                    oauth_login_completed_events: false,
                     startup_status_events: true,
                 },
                 p5: AppServerP5Availability::default(),
@@ -7231,6 +7243,29 @@ mod tests {
                 event::ITEM_MCP_TOOL_CALL_PROGRESS.to_string(),
                 event::MCP_SERVER_STARTUP_STATUS_UPDATED.to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn app_server_capability_helper_advertises_oauth_only_when_ready() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
+                mcp: McpServiceAvailability {
+                    oauth_login: true,
+                    oauth_login_completed_events: true,
+                    ..McpServiceAvailability::default()
+                },
+                ..AppServerServiceAvailability::default()
+            });
+
+        assert_eq!(matrix.mcp.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.mcp.methods,
+            vec![method::MCP_SERVER_OAUTH_LOGIN.to_string()]
+        );
+        assert_eq!(
+            matrix.mcp.events,
+            vec![event::MCP_SERVER_OAUTH_LOGIN_COMPLETED.to_string()]
         );
     }
 
@@ -7464,6 +7499,8 @@ mod tests {
         };
         let oauth_response = McpServerOauthLoginResponse {
             authorization_url: "https://auth.example.test/oauth".into(),
+            callback_url: "http://127.0.0.1/oauth/callback".into(),
+            state: "state".into(),
         };
         let read_params = McpResourceReadParams {
             thread_id: Some("thread_1".into()),

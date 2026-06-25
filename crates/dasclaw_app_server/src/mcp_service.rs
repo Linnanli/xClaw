@@ -1,20 +1,28 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use dasclaw_app_server_protocol::{
     ListMcpServerStatusParams, ListMcpServerStatusResponse, McpAuthStatus, McpResourceContent,
-    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse, McpServerStatus,
-    McpServerStatusDetail, McpServerToolCallParams, McpServerToolCallResponse,
-    McpServiceAvailability, McpToolCallProgressNotification, Resource, ResourceTemplate,
-    ServiceHealth, ServiceName,
+    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginCompletedNotification,
+    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+    McpServerReloadResponse, McpServerStatus, McpServerStatusDetail, McpServerToolCallParams,
+    McpServerToolCallResponse, McpServiceAvailability, McpToolCallProgressNotification, Resource,
+    ResourceTemplate, ServiceHealth, ServiceName,
 };
 use dasclaw_mcp::{
-    CallToolResult, ContentBlock, McpClient, McpFactoryError, McpProcessManager,
+    AuthError, CallToolResult, ContentBlock, McpClient, McpFactoryError, McpProcessManager,
     McpResource as WireResource, McpResourceTemplate as WireResourceTemplate, McpServerConfig,
-    McpServersFile, McpSessionManager, McpTool, ResourceContent, create_client_from_config,
+    McpServersFile, McpSessionManager, McpTool, PkceChallenge, ResourceContent,
+    build_authorization_url, canonical_resource_uri, create_client_from_config,
+    exchange_code_for_token, store_tokens,
 };
+use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
 use dasclaw_tool::ToolError;
+use secrecy::SecretString;
 
 use crate::AppServerError;
 use crate::app_services::McpService;
@@ -28,12 +36,27 @@ pub struct AppServerMcpService {
     process_manager: Arc<McpProcessManager>,
     runtime: Arc<Mutex<Option<BlockingTokioRuntime>>>,
     events: McpEventQueue,
+    oauth_flows: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
+    secrets: Arc<dyn SecretsStore + Send + Sync>,
 }
 
 #[derive(Clone, Default)]
 struct McpEventQueue {
     tool_call_progress: Arc<Mutex<Vec<McpToolCallProgressNotification>>>,
+    oauth_login_completed: Arc<Mutex<Vec<McpServerOauthLoginCompletedNotification>>>,
 }
+
+#[derive(Clone)]
+struct PendingOAuthFlow {
+    server: McpServerConfig,
+    state: String,
+    redirect_uri: String,
+    pkce: Option<PkceChallenge>,
+    expires_at: Instant,
+}
+
+const OAUTH_USER_ID: &str = "app-server";
+const OAUTH_SECRET_KEY: &str = "dasclaw-app-server-oauth-secret-key";
 
 impl Default for AppServerMcpService {
     fn default() -> Self {
@@ -50,6 +73,8 @@ impl AppServerMcpService {
             process_manager: Arc::new(McpProcessManager::new()),
             runtime: Arc::new(Mutex::new(None)),
             events: McpEventQueue::default(),
+            oauth_flows: Arc::new(Mutex::new(HashMap::new())),
+            secrets: default_oauth_secrets(),
         }
     }
 
@@ -207,33 +232,262 @@ impl McpService for AppServerMcpService {
         &self,
         params: McpServerOauthLoginParams,
     ) -> Result<McpServerOauthLoginResponse, AppServerError> {
-        self.enabled_server(&params.name)?;
-        Err(AppServerError::capability_unavailable(
-            "mcp",
-            format!(
-                "MCP OAuth login orchestration is not wired for server '{}'",
-                params.name
-            ),
-        ))
+        let server = self.enabled_server(&params.name)?;
+        let oauth = server.oauth.as_ref().ok_or_else(|| {
+            AppServerError::capability_unavailable(
+                "mcp",
+                format!(
+                    "MCP server '{}' does not have OAuth configured",
+                    params.name
+                ),
+            )
+        })?;
+        let authorization_url = oauth.authorization_url.as_deref().ok_or_else(|| {
+            AppServerError::capability_unavailable(
+                "mcp",
+                format!(
+                    "MCP OAuth authorization endpoint is not configured for server '{}'",
+                    params.name
+                ),
+            )
+        })?;
+        if oauth.token_url.is_none() {
+            return Err(AppServerError::capability_unavailable(
+                "mcp",
+                format!(
+                    "MCP OAuth token endpoint is not configured for server '{}'",
+                    params.name
+                ),
+            ));
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
+            AppServerError::service_degraded(
+                "mcp",
+                format!("failed to bind MCP OAuth callback listener: {error}"),
+            )
+        })?;
+        let callback_url = format!(
+            "http://{}/oauth/callback",
+            listener.local_addr().map_err(|error| {
+                AppServerError::service_degraded(
+                    "mcp",
+                    format!("failed to read MCP OAuth callback listener address: {error}"),
+                )
+            },)?
+        );
+
+        let state = PkceChallenge::generate().verifier;
+        let pkce = oauth.use_pkce.then(PkceChallenge::generate);
+        let mut scopes = params.scopes.unwrap_or_else(|| oauth.scopes.clone());
+        scopes.sort();
+        scopes.dedup();
+        let mut extra_params = oauth.extra_params.clone();
+        extra_params.insert("state".to_string(), state.clone());
+        let resource = canonical_resource_uri(&server.url);
+        let authorization_url = build_authorization_url(
+            authorization_url,
+            &oauth.client_id,
+            &callback_url,
+            &scopes,
+            pkce.as_ref(),
+            &extra_params,
+            Some(&resource),
+        );
+        let timeout = Duration::from_secs(params.timeout_secs.unwrap_or(300));
+        let name = params.name.clone();
+        self.oauth_flows
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                name.clone(),
+                PendingOAuthFlow {
+                    server,
+                    state: state.clone(),
+                    redirect_uri: callback_url.clone(),
+                    pkce,
+                    expires_at: Instant::now() + timeout,
+                },
+            );
+        self.spawn_oauth_callback_listener(name, listener, Instant::now() + timeout);
+
+        Ok(McpServerOauthLoginResponse {
+            authorization_url,
+            callback_url,
+            state,
+        })
     }
 
     fn drain_tool_call_progress_events(&self) -> Vec<McpToolCallProgressNotification> {
         self.events.drain_tool_call_progress()
     }
 
+    fn drain_oauth_login_completed_events(&self) -> Vec<McpServerOauthLoginCompletedNotification> {
+        self.events.drain_oauth_login_completed()
+    }
+
     fn availability(&self) -> McpServiceAvailability {
+        let oauth_ready = self.has_oauth_ready_server();
         McpServiceAvailability {
             status_list: true,
             reload: true,
             tool_call: true,
             resource_read: true,
             tool_call_progress_events: true,
+            oauth_login: oauth_ready,
+            oauth_login_completed_events: oauth_ready,
             startup_status_events: true,
         }
     }
 }
 
 impl AppServerMcpService {
+    pub fn complete_oauth_login(
+        &self,
+        name: &str,
+        state: &str,
+        code: &str,
+    ) -> Result<(), AppServerError> {
+        let flow = self.take_oauth_flow(name)?;
+        if flow.expires_at <= Instant::now() {
+            let error = AppServerError::capability_unavailable("mcp", "MCP OAuth login expired");
+            self.events
+                .push_oauth_login_completed(name, false, Some(error.public_message()));
+            return Err(error);
+        }
+        if flow.state != state {
+            let error = AppServerError::invalid_request("mcp", "MCP OAuth state mismatch");
+            self.events
+                .push_oauth_login_completed(name, false, Some(error.public_message()));
+            return Err(error);
+        }
+
+        let token_url = flow
+            .server
+            .oauth
+            .as_ref()
+            .and_then(|oauth| oauth.token_url.clone())
+            .ok_or_else(|| {
+                AppServerError::capability_unavailable(
+                    "mcp",
+                    "MCP OAuth token endpoint is not configured",
+                )
+            })?;
+        let client_id = flow
+            .server
+            .oauth
+            .as_ref()
+            .map(|oauth| oauth.client_id.clone())
+            .unwrap_or_default();
+        let resource = canonical_resource_uri(&flow.server.url);
+        let server = flow.server.clone();
+        let redirect_uri = flow.redirect_uri.clone();
+        let pkce = flow.pkce.clone();
+        let code = code.to_string();
+        let secrets = Arc::clone(&self.secrets);
+        let result = self.runtime()?.block_on("mcp/oauth-callback", async move {
+            let token = exchange_code_for_token(
+                &token_url,
+                &client_id,
+                None,
+                &code,
+                &redirect_uri,
+                pkce.as_ref(),
+                Some(&resource),
+            )
+            .await
+            .map_err(map_auth_error)?;
+            store_tokens(&secrets, OAUTH_USER_ID, &server, &token)
+                .await
+                .map_err(map_auth_error)?;
+            Ok(())
+        });
+
+        match result {
+            Ok(()) => {
+                self.events.push_oauth_login_completed(name, true, None);
+                Ok(())
+            }
+            Err(error) => {
+                self.events
+                    .push_oauth_login_completed(name, false, Some(error.public_message()));
+                Err(error)
+            }
+        }
+    }
+
+    pub fn cancel_oauth_login(&self, name: &str) -> Result<(), AppServerError> {
+        self.take_oauth_flow(name)?;
+        self.events.push_oauth_login_completed(
+            name,
+            false,
+            Some("MCP OAuth login cancelled or timed out"),
+        );
+        Ok(())
+    }
+
+    pub fn drain_oauth_login_completed_events(
+        &self,
+    ) -> Vec<McpServerOauthLoginCompletedNotification> {
+        self.events.drain_oauth_login_completed()
+    }
+
+    fn spawn_oauth_callback_listener(
+        &self,
+        name: String,
+        listener: TcpListener,
+        expires_at: Instant,
+    ) {
+        let service = self.clone();
+        thread::spawn(move || {
+            let _ = listener.set_nonblocking(true);
+            loop {
+                if Instant::now() >= expires_at {
+                    let _ = service.cancel_oauth_login(&name);
+                    return;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let response = service.handle_oauth_callback_stream(&name, &mut stream);
+                        let _ = write_oauth_callback_response(&mut stream, response);
+                        return;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(error) => {
+                        service.events.push_oauth_login_completed(
+                            &name,
+                            false,
+                            Some(&format!("MCP OAuth callback listener failed: {error}")),
+                        );
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    fn handle_oauth_callback_stream(
+        &self,
+        name: &str,
+        stream: &mut TcpStream,
+    ) -> OAuthCallbackResponse {
+        match read_oauth_callback_request(stream).and_then(parse_oauth_callback_request) {
+            Ok(OAuthCallbackRequest { code, state }) => {
+                match self.complete_oauth_login(name, &state, &code) {
+                    Ok(()) => OAuthCallbackResponse::ok("MCP OAuth login completed"),
+                    Err(error) => OAuthCallbackResponse::bad_request(error.public_message()),
+                }
+            }
+            Err(message) => {
+                self.events
+                    .push_oauth_login_completed(name, false, Some(&message));
+                OAuthCallbackResponse::bad_request(&message)
+            }
+        }
+    }
+
     fn runtime(&self) -> Result<BlockingTokioRuntime, AppServerError> {
         let mut runtime = self
             .runtime
@@ -297,6 +551,28 @@ impl AppServerMcpService {
 
         clients.insert(name, Arc::clone(&client));
         Ok(client)
+    }
+
+    fn take_oauth_flow(&self, name: &str) -> Result<PendingOAuthFlow, AppServerError> {
+        self.oauth_flows
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(name)
+            .ok_or_else(|| AppServerError::invalid_request("mcp", "MCP OAuth login not pending"))
+    }
+
+    fn has_oauth_ready_server(&self) -> bool {
+        self.registry
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .servers
+            .iter()
+            .any(|server| {
+                server.enabled
+                    && server.oauth.as_ref().is_some_and(|oauth| {
+                        oauth.authorization_url.is_some() && oauth.token_url.is_some()
+                    })
+            })
     }
 
     fn status_for_server(
@@ -366,6 +642,130 @@ impl McpEventQueue {
             .drain(..)
             .collect()
     }
+
+    fn push_oauth_login_completed(&self, name: &str, success: bool, error: Option<&str>) {
+        self.oauth_login_completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(McpServerOauthLoginCompletedNotification {
+                name: name.to_string(),
+                success,
+                error: error.map(redact_sensitive_message_str),
+            });
+    }
+
+    fn drain_oauth_login_completed(&self) -> Vec<McpServerOauthLoginCompletedNotification> {
+        self.oauth_login_completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain(..)
+            .collect()
+    }
+}
+
+fn default_oauth_secrets() -> Arc<dyn SecretsStore + Send + Sync> {
+    let crypto = SecretsCrypto::new(SecretString::from(OAUTH_SECRET_KEY.to_string()))
+        .expect("app-server OAuth secret key is at least 32 bytes");
+    Arc::new(InMemorySecretsStore::new(Arc::new(crypto)))
+}
+
+struct OAuthCallbackRequest {
+    code: String,
+    state: String,
+}
+
+struct OAuthCallbackResponse {
+    status: &'static str,
+    body: &'static str,
+}
+
+impl OAuthCallbackResponse {
+    fn ok(body: &'static str) -> Self {
+        Self {
+            status: "200 OK",
+            body,
+        }
+    }
+
+    fn bad_request(_message: &str) -> Self {
+        Self {
+            status: "400 Bad Request",
+            body: "MCP OAuth login failed",
+        }
+    }
+}
+
+fn read_oauth_callback_request(stream: &mut TcpStream) -> Result<String, String> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|error| format!("failed to read MCP OAuth callback: {error}"))?;
+        if read == 0 {
+            return Err("MCP OAuth callback closed before headers".to_string());
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if buffer.len() > 8192 {
+            return Err("MCP OAuth callback request is too large".to_string());
+        }
+    }
+    String::from_utf8(buffer).map_err(|_| "MCP OAuth callback request is not UTF-8".to_string())
+}
+
+fn parse_oauth_callback_request(request: String) -> Result<OAuthCallbackRequest, String> {
+    let request_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| "MCP OAuth callback request is empty".to_string())?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    if method != "GET" {
+        return Err("MCP OAuth callback must use GET".to_string());
+    }
+    let query = target
+        .strip_prefix("/oauth/callback?")
+        .ok_or_else(|| "MCP OAuth callback path is invalid".to_string())?;
+    let params = parse_query_params(query);
+    let code = params
+        .get("code")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| "MCP OAuth callback is missing code".to_string())?;
+    let state = params
+        .get("state")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| "MCP OAuth callback is missing state".to_string())?;
+    Ok(OAuthCallbackRequest { code, state })
+}
+
+fn parse_query_params(query: &str) -> HashMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn write_oauth_callback_response(
+    stream: &mut TcpStream,
+    response: OAuthCallbackResponse,
+) -> std::io::Result<()> {
+    let body = response.body;
+    let response = format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response.status,
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
 }
 
 fn status_from_config(config: &McpServerConfig) -> McpServerStatus {
@@ -475,6 +875,10 @@ fn map_tool_error(error: ToolError) -> AppServerError {
     AppServerError::service_degraded("mcp", redact_sensitive_message(error.to_string()))
 }
 
+fn map_auth_error(error: AuthError) -> AppServerError {
+    AppServerError::service_degraded("mcp", redact_sensitive_message(error.to_string()))
+}
+
 fn redact_sensitive_message(message: String) -> String {
     let lower = message.to_ascii_lowercase();
     let sensitive_markers = [
@@ -499,6 +903,10 @@ fn redact_sensitive_message(message: String) -> String {
     } else {
         message
     }
+}
+
+fn redact_sensitive_message_str(message: &str) -> String {
+    redact_sensitive_message(message.to_string())
 }
 
 fn parse_cursor(cursor: Option<&str>) -> Result<usize, AppServerError> {
@@ -531,6 +939,11 @@ pub(crate) mod test_support {
     pub(crate) struct TestMcpHttpServer {
         pub(crate) url: String,
         requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    pub(crate) struct TestOAuthTokenServer {
+        url: String,
+        bodies: Arc<Mutex<Vec<String>>>,
     }
 
     impl TestMcpHttpServer {
@@ -584,6 +997,81 @@ pub(crate) mod test_support {
         }
     }
 
+    impl TestOAuthTokenServer {
+        pub(crate) fn start_success() -> Self {
+            Self::start(
+                200,
+                r#"{"access_token":"stored-access-token","token_type":"Bearer","refresh_token":"stored-refresh-token","expires_in":3600}"#,
+            )
+        }
+
+        pub(crate) fn start_failure_with_secret() -> Self {
+            Self::start(
+                400,
+                r#"{"error":"invalid_grant","error_description":"access_token=leaked"}"#,
+            )
+        }
+
+        fn start(status: u16, body: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test OAuth token server");
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let bodies = Arc::new(Mutex::new(Vec::new()));
+            let captured = Arc::clone(&bodies);
+            thread::spawn(move || {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let body_text = read_http_body(&mut stream);
+                    captured
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .push(body_text);
+                    write_http_response(&mut stream, status, body);
+                }
+            });
+
+            Self { url, bodies }
+        }
+
+        pub(crate) fn token_url(&self) -> &str {
+            &self.url
+        }
+
+        pub(crate) fn form_body(&self) -> String {
+            self.bodies
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .first()
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        pub(crate) fn request_count(&self) -> usize {
+            self.bodies
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len()
+        }
+    }
+
+    pub(crate) fn perform_oauth_callback(callback_url: &str, state: &str, code: &str) -> String {
+        let without_scheme = callback_url
+            .strip_prefix("http://")
+            .expect("test callback URL should be HTTP");
+        let (host, path) = without_scheme
+            .split_once('/')
+            .expect("test callback URL should include path");
+        let mut stream = std::net::TcpStream::connect(host).expect("connect callback listener");
+        let path = format!("/{path}?code={code}&state={state}");
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .expect("write callback request");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("read callback response");
+        response
+    }
+
     fn read_http_json(stream: &mut std::net::TcpStream) -> serde_json::Value {
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 1024];
@@ -615,10 +1103,46 @@ pub(crate) mod test_support {
             .expect("request body is JSON")
     }
 
+    fn read_http_body(stream: &mut std::net::TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).expect("read request");
+            assert!(read > 0, "client closed before headers");
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(index) = find_header_end(&buffer) {
+                break index;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&buffer[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .expect("content-length header");
+        let body_start = header_end + 4;
+        while buffer.len() < body_start + content_length {
+            let read = stream.read(&mut chunk).expect("read body");
+            assert!(read > 0, "client closed before body");
+            buffer.extend_from_slice(&chunk[..read]);
+        }
+        String::from_utf8(buffer[body_start..body_start + content_length].to_vec())
+            .expect("request body is utf8")
+    }
+
     fn write_http_json(stream: &mut std::net::TcpStream, body: serde_json::Value) {
         let body = body.to_string();
+        write_http_response(stream, 200, &body);
+    }
+
+    fn write_http_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
+        let reason = if status == 200 { "OK" } else { "Bad Request" };
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -731,7 +1255,7 @@ mod tests {
     };
     use dasclaw_mcp::{McpServerConfig, OAuthConfig};
 
-    use super::test_support::TestMcpHttpServer;
+    use super::test_support::{TestMcpHttpServer, TestOAuthTokenServer, perform_oauth_callback};
     use super::{AppServerMcpService, redact_sensitive_message};
     use crate::app_services::McpService;
 
@@ -920,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn app_server_mcp_effectful_methods_fail_safe_for_disabled_server_and_unwired_oauth() {
+    fn app_server_mcp_effectful_methods_fail_safe_for_disabled_server_and_missing_oauth_config() {
         let service = AppServerMcpService::from_servers(vec![disabled_server(
             "github",
             "https://github.example/mcp",
@@ -961,6 +1485,198 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_login_starts_authorization_flow() {
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id").with_endpoints(
+                "https://auth.example.test/oauth",
+                "https://auth.example.test/token",
+            ),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: Some(vec!["repo".to_string()]),
+                timeout_secs: Some(30),
+            })
+            .expect("oauth login should start an authorization flow");
+
+        assert!(
+            response
+                .authorization_url
+                .starts_with("https://auth.example.test/oauth?")
+        );
+        assert!(response.authorization_url.contains("client_id=client-id"));
+        assert!(response.authorization_url.contains("scope=repo"));
+        assert!(response.authorization_url.contains("state="));
+        assert!(response.callback_url.starts_with("http://127.0.0.1:"));
+        assert!(response.callback_url.ends_with("/oauth/callback"));
+        assert!(!response.state.is_empty());
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_callback_stores_tokens_and_emits_success() {
+        let token_server = TestOAuthTokenServer::start_success();
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id")
+                .with_endpoints("https://auth.example.test/oauth", token_server.token_url()),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: None,
+                timeout_secs: Some(30),
+            })
+            .expect("oauth login should start");
+
+        let callback_response =
+            perform_oauth_callback(&response.callback_url, &response.state, "auth-code-secret");
+        let completed = service.drain_oauth_login_completed_events();
+
+        assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].name, "github");
+        assert!(completed[0].success);
+        assert_eq!(completed[0].error, None);
+        let request = token_server.form_body();
+        assert!(request.contains("code=auth-code-secret"));
+        assert!(request.contains("client_id=client-id"));
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_callback_rejects_state_mismatch_without_leaking_state_or_code()
+    {
+        let token_server = TestOAuthTokenServer::start_success();
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id")
+                .with_endpoints("https://auth.example.test/oauth", token_server.token_url()),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: None,
+                timeout_secs: Some(30),
+            })
+            .expect("oauth login should start");
+
+        let error = service
+            .complete_oauth_login("github", "wrong-state-secret", "auth-code-secret")
+            .expect_err("state mismatch must fail safe");
+        let error_text = error.public_message().to_string();
+        let completed = service.drain_oauth_login_completed_events();
+
+        assert!(error_text.contains("state mismatch"));
+        assert!(!error_text.contains("wrong-state-secret"));
+        assert!(!error_text.contains(&response.state));
+        assert!(!error_text.contains("auth-code-secret"));
+        assert_eq!(completed.len(), 1);
+        assert!(!completed[0].success);
+        assert!(
+            !serde_json::to_string(&completed)
+                .unwrap()
+                .contains("auth-code-secret"),
+            "completion notification must redact authorization codes"
+        );
+        assert_eq!(token_server.request_count(), 0);
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_cancel_completes_failure_without_leaking_state() {
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id").with_endpoints(
+                "https://auth.example.test/oauth",
+                "https://auth.example.test/token",
+            ),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: None,
+                timeout_secs: Some(30),
+            })
+            .expect("oauth login should start");
+
+        service
+            .cancel_oauth_login("github")
+            .expect("cancel should complete pending flow");
+        let completed = service.drain_oauth_login_completed_events();
+
+        assert_eq!(completed.len(), 1);
+        assert!(!completed[0].success);
+        let serialized = serde_json::to_string(&completed).unwrap();
+        assert!(!serialized.contains(&response.state));
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_timeout_completes_failure_without_leaking_code() {
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id").with_endpoints(
+                "https://auth.example.test/oauth",
+                "https://auth.example.test/token",
+            ),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: None,
+                timeout_secs: Some(0),
+            })
+            .expect("oauth login should start");
+
+        let error = service
+            .complete_oauth_login("github", &response.state, "auth-code-secret")
+            .expect_err("expired OAuth flow must fail safe");
+        let completed = service.drain_oauth_login_completed_events();
+        let serialized = format!(
+            "{} {}",
+            error.public_message(),
+            serde_json::to_string(&completed).unwrap()
+        );
+
+        assert!(serialized.contains("expired"));
+        assert!(!serialized.contains("auth-code-secret"));
+        assert!(!serialized.contains(&response.state));
+    }
+
+    #[test]
+    fn app_server_mcp_service_oauth_token_exchange_error_is_redacted() {
+        let token_server = TestOAuthTokenServer::start_failure_with_secret();
+        let github = McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+            OAuthConfig::new("client-id")
+                .with_endpoints("https://auth.example.test/oauth", token_server.token_url()),
+        );
+        let service = AppServerMcpService::from_servers(vec![github]);
+        let response = service
+            .oauth_login(McpServerOauthLoginParams {
+                name: "github".to_string(),
+                scopes: None,
+                timeout_secs: Some(30),
+            })
+            .expect("oauth login should start");
+
+        let error = service
+            .complete_oauth_login("github", &response.state, "auth-code-secret")
+            .expect_err("token exchange failure should be surfaced safely");
+        let completed = service.drain_oauth_login_completed_events();
+        let serialized = format!(
+            "{} {}",
+            error.public_message(),
+            serde_json::to_string(&completed).unwrap()
+        );
+
+        assert!(!serialized.contains("access_token=leaked"));
+        assert!(!serialized.contains("auth-code-secret"));
+        assert!(!serialized.contains(&response.state));
+        assert!(serialized.contains("sensitive details redacted"));
     }
 
     #[test]

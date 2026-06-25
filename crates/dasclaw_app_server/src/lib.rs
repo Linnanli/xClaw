@@ -1742,16 +1742,7 @@ impl AppServer {
         self.require_initialized("mcp")?;
         let name = params.name.clone();
         match self.app_services.mcp.oauth_login(params) {
-            Ok(response) => {
-                self.notifications.emit_mcp_oauth_login_completed(
-                    McpServerOauthLoginCompletedNotification {
-                        name,
-                        success: true,
-                        error: None,
-                    },
-                );
-                Ok(response)
-            }
+            Ok(response) => Ok(response),
             Err(error) => {
                 self.notifications.emit_mcp_oauth_login_completed(
                     McpServerOauthLoginCompletedNotification {
@@ -2932,6 +2923,9 @@ impl AppServer {
         }
         for event in self.app_services.drain_mcp_tool_call_progress_events() {
             self.notifications.emit_mcp_tool_call_progress(event);
+        }
+        for event in self.app_services.drain_mcp_oauth_login_completed_events() {
+            self.notifications.emit_mcp_oauth_login_completed(event);
         }
         for event in self.app_services.drain_fs_changed_events() {
             self.notifications.emit_fs_changed(event);
@@ -9705,6 +9699,43 @@ mod tests {
     }
 
     #[test]
+    fn app_server_real_mcp_service_advertises_oauth_only_when_ready() {
+        let service = mcp_service::AppServerMcpService::from_servers(vec![
+            dasclaw_mcp::McpServerConfig::new("github", "http://127.0.0.1:9/mcp").with_oauth(
+                dasclaw_mcp::OAuthConfig::new("client-id").with_endpoints(
+                    "https://auth.example.test/oauth",
+                    "https://auth.example.test/token",
+                ),
+            ),
+        ]);
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            service,
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let capabilities = server.capabilities();
+        assert!(
+            capabilities
+                .capabilities
+                .mcp
+                .methods
+                .contains(&method::MCP_SERVER_OAUTH_LOGIN.to_string())
+        );
+        assert!(
+            capabilities
+                .capabilities
+                .mcp
+                .events
+                .contains(&event::MCP_SERVER_OAUTH_LOGIN_COMPLETED.to_string())
+        );
+    }
+
+    #[test]
     fn app_server_mcp_resource_read_fail_safe_error_redacts_uri_secrets() {
         let services = app_services::AppServerServices::for_tests(
             app_services::TestLogService::ready(),
@@ -9772,6 +9803,56 @@ mod tests {
                 && notification.params["name"] == "github"
                 && notification.params["success"] == false
         }));
+    }
+
+    #[test]
+    fn app_server_mcp_oauth_login_start_returns_flow_without_success_completion() {
+        let github = dasclaw_mcp::McpServerConfig::new("github", "http://127.0.0.1:9/mcp")
+            .with_oauth(dasclaw_mcp::OAuthConfig::new("client-id").with_endpoints(
+                "https://auth.example.test/oauth",
+                "https://auth.example.test/token",
+            ));
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            mcp_service::AppServerMcpService::from_servers(vec![github]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"oauth","method":"mcpServer/oauth/login","params":{"name":"github","scopes":["repo"],"timeoutSecs":30}}"#,
+            )
+            .expect("mcpServer/oauth/login should return a structured response");
+        let notifications = server.drain_notifications();
+        let value: Value = serde_json::from_str(&response).expect("oauth response JSON");
+
+        assert!(
+            value["result"]["authorizationUrl"]
+                .as_str()
+                .unwrap()
+                .contains("state=")
+        );
+        let callback_url = value["result"]["callbackUrl"].as_str().unwrap();
+        assert!(callback_url.starts_with("http://127.0.0.1:"));
+        assert!(callback_url.ends_with("/oauth/callback"));
+        assert!(
+            value["result"]["state"]
+                .as_str()
+                .is_some_and(|state| !state.is_empty())
+        );
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification.method != event::MCP_SERVER_OAUTH_LOGIN_COMPLETED)
+        );
     }
 
     #[test]

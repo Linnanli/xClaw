@@ -16,11 +16,11 @@ use dasclaw_app_server_protocol::{
     FuzzyFileSearchResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse, JobListParams,
     JobListResponse, JobReadParams, JobReadResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
-    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
-    McpServerReloadResponse, McpServerToolCallParams, McpServerToolCallResponse,
-    McpServiceAvailability, McpToolCallProgressNotification, ServiceHealth, ServiceName,
-    ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-    SkillsListResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
+    McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
+    McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
 };
 use dasclaw_hooks::{HookRegistry, HookRunObserver};
 use dasclaw_runtime::context::ContextManager;
@@ -92,6 +92,10 @@ pub trait McpService: Send + Sync {
         params: McpServerOauthLoginParams,
     ) -> Result<McpServerOauthLoginResponse, AppServerError>;
     fn drain_tool_call_progress_events(&self) -> Vec<McpToolCallProgressNotification> {
+        Vec::new()
+    }
+
+    fn drain_oauth_login_completed_events(&self) -> Vec<McpServerOauthLoginCompletedNotification> {
         Vec::new()
     }
 
@@ -327,6 +331,12 @@ impl AppServerServices {
 
     pub fn drain_mcp_tool_call_progress_events(&self) -> Vec<McpToolCallProgressNotification> {
         self.mcp.drain_tool_call_progress_events()
+    }
+
+    pub fn drain_mcp_oauth_login_completed_events(
+        &self,
+    ) -> Vec<McpServerOauthLoginCompletedNotification> {
+        self.mcp.drain_oauth_login_completed_events()
     }
 
     pub fn drain_fs_changed_events(&self) -> Vec<FsChangedNotification> {
@@ -749,9 +759,9 @@ mod test_fakes {
         FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
         FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams,
         JobListResponse, JobReadParams, JobReadResponse, JobSnapshot, ListMcpServerStatusParams,
-        ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
-        McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
-        McpServerReloadResponse, McpServerStatus, McpServerToolCallParams,
+        ListMcpServerStatusResponse, LogEntryEvent, McpAuthStatus, McpResourceReadParams,
+        McpResourceReadResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
+        McpServerReloadParams, McpServerReloadResponse, McpServerStatus, McpServerToolCallParams,
         McpServerToolCallResponse, McpServiceAvailability, ServiceHealth, ServiceName,
         SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListEntry, SkillsListParams,
         SkillsListResponse,
@@ -967,16 +977,24 @@ mod test_fakes {
         ) -> Result<McpServerOauthLoginResponse, AppServerError> {
             Ok(McpServerOauthLoginResponse {
                 authorization_url: "https://auth.example.test/oauth".to_string(),
+                callback_url: "http://127.0.0.1/oauth/callback".to_string(),
+                state: "state".to_string(),
             })
         }
 
         fn availability(&self) -> McpServiceAvailability {
+            let oauth_ready = self
+                .statuses
+                .iter()
+                .any(|status| status.auth_status == McpAuthStatus::OAuth);
             McpServiceAvailability {
                 status_list: true,
                 reload: true,
                 tool_call: true,
                 resource_read: true,
+                oauth_login: oauth_ready,
                 startup_status_events: true,
+                oauth_login_completed_events: oauth_ready,
                 ..McpServiceAvailability::default()
             }
         }
