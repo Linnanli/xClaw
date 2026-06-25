@@ -86,12 +86,12 @@ Protocol-shape consolidation belongs before capability expansion. The first impl
 | Skills / plugins / marketplace / apps | ~~`skills/list`~~、~~`skills/config/write`~~、`plugin/list`、`plugin/read`、`plugin/install`、`plugin/uninstall`、`marketplace/add`、`marketplace/remove`、`marketplace/upgrade`、`app/list` |
 | Device key | `device/key/create`、`device/key/public`、`device/key/sign` |
 | Filesystem | ~~`fs/readFile`~~、~~`fs/writeFile`~~、~~`fs/createDirectory`~~、~~`fs/getMetadata`~~、~~`fs/readDirectory`~~、~~`fs/remove`~~、~~`fs/copy`~~、~~`fs/watch`~~、~~`fs/unwatch`~~ |
-| Review / model / experiment | `review/start`、~~`model/list`~~、`experimentalFeature/list`、`experimentalFeature/enablement/set` |
+| Review / model / experiment | ~~`review/start`~~、~~`model/list`~~、`experimentalFeature/list`、`experimentalFeature/enablement/set` |
 | MCP | `mcpServer/oauth/login`、~~`config/mcpServer/reload`~~、~~`mcpServerStatus/list`~~、~~`mcpServer/resource/read`~~、~~`mcpServer/tool/call`~~ |
 | Sandbox / account / feedback | `windowsSandbox/setupStart`、`account/login/start`、`account/login/cancel`、`account/logout`、`account/rateLimits/read`、`account/sendAddCreditsNudgeEmail`、`account/read`、`feedback/upload` |
 | Local command | ~~`command/exec`~~、~~`command/exec/write`~~、~~`command/exec/terminate`~~、~~`command/exec/resize`~~ |
-| Config / external agent | `config/read`、`config/value/write`、`config/batchWrite`、`configRequirements/read`、`externalAgentConfig/detect`、`externalAgentConfig/import` |
-| Misc | `getConversationSummary`、`gitDiffToRemote`、`getAuthStatus`、`fuzzyFileSearch` |
+| Config / external agent | ~~`config/read`~~、~~`config/value/write`~~、~~`config/batchWrite`~~、~~`configRequirements/read`~~、`externalAgentConfig/detect`、`externalAgentConfig/import` |
+| Misc | ~~`getConversationSummary`~~、~~`gitDiffToRemote`~~、`getAuthStatus`、~~`fuzzyFileSearch`~~ |
 
 ### 2.2 ServerNotification：61 个
 
@@ -99,15 +99,15 @@ Protocol-shape consolidation belongs before capability expansion. The first impl
 
 | 域 | Codex notification |
 |---|---|
-| Error / warnings | `error`、`warning`、`guardianWarning`、`deprecationNotice`、`configWarning` |
+| Error / warnings | `error`、~~`warning`~~、~~`guardianWarning`~~、~~`deprecationNotice`~~、~~`configWarning`~~ |
 | Thread | ~~`thread/started`~~、~~`thread/status/changed`~~、~~`thread/archived`~~、~~`thread/unarchived`~~、`thread/closed`、~~`thread/name/updated`~~、~~`thread/goal/updated`~~、~~`thread/goal/cleared`~~、~~`thread/tokenUsage/updated`~~、`thread/compacted` |
 | Realtime | `thread/realtime/started`、`thread/realtime/itemAdded`、`thread/realtime/transcript/delta`、`thread/realtime/transcript/done`、`thread/realtime/outputAudio/delta`、`thread/realtime/sdp`、`thread/realtime/error`、`thread/realtime/closed` |
 | Turn | ~~`turn/started`~~、~~`turn/completed`~~、~~`turn/diff/updated`~~、~~`turn/plan/updated`~~ |
 | Item streaming | ~~`item/started`~~、~~`item/completed`~~、~~`rawResponseItem/completed`~~、~~`item/agentMessage/delta`~~、~~`item/plan/delta`~~、~~`item/reasoning/summaryTextDelta`~~、~~`item/reasoning/summaryPartAdded`~~、~~`item/reasoning/textDelta`~~ |
-| Approval / command / file change | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、~~`command/exec/outputDelta`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、~~`serverRequest/resolved`~~ |
+| Approval / command / file change | ~~`item/autoApprovalReview/started`~~、~~`item/autoApprovalReview/completed`~~、~~`command/exec/outputDelta`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、~~`serverRequest/resolved`~~ |
 | MCP | ~~`item/mcpToolCall/progress`~~、`mcpServer/oauthLogin/completed`、~~`mcpServer/startupStatus/updated`~~ |
 | Account / app / skills | `account/updated`、`account/rateLimits/updated`、`account/login/completed`、`app/list/updated`、~~`skills/changed`~~ |
-| External / fs / model / fuzzy / hooks / Windows | `externalAgentConfig/import/completed`、~~`fs/changed`~~、`model/rerouted`、`model/verification`、`fuzzyFileSearch/sessionUpdated`、`fuzzyFileSearch/sessionCompleted`、`hook/started`、`hook/completed`、`windows/worldWritableWarning`、`windowsSandbox/setupCompleted` |
+| External / fs / model / fuzzy / hooks / Windows | `externalAgentConfig/import/completed`、~~`fs/changed`~~、`model/rerouted`、`model/verification`、~~`fuzzyFileSearch/sessionUpdated`~~、~~`fuzzyFileSearch/sessionCompleted`~~、~~`hook/started`~~、~~`hook/completed`~~、`windows/worldWritableWarning`、`windowsSandbox/setupCompleted` |
 
 ### 2.3 ServerRequest：9 个
 
@@ -196,10 +196,10 @@ Protocol-shape consolidation belongs before capability expansion. The first impl
 | Sandbox | `crates/dasclaw_shell_tools`、`crates/dasclaw_sandbox*`、`crates/dasclaw_workspace_cap` 已有 shell sandbox、OS sandbox policy、Linux/Windows sandbox 相关实现 | ~~P3 已把 sandbox readiness 放到 runtime bridge feature gate / service health / capability matrix~~；P5 sandbox protocol slice 已接入 buffered `command/exec.sandboxPolicy`（read-only / workspace-write 等策略 override）与 `command/exec.permissionProfile` 建模，并把 `thread/start.sandbox`、`thread/start.permissionProfile`、`turn/start.sandboxPolicy`、`turn/start.permissionProfile` 纳入协议参数面，解析为 `RuntimeSandboxContext` 后传给 `RuntimeTurnStartRequest`；`configRequirements/read.allowedSandboxModes` 已暴露 `read-only` / `workspace-write`。仍没有 standalone fs/tool 沙箱执行入口、workspace-bound sandbox adapter、完整 sandbox manager/API 或 Windows sandbox setup；buffered `danger-full-access` 由 executor 双 opt-in fail-closed，PTY streaming 仍拒绝 `sandboxPolicy` / `permissionProfile`，真实 `DasclawAgentRuntimeBridge` 在尚不能 enforce sandbox context 时对非空 thread/turn context fail-closed，不能写成 runtime 已执行 sandbox |
 | MCP | `crates/dasclaw_mcp` 已有 MCP config/auth/session/transport/client/factory，并且 `McpToolExecutor` 可把 MCP tools 接到 `ToolExecutor` | P4 已接 MCP `mcpServerStatus/list`、`config/mcpServer/reload`、真实 `tool/call`、真实 `resource/read` 与可定位 `item/mcpToolCall/progress`；OAuth owner 尚未接线，因此不广告 `mcpServer/oauth/login` / `mcpServer/oauthLogin/completed` |
 | Filesystem / search | `crates/dasclaw_fs_tools` 已有 `ReadFileTool`、grep/glob search、path policy、file guard 等工具；P5a 新增 `crates/dasclaw_app_server/src/fs_service.rs` 的 `AppServerFsService` | ~~P5a 已接 app-server-owned `fs/*` route、root containment、polling watch/unwatch 和 Dasclaw-native `fs/changed` notification~~；Codex `changedPaths[]` shape、Codex 默认 `recursive/force` 语义、fuzzy search、file-change approval UI、审计/权限产品语义仍未接 |
-| Git | `crates/dasclaw_git_tools` 已有 `git_diff`、`git_status`、`git_commit` 等工具 | app-server 没有 Codex `gitDiffToRemote` method，也没有 review/diff notification owner |
+| Git | `crates/dasclaw_git_tools` 已有 `git_diff`、`git_status`、`git_commit` 等工具 | ~~R6 已接 `gitDiffToRemote` 的 app-server service owner 与测试~~；review/diff notification owner 仍未扩展到更宽的 Codex review 域 |
 | Jobs | `crates/dasclaw_runtime/src/job.rs` 和 `job_context.rs` 已有 job state / core context vocabulary | P4 已接 native job host 的 `jobs/list` / `jobs/read`，并复用 service 生命周期内的 job runtime worker；完整 job lifecycle mutation / subscription 仍未定义 |
 | Logs / observability | `crates/dasclaw_observability` 有 `LogObserver` 和 observer events/metrics | P4 已把 observability bridge 接到 `log/entry`，并在 NotificationBus 前增加有界缓冲；日志持久化、过滤和订阅策略仍未定义 |
-| Model / config | `crates/dasclaw_llm_provider` 有 provider model fetching；`crates/dasclaw_protocol/src/config_types.rs` 有 sandbox/model/config 数据类型；`desktop-app` manager 保留 renderer alias | ~~`model/list`~~ 已由 app-server 接管；`config/read`、`config/value/write` 等 app-server service 仍未接线 |
+| Model / config | `crates/dasclaw_llm_provider` 有 provider model fetching；`crates/dasclaw_protocol/src/config_types.rs` 有 sandbox/model/config 数据类型；`desktop-app` manager 保留 renderer alias | ~~`model/list`~~、~~`config/read`~~、~~`config/value/write`~~、~~`config/batchWrite`~~、~~`configRequirements/read`~~ 已由 app-server 接管；更宽的实验/产品域 config surface 仍未定义 |
 | Skills | `crates/dasclaw_protocol` 有 `ListSkills` / `SkillMetadata` 等协议词汇，历史 `desktop-client/ironclaw` 有 skill registry 参考但不是当前客户端目标 | P4 已接 native `skills/list` / `skills/config/write` / `skills/changed`；path 写入不依赖先 list，name-only 写入仍只使用已知唯一目标以避免模糊全盘匹配 |
 | Turn steer / plan delta | `crates/dasclaw_protocol` 有 `ActiveTurnNotSteerable` / `NonSteerableTurnKind` 和 `PlanDeltaEvent` 等协议词汇；R5 已在 app-server 接入 `turn/steer` route、`turn/plan/updated`、`turn/diff/updated`、`item/plan/delta` 与 raw/reasoning producer | `turn/steer` 仍受 `RuntimeBridgeFeatures::turn_steer` 控制，但真实 `DasclawAgentRuntimeBridge` 默认声明可 steer，并通过 `Agent::inject_user_message` 在下一轮 agentic-loop 调用前按序注入 queued user messages；plan/diff 完成口径是“上游提供 source event 时转发”，不是从 Codex Responses SSE 普通文本或缺失事件中合成 |
 
@@ -221,9 +221,9 @@ Protocol-shape consolidation belongs before capability expansion. The first impl
 | Approval / guardian | `thread/approveGuardianDeniedAction`，以及 ServerRequest 里的 approval 系列 | ~~runtime command approval 已接成 fail-safe app-server request/response loop~~；~~R2 已接 file-change / permission approval 的 runtime request owner 与 fail-safe response loop~~；guardian denied action、完整 file-change 产品语义、长期 permission policy 仍未接 | D1 | 下一步应补 guardian、file-change 产品语义和 permission policy，而不是再补空 handler |
 | Sandbox | `windowsSandbox/setupStart` | sandbox crates / shell sandbox 存在；P3 runtime bridge 可把 app-server `sandbox` capability / service health 切到 implemented / ready；P5 sandbox protocol slice 已把 `thread/start.sandbox`、`thread/start.permissionProfile`、`turn/start.sandboxPolicy`、`turn/start.permissionProfile`、buffered `command/exec.sandboxPolicy`、buffered `command/exec.permissionProfile` 接入参数面。但仍无 Codex Windows setup method；thread/turn context 只解析并传递，真实 `DasclawAgentRuntimeBridge` 对非空 context fail-closed；PTY streaming 拒绝 sandbox/permission override；sandboxed PTY、完整 sandbox manager/API 仍未完成 | D1/E | Windows 特定 setup 可不照搬；但 Dasclaw 若要 command/fs/tool 能力，应继续把现有平台 sandbox 抽象接入 app-server，并把 thread/turn 的 sandbox context 与 buffered command override 从协议参数面推进到真实 enforce；`danger-full-access` 不应在没有双 opt-in 的路径上放开 |
 | Account/auth/rate limit | `account/login/start`、`account/login/cancel`、`account/logout`、`account/rateLimits/read`、`account/sendAddCreditsNudgeEmail`、`account/read`、`getAuthStatus` | 无 | E | Codex/OpenAI 产品账户域，不属于 Dasclaw native app-server 必需能力 |
-| Config / experimental / feedback / external agent | `config/read`、`config/value/write`、`config/batchWrite`、`configRequirements/read`、`experimentalFeature/list`、`experimentalFeature/enablement/set`、`feedback/upload`、`externalAgentConfig/detect`、`externalAgentConfig/import` | config 数据类型和 provider config 底座存在；P5 sandbox protocol slice 已实现 `configRequirements/read.allowedSandboxModes`，只 advertised `read-only` / `workspace-write`，故意不 advertised `danger-full-access`，且 thread/turn runtime context 对非空 context fail-closed；broad `config/read` / `config/value/write` / `config/batchWrite` 仍无等价 app-server service surface；external agent import/feedback/experiment 仍偏产品域 | C/D1/E | config 可从现有类型与 desktop-app manager 上收；`configRequirements/read` 当前只覆盖 sandbox mode 约束，后续若要兼容 Codex config 面仍需明确更完整 policy limits 与 broad config API owner；实验/反馈/external-agent import 需先定义 Dasclaw 产品 owner |
+| Config / experimental / feedback / external agent | ~~`config/read`~~、~~`config/value/write`~~、~~`config/batchWrite`~~、~~`configRequirements/read`~~、`experimentalFeature/list`、`experimentalFeature/enablement/set`、`feedback/upload`、`externalAgentConfig/detect`、`externalAgentConfig/import` | R6 已接 config allowlist owner，P5 sandbox protocol slice 已实现 `configRequirements/read.allowedSandboxModes`，只 advertised `read-only` / `workspace-write`，故意不 advertised `danger-full-access`，且 thread/turn runtime context 对非空 context fail-closed；experimental / feedback / external-agent 仍偏产品域 | A/D1/E | 当前 config owner 已完成并受测；后续若要兼容更完整 Codex config/experiment 面，仍需明确产品 owner 与 policy limits |
 | Device key | `device/key/create`、`device/key/public`、`device/key/sign` | 无 | E/C | 若 Dasclaw 需要本地设备身份，可另设安全设计；不建议直接借 Codex 名称 |
-| Review / git / summary / fuzzy search | `review/start`、`gitDiffToRemote`、`getConversationSummary`、`fuzzyFileSearch` | git/search 工具存在；未发现 Codex-style review/start、remote diff、conversation summary、fuzzy search session app-server service | C/D1/D2/E | `gitDiffToRemote` 可复用 git 工具底座，`fuzzyFileSearch` 可借搜索工具但不是同构；review/summary 依赖 repo service、model summary 或 Codex 产品逻辑 |
+| Review / git / summary / fuzzy search | ~~`review/start`~~、~~`gitDiffToRemote`~~、~~`getConversationSummary`~~、~~`fuzzyFileSearch`~~ | R6 已接 app-server review-start routing、read-only repo diff service、deterministic conversation summary 与 fuzzy search session notifications | A/D2 | 当前 owner 已完成并受测；更宽的 Codex review 产品逻辑或额外 diff/review notifications 仍可后续扩展 |
 
 ## 6. Codex ServerNotification 对 Dasclaw 缺口表
 
@@ -236,7 +236,7 @@ Protocol-shape consolidation belongs before capability expansion. The first impl
 | Turn plan/diff | ~~`turn/diff/updated`~~、~~`turn/plan/updated`~~ | R5 已把 provider/runtime turn-level plan/diff snapshot 接成 Codex notification producer，并加入 capability/profile/schema registry | A/D2 | 已完成 plan/diff producer；后续只随更完整 plan-mode 产品 UI 与 diff renderer 扩展 |
 | Item text/reasoning | ~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、~~`item/reasoning/summaryPartAdded`~~、~~`item/reasoning/textDelta`~~、~~`item/completed`~~ | P1 已把 item started / agent delta / reasoning summary text delta / item completed 接到 Codex v2 profile producer；R5 已把 summary part 与 raw reasoning text delta 从 provider/runtime bridge 接到 app-server notification producer | A/B | 核心文本与 reasoning 流已完成受测子集；后续只随更完整 item payload shape 与 policy 展示策略扩展 |
 | Item plan/raw/tool/file/command | ~~`rawResponseItem/completed`~~、~~`item/plan/delta`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、~~`command/exec/outputDelta`~~ | P3 已补 runtime tool output/result 到 commandExecution notification 的桥接；P5a 已接 buffered standalone `command/exec`；PTY-backed standalone command streaming / `command/exec/outputDelta` 已接并受测；R5 已接 raw response item completed 与 item-level plan delta；file change 与非 PTY split command streaming 仍未接 | A/D1/D2 | 后续需要 file change、非 PTY command streaming 能力和安全边界 |
-| Approval review | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、~~`serverRequest/resolved`~~ | ~~P3 已补 server-request loop 的 resolved 结果~~；auto approval review started/completed 仍未接 | D1 | 下一步依赖 auto-approval policy/review producer |
+| Approval review | ~~`item/autoApprovalReview/started`~~、~~`item/autoApprovalReview/completed`~~、~~`serverRequest/resolved`~~ | ~~P3 已补 server-request loop 的 resolved 结果~~；R6 已把 auto approval review started/completed producer 与 guardian warning readiness 接到真实 runtime update | A/D1 | 剩余是 guardian denied action、长期 policy 与更完整审计面，不是 event producer 缺口 |
 | MCP | ~~`item/mcpToolCall/progress`~~、`mcpServer/oauthLogin/completed`、~~`mcpServer/startupStatus/updated`~~ | P4 已接 reload 触发的 startup status updated；tool-call progress 在客户端传入 `threadId + turnId + itemId` 时发可定位事件，缺少 `turnId/itemId` 时不伪造；OAuth completed 仅作为 fail-safe completion 通知存在，真实 OAuth owner 未接线且不广告 | A/D1 | 下一步需要补 MCP OAuth owner / callback / token storage；progress 不应退回不可定位或测试 fake |
 | Account/app/skills | `account/updated`、`account/rateLimits/updated`、`account/login/completed`、`app/list/updated`、~~`skills/changed`~~ | account/app 偏 Codex 产品域；P4 已接 native skills config change notification | E/A/D2 | account/app list 不应默认照搬；skills 后续只需随 registry/watch 能力扩展 |
 | External/fs/model/fuzzy/hooks | `externalAgentConfig/import/completed`、~~`fs/changed`~~、`model/rerouted`、`model/verification`、`fuzzyFileSearch/sessionUpdated`、`fuzzyFileSearch/sessionCompleted`、~~`hook/started`~~、~~`hook/completed`~~ | P5a 已接 Dasclaw-native `fs/changed` polling watcher；R6 已把 HookRegistry observer 接入 tool `preToolUse`、turn inbound `userPromptSubmit`、turn outbound `postToolUse`，并保留 modified content / fail-safe rejection 语义；model/search 底座仍分散存在，external agent import 与 Codex fuzzy session 未同构 | C/D1/D2/E | `fs/changed` native subset 与当前 hook lifecycle producer 已完成；`model/rerouted` / `model/verification` 仍需真实 provider/runtime producer；fuzzy session/external agent 需另定协议 |
@@ -311,6 +311,75 @@ Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主�
 | R5c | Real turn steer injection | ~~`turn/steer` real runtime injection~~ | 已新增 `Agent::inject_user_message` 运行时注入 API；真实 `DasclawAgentRuntimeBridge::steer_turn` 查找 active agent 并注入 prompt，默认声明 `turn_steer: true`；测试不用 `RecordingRuntimeBridge::with_turn_steer()` 作为完成证据 | `agent_inject_user_message_reaches_next_loop_iteration`、`agent_inject_user_message_drains_multiple_messages_before_next_loop_iteration` 与 `dasclaw_runtime_bridge_steer_turn_injects_input_into_running_turn` 通过；steer 注入下一轮 LLM 调用，不中断当前 provider call，多条 queued steer 按序注入 |
 | R6 | Config / repo tools / search owner | ~~broad `config/read`、`config/value/write`、`config/batchWrite`~~；~~`gitDiffToRemote`~~；~~`fuzzyFileSearch` session~~；~~`getConversationSummary`~~；~~`review/start`~~；model reroute producer / model verification producer；~~HookRegistry `preToolUse` / `userPromptSubmit` / `postToolUse` events~~；~~config/deprecation warning producer~~；~~Linux resolved-sandbox generic warning producer~~；~~guardian warning producer from auto-approval review updates~~ | R6 app-server owner 已完成 config allowlist policy、read-only repo diff service、path fuzzy search、deterministic conversation summary、review-start routing、HookRegistry observer events（tool `preToolUse`、turn inbound `userPromptSubmit`、turn outbound `postToolUse`，含 modified content 与 rejection fail-safe），config/deprecation warning producers，Linux resolved sandbox policy -> `system_bwrap_warning` generic warning producer，以及 auto-approval review completed -> `guardianWarning` producer。`model/rerouted` 目前只有 runtime delivery，provider `actual_model` 不再被误标成 `highRiskCyberActivity`；`model/verification` 仍缺真实 provider metadata source。Dasclaw 既有 git/search/hooks/core/config/sandboxing 底座被复用；Codex product-only 的 external-agent / feedback / experiment 等域仍留在 R7，不混入 R6。 | R6 producer slice 现在完成非模型事件族；`model/rerouted` 从剩余项移除前必须有真实 reroute reason source，`model/verification` 从剩余项移除前必须有真实 provider metadata parser 证据。非 Linux 不广告 generic `warning`；没有 startup-wide sandbox policy 时不伪造 startup warning |
 | R7 | Codex product / platform domains | account/auth/rate limit、plugin marketplace、app list、device key、feedback、external agent import、realtime/audio、Windows sandbox setup、world-writable warning | 这些与 Codex/OpenAI 产品或平台体验强绑定；除非目标变成兼容未改 Codex client 或复刻相关产品能力，否则不应压过 Dasclaw native core | 先有产品决策和安全设计，再进入 protocol matrix；否则保持 explicit unsupported / opt-out |
+
+## 9.2 当前未完成清单（2026-06-25 复核）
+
+以下清单只保留本轮复核后仍未完成、或仅完成 fail-safe / feature-gated 子集的项，并按建议执行优先级排序：先补安全与真实执行语义，再补 owner 闭环，再补事件细节，最后才是产品域和平台域。
+
+### P0 安全与 enforce 闭环
+
+优先原因：
+这些项直接决定 command / sandbox 能力是不是“真的安全可执行”，优先级高于新增协议名或产品域扩展。
+
+- thread/turn sandbox context 从“协议参数面”推进到更完整真实 enforce
+- sandboxed PTY command execution
+- non-PTY split stdout/stderr command streaming
+- 更完整 command / filesystem 安全审计面
+
+### P1 真实 owner / 成功链路
+
+优先原因：
+这些项已经有协议入口或 fail-safe 子集，但还没有完整 owner；补完后能显著减少“看起来支持、实际上半接线”的状态。
+
+- `mcpServer/oauth/login`
+- `mcpServer/oauthLogin/completed`
+- `thread/compact/start`
+- `thread/compacted`
+- `thread/shellCommand`
+- `thread/approveGuardianDeniedAction`
+
+说明：
+`mcpServer/oauth/*` 当前只有 fail-safe route / failure completion notification，缺真实 success path、callback listener、state 校验、token storage / redaction。
+`thread/compact/*` 当前已有 fail-safe route，且 compact-capable runtime bridge 可走成功路径；默认 runtime 仍无真实 compact owner。
+
+### P2 事件 / 状态补齐
+
+优先原因：
+这些项主要影响 renderer 可见性、状态可解释性和 richer UX；重要，但不应排在安全边界和 owner 闭环之前。
+
+- `item/fileChange/outputDelta`
+- `item/fileChange/patchUpdated`
+- `model/rerouted`
+- `model/verification`
+
+说明：
+`model/rerouted` 仍缺可信 reroute reason source；`model/verification` 仍缺真实 provider metadata parser / source。
+
+### P3 Codex 产品域尚未迁移 / 未定义
+
+优先原因：
+这些能力与 Codex/OpenAI 产品面强绑定，除非 Dasclaw 明确要复刻对应产品语义，否则不应压过 native core 补齐。
+
+- `plugin/list`、`plugin/read`、`plugin/install`、`plugin/uninstall`
+- `marketplace/add`、`marketplace/remove`、`marketplace/upgrade`
+- `app/list`、`app/list/updated`
+- `device/key/create`、`device/key/public`、`device/key/sign`
+- `account/login/start`、`account/login/cancel`、`account/logout`、`account/rateLimits/read`、`account/sendAddCreditsNudgeEmail`、`account/read`
+- `account/updated`、`account/rateLimits/updated`、`account/login/completed`、`getAuthStatus`
+- `feedback/upload`
+- `experimentalFeature/list`、`experimentalFeature/enablement/set`
+- `externalAgentConfig/detect`、`externalAgentConfig/import`、`externalAgentConfig/import/completed`
+
+### P4 平台特定 / 非当前优先级
+
+优先原因：
+这些项要么平台特定，要么属于更远的体验扩展；在当前 honest subset 路线下不应先于 P0-P3。
+
+- `windowsSandbox/setupStart`
+- `windowsSandbox/setupCompleted`
+- `windows/worldWritableWarning`
+- `thread/realtime/*`
+- `thread/closed`
 
 ## 10. 决策建议
 
