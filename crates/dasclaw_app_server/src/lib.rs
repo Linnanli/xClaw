@@ -1387,7 +1387,7 @@ impl AppServer {
             .summary(&params.thread_id)
             .ok_or_else(|| AppServerError::invalid_request("session", "thread not found"))?;
         let model_provider = self.model_provider.selected_snapshot()?;
-        let prompt = params.prompt_text();
+        let mut prompt = params.prompt_text();
         if prompt.trim().is_empty() {
             return Err(AppServerError::invalid_request(
                 "turn/start",
@@ -1409,9 +1409,37 @@ impl AppServer {
             turn_cwd,
             "turn/start",
         )?;
+        let sandbox_warning = warning_from_sandbox_context(&params.thread_id, &sandbox_context)?;
         let turn_id = self.threads.next_turn_id();
         self.threads
             .record_started_turn(&params.thread_id, turn_id.clone())?;
+        match self.run_hook_lifecycle_event(dasclaw_hooks::HookEvent::Inbound {
+            user_id: "app-server".to_string(),
+            channel: "chat".to_string(),
+            content: prompt.clone(),
+            thread_id: Some(params.thread_id.clone()),
+        }) {
+            Ok(Some(modified)) => {
+                prompt = modified;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if let Err(cancel_error) = self.threads.cancel_turn(&params.thread_id, &turn_id) {
+                    return Err(AppServerError::service_degraded(
+                        "thread_lifecycle",
+                        format!(
+                            "inbound hook rejected turn start: {}; failed to cancel pending turn: {}",
+                            error.public_message(),
+                            cancel_error.public_message()
+                        ),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+        if let Some(warning) = sandbox_warning {
+            self.notifications.emit_warning(warning);
+        }
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
                 thread_id: params.thread_id.clone(),
@@ -2945,8 +2973,12 @@ impl AppServer {
         capabilities.mcp = service_baseline.mcp;
         let mut availability = self.app_services.availability();
         availability.r6.review = true;
-        availability.r6.model_reroutes = self.runtime_features.model_reroutes;
-        availability.r6.model_verifications = self.runtime_features.model_verifications;
+        let (model_reroutes, model_verifications) =
+            self.runtime_features.real_model_r6_producer_availability();
+        availability.r6.model_reroutes = model_reroutes;
+        availability.r6.model_verifications = model_verifications;
+        availability.r6.warnings = generic_warning_producer_available();
+        availability.r6.guardian_warnings = self.runtime_features.auto_approval_review;
         capabilities.with_app_services(availability)
     }
 
@@ -3282,6 +3314,30 @@ impl AppServer {
         );
     }
 
+    fn run_hook_lifecycle_event(
+        &self,
+        event: dasclaw_hooks::HookEvent,
+    ) -> Result<Option<String>, AppServerError> {
+        let Some(registry) = self.app_services.hook_registry.clone() else {
+            return Ok(None);
+        };
+        let hook_point = event.hook_point();
+        let runtime =
+            blocking_runtime::BlockingTokioRuntime::new("dasclaw-app-server-hook", "hooks")?;
+        runtime.block_on("run hook lifecycle event", async move {
+            registry
+                .run(&event)
+                .await
+                .map(|outcome| match outcome {
+                    dasclaw_hooks::HookOutcome::Continue { modified } => modified,
+                    dasclaw_hooks::HookOutcome::Reject { .. } => None,
+                })
+                .map_err(|error| {
+                    hook_lifecycle_error_to_app_server_error(hook_point.as_str(), error)
+                })
+        })
+    }
+
     fn drain_runtime_turn_updates(&mut self) {
         let mut terminal_update_applied = false;
         for update in self.runtime_turn_updates.drain() {
@@ -3517,14 +3573,19 @@ impl AppServer {
                     {
                         self.notifications.emit_auto_approval_review_completed(
                             AutoApprovalReviewCompletedEvent {
-                                thread_id: update.thread_id,
-                                turn_id: update.turn_id,
-                                review_id: review.review_id,
-                                target_item_id: review.target_item_id,
-                                review: review.review,
-                                action: review.action,
+                                thread_id: update.thread_id.clone(),
+                                turn_id: update.turn_id.clone(),
+                                review_id: review.review_id.clone(),
+                                target_item_id: review.target_item_id.clone(),
+                                review: review.review.clone(),
+                                action: review.action.clone(),
                             },
                         );
+                        if let Some(warning) =
+                            guardian_warning_from_auto_approval_review(&update.thread_id, &review)
+                        {
+                            self.notifications.emit_guardian_warning(warning);
+                        }
                     }
                 }
                 RuntimeTurnOutcome::ModelRerouted {
@@ -3587,10 +3648,36 @@ impl AppServer {
                         }
                     }
                 }
-                outcome => {
-                    let update = RuntimeTurnUpdate { outcome, ..update };
+                mut outcome => {
                     let thread_id = update.thread_id.clone();
                     let turn_id = update.turn_id.clone();
+                    if let RuntimeTurnOutcome::Completed { output } = &mut outcome {
+                        match self.run_hook_lifecycle_event(dasclaw_hooks::HookEvent::Outbound {
+                            user_id: "app-server".to_string(),
+                            channel: "chat".to_string(),
+                            content: output.clone(),
+                            thread_id: Some(thread_id.clone()),
+                        }) {
+                            Ok(Some(modified)) => {
+                                *output = modified;
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                self.drain_service_updates();
+                                self.fail_pending_turn(
+                                    thread_id,
+                                    turn_id,
+                                    format!(
+                                        "outbound hook rejected turn output: {}",
+                                        error.public_message()
+                                    ),
+                                );
+                                continue;
+                            }
+                        }
+                        self.drain_service_updates();
+                    }
+                    let update = RuntimeTurnUpdate { outcome, ..update };
                     match self.threads.apply_runtime_turn_update(update) {
                         Ok(Some(summary)) => {
                             terminal_update_applied = true;
@@ -3910,6 +3997,12 @@ impl RuntimeBridgeFeatures {
             file_change_events: self.file_change_events,
             auto_approval_review: self.auto_approval_review,
         }
+    }
+
+    fn real_model_r6_producer_availability(self) -> (bool, bool) {
+        // Keep these false until the runtime bridge exposes a real producer
+        // contract for model/rerouted and model/verification events.
+        (false, false)
     }
 }
 
@@ -6521,6 +6614,83 @@ impl AppServerError {
     }
 }
 
+fn hook_lifecycle_error_to_app_server_error(
+    hook_point: &str,
+    error: dasclaw_hooks::HookError,
+) -> AppServerError {
+    let message = match error {
+        dasclaw_hooks::HookError::Rejected { reason } => {
+            format!("{hook_point} hook rejected request: {reason}")
+        }
+        dasclaw_hooks::HookError::ExecutionFailed { reason } => {
+            format!("{hook_point} hook failed: {reason}")
+        }
+        dasclaw_hooks::HookError::Timeout { timeout } => {
+            format!("{hook_point} hook timed out after {timeout:?}")
+        }
+    };
+    AppServerError::service_degraded("hooks", message)
+}
+
+fn warning_from_sandbox_context(
+    thread_id: &str,
+    context: &RuntimeSandboxContext,
+) -> Result<Option<WarningNotification>, AppServerError> {
+    let Some(policy) = context.policy.as_ref() else {
+        return Ok(None);
+    };
+    let policy = crate::sandbox_protocol::codex_policy_from_workspace(policy)?;
+    let Some(message) = dasclaw_sandboxing::system_bwrap_warning(&policy) else {
+        return Ok(None);
+    };
+    Ok(Some(WarningNotification {
+        thread_id: Some(thread_id.to_string()),
+        message,
+    }))
+}
+
+fn generic_warning_producer_available() -> bool {
+    cfg!(target_os = "linux")
+}
+
+fn guardian_warning_from_auto_approval_review(
+    thread_id: &str,
+    update: &RuntimeAutoApprovalReviewUpdate,
+) -> Option<GuardianWarningNotification> {
+    let status = normalized_policy_label(&update.review.status);
+    let risk = update
+        .review
+        .risk_level
+        .as_deref()
+        .map(normalized_policy_label);
+    let should_warn = matches!(
+        status.as_str(),
+        "blocked" | "denied" | "rejected" | "timeout" | "timedout" | "failed" | "aborted"
+    ) || matches!(risk.as_deref(), Some("high") | Some("critical"));
+    if !should_warn {
+        return None;
+    }
+
+    let message = update.review.rationale.clone().unwrap_or_else(|| {
+        format!(
+            "Guardian review {} for {}",
+            update.review.status, update.action
+        )
+    });
+    Some(GuardianWarningNotification {
+        thread_id: thread_id.to_string(),
+        message,
+    })
+}
+
+fn normalized_policy_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | ' '))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn compatibility_profiles() -> Vec<CompatibilityProfile> {
     vec![CompatibilityProfile::codex_app_server_v2_chat_session_subset()]
 }
@@ -6720,7 +6890,7 @@ mod tests {
     }
 
     #[test]
-    fn real_r6_services_do_not_advertise_unwired_notification_producers() {
+    fn real_r6_services_advertise_only_wired_notification_producers() {
         let temp = tempfile::tempdir().expect("tempdir");
         let server = initialized_server_with_root(temp.path());
         let capabilities = &server.capabilities;
@@ -6730,8 +6900,16 @@ mod tests {
         assert_eq!(capabilities.search.status, CapabilityStatus::Implemented);
         assert_eq!(capabilities.review.status, CapabilityStatus::Implemented);
         assert!(capabilities.model_provider.events.is_empty());
-        assert_eq!(capabilities.hooks.status, CapabilityStatus::Declared);
-        assert_eq!(capabilities.warnings.status, CapabilityStatus::Declared);
+        assert_eq!(capabilities.hooks.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            capabilities.hooks.events,
+            vec![
+                event::HOOK_STARTED.to_string(),
+                event::HOOK_COMPLETED.to_string()
+            ]
+        );
+        assert_eq!(capabilities.warnings.status, CapabilityStatus::Implemented);
+        assert_eq!(capabilities.warnings.events, expected_warning_events(false));
     }
 
     #[test]
@@ -7001,6 +7179,125 @@ mod tests {
             value["method"] == "item/fileChange/patchUpdated"
                 && value["params"]["changes"][0]["path"] == "src/lib.rs"
         }));
+    }
+
+    #[test]
+    fn auto_approval_review_completed_approved_low_does_not_emit_guardian_warning() {
+        let bridge = Arc::new(SequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::AutoApprovalReviewCompleted {
+                update: auto_approval_review_update("approved", Some("low"), Some("within policy")),
+            },
+        ]));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id,
+                input: text_input("review low risk".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let values = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = methods_from_values(&values);
+        assert!(methods.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED));
+        assert!(!methods.contains(&event::GUARDIAN_WARNING));
+    }
+
+    #[test]
+    fn auto_approval_review_completed_warns_for_blocked_and_high_risk_reviews() {
+        for (status, risk) in [
+            ("blocked", Some("low")),
+            ("approved", Some("high")),
+            ("approved", Some("critical")),
+            ("timedOut", None),
+            ("timed_out", None),
+            ("aborted", None),
+        ] {
+            let bridge = Arc::new(SequencedRuntimeBridge::new([
+                RuntimeTurnOutcome::AutoApprovalReviewCompleted {
+                    update: auto_approval_review_update(
+                        status,
+                        risk,
+                        Some("guardian stopped risky write"),
+                    ),
+                },
+            ]));
+            let mut server = initialized_server_with_bridge(bridge);
+            let thread_id = server
+                .create_thread_for_test(TestThreadParams { cwd: None })
+                .expect("thread should be created")
+                .thread_id;
+
+            server
+                .turn_start(TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    input: text_input(format!("review {status} {risk:?}")),
+                    cwd: None,
+                    model: None,
+                    summary: None,
+                    sandbox_policy: None,
+                    permission_profile: None,
+                })
+                .expect("turn should start");
+
+            let values = json_rpc_values(server.drain_json_rpc_notifications());
+            let methods = methods_from_values(&values);
+            assert!(
+                methods.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED),
+                "completed review should still be emitted for {status}/{risk:?}: {methods:?}"
+            );
+            assert!(
+                methods.contains(&event::GUARDIAN_WARNING),
+                "guardian warning should be emitted for {status}/{risk:?}: {methods:?}"
+            );
+            let warning = values
+                .iter()
+                .find(|value| value["method"] == event::GUARDIAN_WARNING)
+                .expect("guardian warning");
+            assert_eq!(warning["params"]["threadId"], thread_id);
+            assert_eq!(warning["params"]["message"], "guardian stopped risky write");
+        }
+    }
+
+    #[test]
+    fn guardian_warning_message_falls_back_when_review_has_no_rationale() {
+        let update = auto_approval_review_update("failed", None, None);
+        let warning =
+            guardian_warning_from_auto_approval_review("thread-1", &update).expect("warning");
+
+        assert_eq!(warning.thread_id, "thread-1");
+        assert_eq!(warning.message, "Guardian review failed for apply_patch");
+    }
+
+    #[test]
+    fn r6_guardian_warning_readiness_requires_auto_approval_review_support() {
+        let mut unsupported = initialized_server_with_bridge(Arc::new(NoopRuntimeBridge));
+        let unsupported_capabilities = unsupported.capabilities().capabilities;
+        assert!(
+            !unsupported_capabilities
+                .warnings
+                .events
+                .contains(&event::GUARDIAN_WARNING.to_string())
+        );
+
+        let mut supported =
+            initialized_server_with_bridge(Arc::new(AutoApprovalReviewFeatureBridge));
+        let supported_capabilities = supported.capabilities().capabilities;
+        assert!(
+            supported_capabilities
+                .warnings
+                .events
+                .contains(&event::GUARDIAN_WARNING.to_string())
+        );
     }
 
     #[test]
@@ -13340,6 +13637,526 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_runs_inbound_hook_and_emits_real_hook_notifications() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::passthrough(
+                    "inbound-audit",
+                    dasclaw_hooks::HookPoint::BeforeInbound,
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone()).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("hello hooks"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start after inbound hook");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(start.turn.id, "turn_1");
+        assert_eq!(bridge.calls.lock().expect("calls lock").len(), 1);
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec![
+                "lifecycle/changed",
+                "turn/started",
+                "item/started",
+                "hook/started",
+                "hook/completed"
+            ]
+        );
+        assert_eq!(
+            notifications[3]["params"]["run"]["eventName"],
+            "userPromptSubmit"
+        );
+        assert_eq!(
+            notifications[4]["params"]["run"]["eventName"],
+            "userPromptSubmit"
+        );
+        assert_eq!(notifications[4]["params"]["run"]["status"], "completed");
+    }
+
+    #[test]
+    fn inbound_hook_modification_updates_runtime_prompt() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::modifying(
+                    "inbound-transform",
+                    dasclaw_hooks::HookPoint::BeforeInbound,
+                    "[AUDIT] hello hooks",
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone()).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id,
+                input: text_input("hello hooks"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start with modified inbound prompt");
+
+        assert_eq!(
+            bridge.calls.lock().expect("calls lock")[0].prompt,
+            "[AUDIT] hello hooks"
+        );
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(notifications[4]["params"]["run"]["status"], "completed");
+    }
+
+    #[test]
+    fn inbound_hook_rejection_blocks_turn_start_fail_safe() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::rejecting(
+                    "inbound-policy",
+                    dasclaw_hooks::HookPoint::BeforeInbound,
+                    "blocked inbound",
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone()).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        let error = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("blocked prompt"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect_err("inbound rejection should block runtime start");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        let turns = server
+            .list_turns_for_test(TestTurnsSnapshotParams {
+                thread_id: thread.thread.id,
+            })
+            .expect("turn/list should work after inbound rejection");
+
+        assert!(error.public_message().contains("blocked inbound"));
+        assert!(bridge.calls.lock().expect("calls lock").is_empty());
+        assert_eq!(turns.turns.len(), 1);
+        assert_eq!(turns.turns[0].status, TurnStatus::Cancelled);
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["hook/started", "hook/completed"]
+        );
+        assert_eq!(
+            notifications[0]["params"]["run"]["eventName"],
+            "userPromptSubmit"
+        );
+        assert_eq!(
+            notifications[1]["params"]["run"]["eventName"],
+            "userPromptSubmit"
+        );
+        assert_eq!(notifications[1]["params"]["run"]["status"], "blocked");
+        assert_eq!(
+            notifications[1]["params"]["run"]["statusMessage"],
+            "blocked inbound"
+        );
+    }
+
+    #[test]
+    fn completed_turn_runs_outbound_hook_before_turn_completed() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::passthrough(
+                    "outbound-audit",
+                    dasclaw_hooks::HookPoint::BeforeOutbound,
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "runtime answer".to_string(),
+            },
+        ));
+        let mut server = AppServer::with_runtime_bridge(bridge).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id,
+                input: text_input("complete with outbound hook"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec![
+                "lifecycle/changed",
+                "turn/started",
+                "item/started",
+                "hook/started",
+                "hook/completed",
+                "item/completed",
+                "turn/completed",
+                "lifecycle/changed"
+            ]
+        );
+        assert_eq!(
+            notifications[3]["params"]["run"]["eventName"],
+            "postToolUse"
+        );
+        assert_eq!(
+            notifications[4]["params"]["run"]["eventName"],
+            "postToolUse"
+        );
+        assert_eq!(notifications[4]["params"]["run"]["status"], "completed");
+        assert_eq!(notifications[6]["params"]["turn"]["status"], "completed");
+    }
+
+    #[test]
+    fn outbound_hook_modification_updates_completed_turn_output() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::modifying(
+                    "outbound-transform",
+                    dasclaw_hooks::HookPoint::BeforeOutbound,
+                    "sanitized answer",
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "runtime answer".to_string(),
+            },
+        ));
+        let mut server = AppServer::with_runtime_bridge(bridge).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("complete with outbound transform"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec![
+                "lifecycle/changed",
+                "turn/started",
+                "item/started",
+                "hook/started",
+                "hook/completed",
+                "item/completed",
+                "turn/completed",
+                "lifecycle/changed"
+            ]
+        );
+        assert_eq!(
+            notifications[5]["params"]["item"]["text"],
+            "sanitized answer"
+        );
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread.id,
+                turn_id: "turn_1".to_string(),
+            })
+            .expect("turn/read should expose modified outbound output");
+        assert_eq!(turn_text(&read.turn), Some("sanitized answer".to_string()));
+    }
+
+    #[test]
+    fn outbound_hook_rejection_fails_turn_without_successful_completion() {
+        let runtime = test_tokio_runtime();
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        let registry = services
+            .hook_registry
+            .clone()
+            .expect("real services should expose hook registry");
+        runtime.block_on(async {
+            registry
+                .register(Arc::new(TestHook::rejecting(
+                    "outbound-policy",
+                    dasclaw_hooks::HookPoint::BeforeOutbound,
+                    "blocked outbound",
+                )))
+                .await;
+        });
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "runtime answer".to_string(),
+            },
+        ));
+        let mut server = AppServer::with_runtime_bridge(bridge).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+        let thread = server
+            .thread_start(ThreadStartParams {
+                cwd: None,
+                sandbox: None,
+                permission_profile: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_json_rpc_notifications();
+
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread.id.clone(),
+                input: text_input("complete with outbound rejection"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec![
+                "lifecycle/changed",
+                "turn/started",
+                "item/started",
+                "hook/started",
+                "hook/completed",
+                "item/completed",
+                "turn/completed",
+                "error",
+                "lifecycle/changed"
+            ]
+        );
+        assert_eq!(
+            notifications[3]["params"]["run"]["eventName"],
+            "postToolUse"
+        );
+        assert_eq!(
+            notifications[4]["params"]["run"]["eventName"],
+            "postToolUse"
+        );
+        assert_eq!(notifications[4]["params"]["run"]["status"], "blocked");
+        assert_eq!(
+            notifications[4]["params"]["run"]["statusMessage"],
+            "blocked outbound"
+        );
+        assert_eq!(notifications[6]["params"]["turn"]["status"], "failed");
+        assert!(
+            !notifications.iter().any(|notification| {
+                notification["method"] == "turn/completed"
+                    && notification["params"]["turn"]["status"] == "completed"
+            }),
+            "outbound rejection must not emit a successful turn/completed"
+        );
+        assert!(
+            !notifications.iter().any(|notification| {
+                notification["method"] == "item/completed"
+                    && notification["params"]["item"]["text"] == "runtime answer"
+            }),
+            "rejected outbound output must not be emitted as a completed item"
+        );
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread.id.clone(),
+                turn_id: start.turn.id.clone(),
+            })
+            .expect("turn/read should expose failed terminal turn");
+        assert_eq!(read.turn.status, CodexTurnStatus::Failed);
+        let turns = server
+            .list_turns_for_test(TestTurnsSnapshotParams {
+                thread_id: thread.thread.id,
+            })
+            .expect("turn/list should expose failed terminal turn");
+        assert_eq!(turns.turns.len(), 1);
+        assert_eq!(turns.turns[0].status, TurnStatus::Failed);
+    }
+
+    #[test]
     fn runtime_client_tool_executor_blocks_rejected_hook_before_fallback() {
         let runtime = test_tokio_runtime();
         let hook_service = Arc::new(hook_service::AppServerHookService::wired());
@@ -13445,6 +14262,184 @@ mod tests {
         assert!(server.drain_json_rpc_notifications().is_empty());
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn turn_start_emits_generic_warning_from_actual_sandbox_policy() {
+        let _path = EnvVarGuard::set("PATH", tempfile::tempdir().expect("tempdir").path());
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("warn about sandbox".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: Some(serde_json::json!({ "type": "read-only" })),
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        let warning = notifications
+            .iter()
+            .find(|value| value["method"] == event::WARNING)
+            .expect("generic warning from sandbox policy");
+        assert_eq!(warning["params"]["threadId"], thread_id);
+        assert!(
+            warning["params"]["message"]
+                .as_str()
+                .expect("warning message")
+                .contains("bubblewrap")
+        );
+        assert_eq!(
+            bridge.calls.lock().expect("calls lock")[0]
+                .sandbox_context
+                .policy,
+            Some(dasclaw_workspace_cap::policy::SandboxPolicy::new_read_only_policy())
+        );
+    }
+
+    #[test]
+    fn turn_start_external_sandbox_policy_does_not_emit_generic_warning() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams { cwd: None })
+            .expect("thread should be created")
+            .thread_id;
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id,
+                input: text_input("external sandbox".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: Some(serde_json::json!({
+                    "type": "external-sandbox",
+                    "network_access": "restricted"
+                })),
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = methods_from_values(&notifications);
+        assert!(!methods.contains(&event::WARNING));
+    }
+
+    #[test]
+    fn turn_start_warning_conversion_error_does_not_leave_pending_turn() {
+        let mut server =
+            initialized_server_with_bridge(Arc::new(RecordingRuntimeBridge::default()));
+        server
+            .threads
+            .push_thread_for_test(crate::thread_lifecycle::ThreadRecord {
+                thread_id: "thread_bad_sandbox".to_string(),
+                title: None,
+                workspace_root: None,
+                sandbox_context: RuntimeSandboxContext {
+                    sandbox: None,
+                    policy: Some(
+                        dasclaw_workspace_cap::policy::SandboxPolicy::WorkspaceWrite {
+                            writable_roots: vec![PathBuf::from("relative/root")],
+                            network_access: false,
+                            exclude_tmpdir_env_var: false,
+                            exclude_slash_tmp: false,
+                        },
+                    ),
+                },
+                sandbox: None,
+                permission_profile: None,
+                forked_from_id: None,
+                ephemeral: true,
+                archived: false,
+                subscribed: false,
+                path: None,
+                created_at: 1,
+                updated_at: 1,
+                git_info: None,
+                goal: None,
+                compacted_turn_id: None,
+                token_usage: None,
+            });
+
+        let error = server
+            .turn_start(TurnStartParams {
+                thread_id: "thread_bad_sandbox".to_string(),
+                input: text_input("bad sandbox"),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect_err("bad sandbox warning conversion should fail before recording turn");
+        let turns = server
+            .list_turns_for_test(TestTurnsSnapshotParams {
+                thread_id: "thread_bad_sandbox".to_string(),
+            })
+            .expect("turn/list should remain usable");
+
+        assert!(
+            error
+                .public_message()
+                .contains("non-absolute writable root")
+        );
+        assert!(turns.turns.is_empty());
+    }
+
+    #[test]
+    fn manually_queued_warning_delivery_does_not_flip_producer_readiness() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let hook_service = Arc::new(hook_service::AppServerHookService::wired());
+        let mut services =
+            app_services::AppServerServices::real_with_root_for_tests(tempdir.path().to_path_buf());
+        services.hooks = hook_service.clone();
+        let mut server =
+            AppServer::with_runtime_bridge(Arc::new(NoopRuntimeBridge)).with_app_services(services);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_json_rpc_notifications();
+
+        hook_service.push(AppServerHookNotification::Warning(WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "general warning".to_string(),
+        }));
+        hook_service.push(AppServerHookNotification::GuardianWarning(
+            GuardianWarningNotification {
+                thread_id: "thread-1".to_string(),
+                message: "guardian warning".to_string(),
+            },
+        ));
+
+        let capabilities = server.capabilities().capabilities;
+        assert_eq!(capabilities.warnings.events, expected_warning_events(false));
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["warning", "guardianWarning"]
+        );
+    }
+
     #[test]
     fn initialize_emits_config_warning_and_deprecation_for_startup_config() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -13535,7 +14530,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_ready_r6_config_warning_producers_only() {
+    fn capabilities_advertise_ready_r6_warning_producers_only() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut server = initialized_server_with_root(tempdir.path());
 
@@ -13543,24 +14538,7 @@ mod tests {
 
         assert_eq!(capabilities.hooks.status, CapabilityStatus::Implemented);
         assert_eq!(capabilities.warnings.status, CapabilityStatus::Implemented);
-        assert!(
-            capabilities
-                .warnings
-                .events
-                .contains(&event::CONFIG_WARNING.to_string())
-        );
-        assert!(
-            capabilities
-                .warnings
-                .events
-                .contains(&event::DEPRECATION_NOTICE.to_string())
-        );
-        assert!(
-            !capabilities
-                .warnings
-                .events
-                .contains(&event::WARNING.to_string())
-        );
+        assert_eq!(capabilities.warnings.events, expected_warning_events(false));
         assert!(
             !capabilities
                 .warnings
@@ -13618,6 +14596,15 @@ mod tests {
                 .events
                 .contains(&event::MODEL_VERIFICATION.to_string())
         );
+    }
+
+    #[test]
+    fn real_r6_model_delivery_features_do_not_advertise_producer_readiness() {
+        let bridge = Arc::new(ModelDeliveryRuntimeBridge);
+        let mut server = initialized_server_with_bridge(bridge);
+        let capabilities = server.capabilities().capabilities;
+
+        assert!(capabilities.model_provider.events.is_empty());
     }
 
     #[test]
@@ -17371,22 +18358,33 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
         name: String,
         points: Vec<dasclaw_hooks::HookPoint>,
         rejection: Option<String>,
+        modification: Option<String>,
     }
 
     impl TestHook {
         fn passthrough(name: &str, point: dasclaw_hooks::HookPoint) -> Self {
-            Self {
-                name: name.to_string(),
-                points: vec![point],
-                rejection: None,
-            }
+            Self::new(name, point, None, None)
         }
 
         fn rejecting(name: &str, point: dasclaw_hooks::HookPoint, reason: &str) -> Self {
+            Self::new(name, point, Some(reason), None)
+        }
+
+        fn modifying(name: &str, point: dasclaw_hooks::HookPoint, modified: &str) -> Self {
+            Self::new(name, point, None, Some(modified))
+        }
+
+        fn new(
+            name: &str,
+            point: dasclaw_hooks::HookPoint,
+            rejection: Option<&str>,
+            modification: Option<&str>,
+        ) -> Self {
             Self {
                 name: name.to_string(),
                 points: vec![point],
-                rejection: Some(reason.to_string()),
+                rejection: rejection.map(ToString::to_string),
+                modification: modification.map(ToString::to_string),
             }
         }
     }
@@ -17420,10 +18418,13 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
             _event: &dasclaw_hooks::HookEvent,
             _ctx: &dasclaw_hooks::HookContext,
         ) -> Result<dasclaw_hooks::HookOutcome, dasclaw_hooks::HookError> {
-            match &self.rejection {
-                Some(reason) => Ok(dasclaw_hooks::HookOutcome::reject(reason.clone())),
-                None => Ok(dasclaw_hooks::HookOutcome::ok()),
+            if let Some(reason) = &self.rejection {
+                return Ok(dasclaw_hooks::HookOutcome::reject(reason.clone()));
             }
+            if let Some(modified) = &self.modification {
+                return Ok(dasclaw_hooks::HookOutcome::modify(modified.clone()));
+            }
+            Ok(dasclaw_hooks::HookOutcome::ok())
         }
     }
 
@@ -17506,6 +18507,70 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
             .iter()
             .filter_map(|value| value.get("method").and_then(Value::as_str))
             .collect()
+    }
+
+    fn expected_warning_events(guardian_warnings: bool) -> Vec<String> {
+        let mut events = Vec::new();
+        if generic_warning_producer_available() {
+            events.push(event::WARNING.to_string());
+        }
+        if guardian_warnings {
+            events.push(event::GUARDIAN_WARNING.to_string());
+        }
+        events.push(event::CONFIG_WARNING.to_string());
+        events.push(event::DEPRECATION_NOTICE.to_string());
+        events
+    }
+
+    fn auto_approval_review_update(
+        status: &str,
+        risk_level: Option<&str>,
+        rationale: Option<&str>,
+    ) -> RuntimeAutoApprovalReviewUpdate {
+        RuntimeAutoApprovalReviewUpdate {
+            review_id: "review_1".to_string(),
+            target_item_id: Some("turn_1:file:patch".to_string()),
+            review: GuardianApprovalReview {
+                status: status.to_string(),
+                risk_level: risk_level.map(ToString::to_string),
+                user_authorization: None,
+                rationale: rationale.map(ToString::to_string),
+            },
+            action: "apply_patch".to_string(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct EnvVarGuard {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let old_value = std::env::var_os(key);
+            // SAFETY: This test guard is used by single-test nextest processes
+            // and restores the original variable on drop before returning.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, old_value }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: The guard owns this temporary mutation and restores the
+            // process environment before the test exits.
+            unsafe {
+                match &self.old_value {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
     }
 
     fn drain_json_rpc_until_method(
@@ -18035,6 +19100,57 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                     action: "approve".to_string(),
                 },
             );
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug)]
+    struct AutoApprovalReviewFeatureBridge;
+
+    impl RuntimeBridge for AutoApprovalReviewFeatureBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                auto_approval_review: true,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug)]
+    struct ModelDeliveryRuntimeBridge;
+
+    impl RuntimeBridge for ModelDeliveryRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                model_reroutes: true,
+                model_verifications: true,
+                ..RuntimeBridgeFeatures::default()
+            }
+        }
+
+        fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
             Ok(())
         }
 

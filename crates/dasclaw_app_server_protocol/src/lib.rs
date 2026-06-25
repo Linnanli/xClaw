@@ -1011,31 +1011,11 @@ fn declared_future_capability(id: &'static str) -> Capability {
 }
 
 fn model_provider_events(availability: AppServerR6Availability) -> Vec<&'static str> {
-    let mut events = Vec::new();
-    if availability.model_events || availability.model_reroutes {
-        events.push(event::MODEL_REROUTED);
-    }
-    if availability.model_events || availability.model_verifications {
-        events.push(event::MODEL_VERIFICATION);
-    }
-    events
+    availability.model_producer_events()
 }
 
 fn warning_events(availability: AppServerR6Availability) -> Vec<&'static str> {
-    let mut events = Vec::new();
-    if availability.warnings {
-        events.push(event::WARNING);
-    }
-    if availability.guardian_warnings {
-        events.push(event::GUARDIAN_WARNING);
-    }
-    if availability.config_warnings {
-        events.push(event::CONFIG_WARNING);
-    }
-    if availability.deprecation_notices {
-        events.push(event::DEPRECATION_NOTICE);
-    }
-    events
+    availability.warning_producer_events()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1068,6 +1048,38 @@ pub struct AppServerR6Availability {
     pub config_warnings: bool,
     pub deprecation_notices: bool,
     pub guardian_warnings: bool,
+}
+
+impl AppServerR6Availability {
+    #[must_use]
+    fn model_producer_events(self) -> Vec<&'static str> {
+        let mut events = Vec::new();
+        if self.model_events || self.model_reroutes {
+            events.push(event::MODEL_REROUTED);
+        }
+        if self.model_events || self.model_verifications {
+            events.push(event::MODEL_VERIFICATION);
+        }
+        events
+    }
+
+    #[must_use]
+    fn warning_producer_events(self) -> Vec<&'static str> {
+        let mut events = Vec::new();
+        if self.warnings {
+            events.push(event::WARNING);
+        }
+        if self.guardian_warnings {
+            events.push(event::GUARDIAN_WARNING);
+        }
+        if self.config_warnings {
+            events.push(event::CONFIG_WARNING);
+        }
+        if self.deprecation_notices {
+            events.push(event::DEPRECATION_NOTICE);
+        }
+        events
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

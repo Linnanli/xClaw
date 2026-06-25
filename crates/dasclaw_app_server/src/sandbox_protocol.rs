@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use dasclaw_absolute_path::AbsolutePathBuf;
 use dasclaw_app_server_protocol::SandboxMode;
 use dasclaw_protocol::models::PermissionProfile;
 use dasclaw_protocol::protocol as codex_protocol;
@@ -23,6 +24,57 @@ impl RuntimeSandboxContext {
 
     pub fn is_empty(&self) -> bool {
         self.sandbox.is_none() && self.policy.is_none()
+    }
+}
+
+pub fn codex_policy_from_workspace(
+    policy: &WorkspaceSandboxPolicy,
+) -> Result<codex_protocol::SandboxPolicy, AppServerError> {
+    match policy {
+        WorkspaceSandboxPolicy::DangerFullAccess => Ok(codex_protocol::SandboxPolicy::DangerFullAccess),
+        WorkspaceSandboxPolicy::ReadOnly { network_access } => {
+            Ok(codex_protocol::SandboxPolicy::ReadOnly {
+                network_access: *network_access,
+            })
+        }
+        WorkspaceSandboxPolicy::ExternalSandbox { network_access } => {
+            Ok(codex_protocol::SandboxPolicy::ExternalSandbox {
+                network_access: codex_network_access_from_workspace(*network_access),
+            })
+        }
+        WorkspaceSandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        } => Ok(codex_protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_roots
+                .iter()
+                .map(|root| {
+                    AbsolutePathBuf::from_absolute_path_checked(root).map_err(|_| {
+                        AppServerError::service_degraded(
+                            "sandbox",
+                            format!(
+                                "resolved workspace sandbox policy contains non-absolute writable root: {}",
+                                root.display()
+                            ),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            network_access: *network_access,
+            exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+            exclude_slash_tmp: *exclude_slash_tmp,
+        }),
+    }
+}
+
+fn codex_network_access_from_workspace(
+    access: WorkspaceNetworkAccess,
+) -> codex_protocol::NetworkAccess {
+    match access {
+        WorkspaceNetworkAccess::Restricted => codex_protocol::NetworkAccess::Restricted,
+        WorkspaceNetworkAccess::Enabled => codex_protocol::NetworkAccess::Enabled,
     }
 }
 
@@ -173,10 +225,78 @@ mod tests {
     use std::path::Path;
 
     use dasclaw_app_server_protocol::SandboxMode;
-    use dasclaw_workspace_cap::policy::SandboxPolicy;
+    use dasclaw_protocol::protocol::{
+        NetworkAccess as CodexNetworkAccess, SandboxPolicy as CodexSandboxPolicy,
+    };
+    use dasclaw_workspace_cap::policy::{NetworkAccess as WorkspaceNetworkAccess, SandboxPolicy};
     use serde_json::json;
 
-    use super::{resolve_policy_override, resolve_thread_context};
+    use super::{codex_policy_from_workspace, resolve_policy_override, resolve_thread_context};
+
+    #[test]
+    fn converts_workspace_policy_to_codex_policy_explicitly() {
+        let writable_root = std::env::temp_dir().join("extra-root");
+        let cases = [
+            (
+                SandboxPolicy::DangerFullAccess,
+                CodexSandboxPolicy::DangerFullAccess,
+            ),
+            (
+                SandboxPolicy::ReadOnly {
+                    network_access: true,
+                },
+                CodexSandboxPolicy::ReadOnly {
+                    network_access: true,
+                },
+            ),
+            (
+                SandboxPolicy::ExternalSandbox {
+                    network_access: WorkspaceNetworkAccess::Enabled,
+                },
+                CodexSandboxPolicy::ExternalSandbox {
+                    network_access: CodexNetworkAccess::Enabled,
+                },
+            ),
+            (
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![writable_root.clone()],
+                    network_access: true,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                },
+                CodexSandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![
+                        dasclaw_absolute_path::AbsolutePathBuf::from_absolute_path(&writable_root)
+                            .expect("temp root should be absolute"),
+                    ],
+                    network_access: true,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                },
+            ),
+        ];
+        for (workspace, expected) in cases {
+            let converted = codex_policy_from_workspace(&workspace).expect("convert policy");
+            assert_eq!(converted, expected);
+        }
+    }
+
+    #[test]
+    fn codex_policy_conversion_rejects_relative_workspace_roots() {
+        let error = codex_policy_from_workspace(&SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![std::path::PathBuf::from("relative/root")],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        })
+        .expect_err("relative roots should be rejected");
+
+        assert!(
+            error
+                .public_message()
+                .contains("non-absolute writable root")
+        );
+    }
 
     #[test]
     fn resolves_command_sandbox_policy_json_to_workspace_policy() {

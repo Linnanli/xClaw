@@ -52,6 +52,10 @@
 
 因此，下一阶段不是定义一套新的 replacement-client 私有协议，而是建立 `Codex-compatible dasclaw app-server profile`，再把 dasclaw runtime/service 能力映射进去。
 
+### 0.4 R6 producer ownership update (2026-06-25)
+
+R6 逐项状态以 `docs/plans/dasclaw-app-server-codex-protocol-gap-matrix.md` 为准。当前结论：config/repo/search/review owner 已落地；HookRegistry `preToolUse` / `userPromptSubmit` / `postToolUse`、config/deprecation warning、Linux resolved-sandbox generic warning、auto-approval review guardian warning 已有真实 producer 与 readiness gate；`model/rerouted` 和 `model/verification` 仍不广告，直到分别具备可信 reroute reason source 与真实 provider metadata parser 证据。
+
 ## 1. 一句话边界
 
 `dasclaw_app_server` 是 local service host / GUI control plane，负责把现有 headless runtime 和本地产品服务稳定暴露给 Electron shell。

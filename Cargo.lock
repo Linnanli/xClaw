@@ -2791,6 +2791,7 @@ version = "0.0.0-p0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "dasclaw_absolute_path",
  "dasclaw_app_server_protocol",
  "dasclaw_core",
  "dasclaw_fs_tools",
@@ -2802,6 +2803,7 @@ dependencies = [
  "dasclaw_protocol",
  "dasclaw_pty",
  "dasclaw_runtime",
+ "dasclaw_sandboxing",
  "dasclaw_shell_tools",
  "dasclaw_tool",
  "dasclaw_workspace_cap",

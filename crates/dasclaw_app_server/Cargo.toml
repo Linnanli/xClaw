@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
 dasclaw_fs_tools = { path = "../dasclaw_fs_tools" }
@@ -27,6 +28,7 @@ dasclaw_observability = { path = "../dasclaw_observability" }
 dasclaw_protocol = { path = "../dasclaw_protocol" }
 dasclaw_pty = { path = "../dasclaw_pty" }
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_sandboxing = { path = "../dasclaw_sandboxing" }
 dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 dasclaw_tool = { path = "../dasclaw_tool" }
 dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }

@@ -112,6 +112,11 @@ impl ThreadLifecycleHost {
         self.threads.iter().map(ThreadRecord::to_summary).collect()
     }
 
+    #[cfg(test)]
+    pub fn push_thread_for_test(&mut self, record: ThreadRecord) {
+        self.threads.push(record);
+    }
+
     pub fn summary(&self, thread_id: &str) -> Option<ThreadSummary> {
         self.threads
             .iter()
