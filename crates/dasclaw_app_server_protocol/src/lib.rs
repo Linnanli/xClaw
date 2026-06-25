@@ -5050,6 +5050,65 @@ mod tests {
     }
 
     #[test]
+    fn protocol_declares_thread_shell_command_and_guardian_replay_methods() {
+        let methods = phase_one_methods()
+            .into_iter()
+            .map(|method| method.method)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(methods.contains(method::THREAD_SHELL_COMMAND));
+        assert!(methods.contains(method::THREAD_APPROVE_GUARDIAN_DENIED_ACTION));
+    }
+
+    #[test]
+    fn thread_shell_command_params_serialize_in_codex_shape() {
+        let params = ThreadShellCommandParams {
+            thread_id: "thread_1".to_string(),
+            command: "cargo check -p dasclaw_app_server --tests".to_string(),
+        };
+
+        let value = serde_json::to_value(params).expect("thread shell command params serialize");
+
+        assert_eq!(value["threadId"], "thread_1");
+        assert_eq!(
+            value["command"],
+            "cargo check -p dasclaw_app_server --tests"
+        );
+        assert!(value.get("thread_id").is_none());
+    }
+
+    #[test]
+    fn guardian_replay_params_accept_serialized_guardian_event() {
+        let params: ThreadApproveGuardianDeniedActionParams =
+            serde_json::from_value(serde_json::json!({
+                "threadId": "thread_1",
+                "event": {
+                    "id": "guardian_1",
+                    "turn_id": "turn_1",
+                    "status": "denied",
+                    "risk_level": "high",
+                    "user_authorization": "low",
+                    "rationale": "command denied by guardian",
+                    "decision_source": "agent",
+                    "action": {
+                        "type": "command",
+                        "source": "shell",
+                        "command": "rm -rf target",
+                        "cwd": "/tmp/workspace"
+                    }
+                }
+            }))
+            .expect("guardian replay params deserialize");
+
+        let value =
+            serde_json::to_value(params).expect("guardian replay params serialize back to JSON");
+
+        assert_eq!(value["threadId"], "thread_1");
+        assert_eq!(value["event"]["id"], "guardian_1");
+        assert_eq!(value["event"]["action"]["type"], "command");
+    }
+
+    #[test]
     fn r4_thread_lifecycle_payloads_use_camel_case_wire_names() {
         assert_r4_thread_lifecycle_payloads_use_camel_case_wire_names();
     }

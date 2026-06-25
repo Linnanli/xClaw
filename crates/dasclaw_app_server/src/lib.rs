@@ -11652,6 +11652,75 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_thread_shell_command_returns_empty_object_and_emits_turn_notifications() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "shell command completed".to_string(),
+            },
+        ));
+        let mut server = initialized_codex_server_with_bridge(bridge);
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"shell","method":"thread/shellCommand","params":{{"threadId":"{thread_id}","command":"printf ready"}}}}"#
+                ))
+                .expect("thread/shellCommand should return a JSON-RPC response"),
+        );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["id"], "shell");
+        assert_eq!(response["result"], serde_json::json!({}));
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"turn/completed"));
+    }
+
+    #[test]
+    fn json_rpc_thread_approve_guardian_denied_action_replays_stashed_command_action() {
+        let mut server = initialized_codex_server();
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let guardian_event = seed_guardian_command_event_for_test(&mut server, &thread_id);
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{guardian_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC response"),
+        );
+
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["result"], serde_json::json!({}));
+    }
+
+    #[test]
     fn json_rpc_thread_start_requires_model_provider_for_truthful_metadata() {
         let mut server = AppServer::new();
         server
@@ -19410,6 +19479,30 @@ mod tests {
                 .expect("turn should complete");
         }
         thread_id
+    }
+
+    fn seed_guardian_command_event_for_test(server: &mut AppServer, thread_id: &str) -> Value {
+        server
+            .thread_read(ThreadReadParams {
+                thread_id: thread_id.to_string(),
+            })
+            .expect("thread must exist before seeding guardian command event");
+
+        serde_json::json!({
+            "id": "guardian_1",
+            "turn_id": "turn_1",
+            "status": "denied",
+            "risk_level": "high",
+            "user_authorization": "low",
+            "rationale": "command denied by guardian",
+            "decision_source": "agent",
+            "action": {
+                "type": "command",
+                "source": "shell",
+                "command": "printf ready",
+                "cwd": "/tmp/workspace"
+            }
+        })
     }
 
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {

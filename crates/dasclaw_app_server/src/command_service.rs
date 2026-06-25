@@ -1507,6 +1507,43 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn command_service_tty_streaming_accepts_read_only_sandbox_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf readonly"]);
+        params.process_id = Some("pty_read_only_sandbox".to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.sandbox_policy = Some(serde_json::json!({"type": "read-only"}));
+
+        let response = service
+            .exec(params)
+            .expect("read-only sandboxed PTY streaming succeeds");
+
+        assert_eq!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_tty_streaming_rejects_danger_full_access_even_after_streaming_support() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf unsafe"]);
+        params.process_id = Some("pty_danger_full_access".to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.sandbox_policy = Some(serde_json::json!({"type": "danger-full-access"}));
+
+        let error = service
+            .exec(params)
+            .expect_err("danger-full-access PTY streaming must stay rejected");
+
+        assert!(error.to_string().contains("danger-full-access"));
+        assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn command_service_streaming_pty_emits_output_delta_and_accepts_write() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
