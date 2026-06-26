@@ -27,7 +27,6 @@ pub use helpers::{
     extract_command_param, truncate_for_error, truncate_output,
 };
 pub use sandboxed_executor::{
-    ExecOutput, SandboxedShellExecutor, SandboxedShellLaunchSpec, ShellExecError,
-    build_sandboxed_shell_launch_spec,
+    ExecOutput, SandboxedShellExecutor, ShellExecError, ShellLaunchSpec, build_shell_launch_spec,
 };
 pub use shell_tool::ShellTool;

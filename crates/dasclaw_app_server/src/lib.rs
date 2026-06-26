@@ -111,7 +111,7 @@ use search_service::SearchNotification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thread_action_service::{PendingGuardianAction, ThreadActionService};
+use thread_action_service::ThreadActionService;
 use thread_lifecycle::{
     ThreadCreation, ThreadFork, ThreadLifecycleHost, ThreadSummary, TurnSummary,
 };
@@ -139,6 +139,8 @@ pub struct AppServer {
     model_provider: ModelProviderState,
     app_services: app_services::AppServerServices,
     thread_actions: ThreadActionService,
+    #[cfg(test)]
+    force_guardian_stash_failure_for_test: bool,
 }
 
 impl Default for AppServer {
@@ -731,6 +733,8 @@ impl AppServer {
             model_provider: ModelProviderState::default(),
             app_services,
             thread_actions,
+            #[cfg(test)]
+            force_guardian_stash_failure_for_test: false,
         }
     }
 
@@ -1362,10 +1366,12 @@ impl AppServer {
         let pending = self
             .thread_actions
             .take_guardian_action(&params.thread_id, &event.id)?
-            .unwrap_or(PendingGuardianAction {
-                thread_id: params.thread_id.clone(),
-                event,
-            });
+            .ok_or_else(|| {
+                AppServerError::invalid_request(
+                    "thread_actions",
+                    "guardian action is not pending for this thread",
+                )
+            })?;
         let turn_id = self.threads.next_turn_id();
         self.threads
             .record_started_turn(&params.thread_id, turn_id.clone())?;
@@ -3692,6 +3698,18 @@ impl AppServer {
                         .threads
                         .turn_is_pending(&update.thread_id, &update.turn_id)
                     {
+                        if let Some(guardian_event) = review.guardian_event.clone()
+                            && let Err(error) = self.stash_auto_approval_review_guardian_event(
+                                &update.thread_id,
+                                guardian_event,
+                            )
+                        {
+                            self.emit_codex_error(
+                                update.thread_id.clone(),
+                                update.turn_id.clone(),
+                                error.public_message().to_string(),
+                            );
+                        }
                         self.notifications.emit_auto_approval_review_completed(
                             AutoApprovalReviewCompletedEvent {
                                 thread_id: update.thread_id.clone(),
@@ -3849,6 +3867,23 @@ impl AppServer {
         if terminal_update_applied {
             self.transition_ready_if_no_pending_turns();
         }
+    }
+
+    fn stash_auto_approval_review_guardian_event(
+        &self,
+        thread_id: &str,
+        guardian_event: dasclaw_protocol::approvals::GuardianAssessmentEvent,
+    ) -> Result<(), AppServerError> {
+        #[cfg(test)]
+        if self.force_guardian_stash_failure_for_test {
+            return Err(AppServerError::service_degraded(
+                "thread_actions",
+                "forced guardian stash failure",
+            ));
+        }
+
+        self.thread_actions
+            .stash_guardian_action(thread_id, guardian_event)
     }
 }
 
@@ -4244,12 +4279,13 @@ pub struct RuntimeFileChangePatchUpdatedUpdate {
     pub changes: Vec<FileUpdateChange>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeAutoApprovalReviewUpdate {
     pub review_id: String,
     pub target_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: String,
+    pub guardian_event: Option<dasclaw_protocol::approvals::GuardianAssessmentEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -11862,6 +11898,254 @@ mod tests {
             .find(|notification| notification.method == "item/agentMessage/delta")
             .expect("guardian replay should emit an agent message delta");
         assert_eq!(delta.params["delta"], "test");
+    }
+
+    #[test]
+    fn auto_approval_review_completed_stashes_typed_guardian_event_for_replay() {
+        let guardian_event = guardian_command_event_value_for_test("guardian_auto_1");
+        let typed_guardian_event = parse_guardian_event_for_test(guardian_event.clone());
+        let bridge = Arc::new(SequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::AutoApprovalReviewCompleted {
+                update: auto_approval_review_update_with_guardian_event(
+                    "denied",
+                    Some("high"),
+                    Some("command denied by guardian"),
+                    typed_guardian_event,
+                ),
+            },
+        ]));
+        let mut server =
+            initialized_server_with_bridge(bridge).with_app_services(
+                ready_test_services_with_command(
+                    app_services::TestCommandExecService::ready_buffered(),
+                ),
+            );
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams {
+                cwd: Some("/tmp/workspace".to_string()),
+            })
+            .expect("thread should be created")
+            .thread_id;
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("review command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{guardian_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC response"),
+        );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["result"], serde_json::json!({}));
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"item/agentMessage/delta"));
+        assert!(methods.contains(&"turn/completed"));
+        let delta = notifications
+            .iter()
+            .find(|notification| notification.method == "item/agentMessage/delta")
+            .expect("guardian replay should emit an agent message delta");
+        assert_eq!(delta.params["delta"], "test");
+    }
+
+    #[test]
+    fn auto_approval_review_completed_emits_completed_and_warning_when_stash_fails() {
+        let guardian_event = guardian_command_event_value_for_test("guardian_stash_fail_1");
+        let typed_guardian_event = parse_guardian_event_for_test(guardian_event.clone());
+        let bridge = Arc::new(SequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::AutoApprovalReviewCompleted {
+                update: auto_approval_review_update_with_guardian_event(
+                    "denied",
+                    Some("high"),
+                    Some("guardian stopped risky command"),
+                    typed_guardian_event,
+                ),
+            },
+        ]));
+        let mut server =
+            initialized_server_with_bridge(bridge).with_app_services(
+                ready_test_services_with_command(
+                    app_services::TestCommandExecService::ready_buffered(),
+                ),
+            );
+        server.force_guardian_stash_failure_for_test = true;
+        let thread_id = server
+            .create_thread_for_test(TestThreadParams {
+                cwd: Some("/tmp/workspace".to_string()),
+            })
+            .expect("thread should be created")
+            .thread_id;
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: text_input("review command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
+                sandbox_policy: None,
+                permission_profile: None,
+            })
+            .expect("turn should start");
+
+        let values = json_rpc_values(server.drain_json_rpc_notifications());
+        let methods = methods_from_values(&values);
+        assert!(methods.contains(&event::ITEM_AUTO_APPROVAL_REVIEW_COMPLETED));
+        assert!(methods.contains(&event::GUARDIAN_WARNING));
+        assert!(methods.contains(&event::ERROR));
+        let warning = values
+            .iter()
+            .find(|value| value["method"] == event::GUARDIAN_WARNING)
+            .expect("guardian warning should still be emitted");
+        assert_eq!(
+            warning["params"]["message"],
+            "guardian stopped risky command"
+        );
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{guardian_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC error response"),
+        );
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(response["error"]["data"]["capability"], "thread_actions");
+    }
+
+    #[test]
+    fn json_rpc_thread_approve_guardian_denied_action_replays_stashed_event_not_request_payload() {
+        let (command_exec, captured_exec) = CapturingCommandExecService::new();
+        let mut server = initialized_codex_server()
+            .with_app_services(ready_test_services_with_command(command_exec));
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let stashed_event = guardian_command_event_value_for_test_with_action(
+            "guardian_replay_source_1",
+            "printf trusted",
+            "/tmp/trusted",
+        );
+        server
+            .thread_actions
+            .stash_guardian_action(&thread_id, parse_guardian_event_for_test(stashed_event))
+            .expect("guardian event should stash");
+        let tampered_event = guardian_command_event_value_for_test_with_action(
+            "guardian_replay_source_1",
+            "printf tampered",
+            "/tmp/tampered",
+        );
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{tampered_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC response"),
+        );
+
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["result"], serde_json::json!({}));
+        let captured = captured_exec
+            .lock()
+            .expect("captured command exec params lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].cwd.as_deref(), Some("/tmp/trusted"));
+        assert!(
+            captured[0]
+                .command
+                .iter()
+                .any(|part| part.contains("printf trusted")),
+            "captured command should come from the stashed event: {:?}",
+            captured[0].command
+        );
+        assert!(
+            !captured[0]
+                .command
+                .iter()
+                .any(|part| part.contains("printf tampered")),
+            "request payload command must not be replayed: {:?}",
+            captured[0].command
+        );
+    }
+
+    #[test]
+    fn json_rpc_thread_approve_guardian_denied_action_rejects_unstashed_event() {
+        let mut server = initialized_codex_server().with_app_services(ready_test_services());
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+                )
+                .expect("thread/start should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["thread"]["id"]
+            .as_str()
+            .expect("thread id should be returned")
+            .to_string();
+        let guardian_event = serde_json::json!({
+            "id": "guardian_unstashed",
+            "turn_id": "turn_1",
+            "status": "denied",
+            "risk_level": "high",
+            "user_authorization": "low",
+            "rationale": "command denied by guardian",
+            "decision_source": "agent",
+            "action": {
+                "type": "command",
+                "source": "shell",
+                "command": "printf test",
+                "cwd": "/tmp/workspace"
+            }
+        });
+        let _ = server.drain_notifications();
+
+        let response = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"guardian","method":"thread/approveGuardianDeniedAction","params":{{"threadId":"{thread_id}","event":{guardian_event}}}}}"#
+                ))
+                .expect("thread/approveGuardianDeniedAction should return a JSON-RPC error response"),
+        );
+        let notifications = server.drain_notifications();
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["id"], "guardian");
+        assert_eq!(response["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(response["error"]["data"]["capability"], "thread_actions");
+        assert!(!methods.contains(&"turn/started"));
+        assert!(!methods.contains(&"item/agentMessage/delta"));
+        assert!(!methods.contains(&"turn/completed"));
     }
 
     #[test]
@@ -19727,8 +20011,31 @@ mod tests {
             })
             .expect("thread must exist before seeding guardian command event");
 
-        let event = serde_json::json!({
-            "id": "guardian_1",
+        let event = guardian_command_event_value_for_test("guardian_1");
+        server
+            .thread_actions
+            .stash_guardian_action(thread_id, parse_guardian_event_for_test(event.clone()))
+            .expect("guardian event should stash");
+        event
+    }
+
+    fn parse_guardian_event_for_test(
+        event: Value,
+    ) -> dasclaw_protocol::approvals::GuardianAssessmentEvent {
+        serde_json::from_value(event).expect("guardian event should parse")
+    }
+
+    fn guardian_command_event_value_for_test(id: &str) -> Value {
+        guardian_command_event_value_for_test_with_action(id, "printf ready", "/tmp/workspace")
+    }
+
+    fn guardian_command_event_value_for_test_with_action(
+        id: &str,
+        command: &str,
+        cwd: &str,
+    ) -> Value {
+        serde_json::json!({
+            "id": id,
             "turn_id": "turn_1",
             "status": "denied",
             "risk_level": "high",
@@ -19738,20 +20045,99 @@ mod tests {
             "action": {
                 "type": "command",
                 "source": "shell",
-                "command": "printf ready",
-                "cwd": "/tmp/workspace"
+                "command": command,
+                "cwd": cwd
             }
-        });
-        let parsed =
-            serde_json::from_value::<dasclaw_protocol::approvals::GuardianAssessmentEvent>(
-                event.clone(),
+        })
+    }
+
+    #[derive(Debug, Clone)]
+    struct CapturingCommandExecService {
+        captured: Arc<Mutex<Vec<CommandExecParams>>>,
+    }
+
+    impl CapturingCommandExecService {
+        fn new() -> (Self, Arc<Mutex<Vec<CommandExecParams>>>) {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    captured: Arc::clone(&captured),
+                },
+                captured,
             )
-            .expect("guardian event should parse");
-        server
-            .thread_actions
-            .stash_guardian_action(thread_id, parsed)
-            .expect("guardian event should stash");
-        event
+        }
+    }
+
+    impl app_services::CommandExecService for CapturingCommandExecService {
+        fn health(&self) -> ServiceHealth {
+            ServiceHealth::ready(ServiceName::CommandExec)
+        }
+
+        fn exec(&self, params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
+            self.captured
+                .lock()
+                .expect("captured command exec params lock")
+                .push(params);
+            Ok(CommandExecResponse {
+                exit_code: 0,
+                stdout: "captured".to_string(),
+                stderr: String::new(),
+            })
+        }
+
+        fn write(
+            &self,
+            _params: CommandExecWriteParams,
+        ) -> Result<CommandExecWriteResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command stdin streaming is not available in this test service",
+            ))
+        }
+
+        fn terminate(
+            &self,
+            _params: CommandExecTerminateParams,
+        ) -> Result<CommandExecTerminateResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command termination is not available in this test service",
+            ))
+        }
+
+        fn resize(
+            &self,
+            _params: CommandExecResizeParams,
+        ) -> Result<CommandExecResizeResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command resize is not available in this test service",
+            ))
+        }
+
+        fn availability(&self) -> dasclaw_app_server_protocol::CommandExecAvailability {
+            dasclaw_app_server_protocol::CommandExecAvailability {
+                exec: true,
+                ..dasclaw_app_server_protocol::CommandExecAvailability::default()
+            }
+        }
+    }
+
+    fn ready_test_services() -> app_services::AppServerServices {
+        ready_test_services_with_command(app_services::TestCommandExecService::ready_buffered())
+    }
+
+    fn ready_test_services_with_command(
+        command: impl app_services::CommandExecService + 'static,
+    ) -> app_services::AppServerServices {
+        app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command,
+        )
     }
 
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
@@ -20182,6 +20568,19 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                 rationale: rationale.map(ToString::to_string),
             },
             action: "apply_patch".to_string(),
+            guardian_event: None,
+        }
+    }
+
+    fn auto_approval_review_update_with_guardian_event(
+        status: &str,
+        risk_level: Option<&str>,
+        rationale: Option<&str>,
+        guardian_event: dasclaw_protocol::approvals::GuardianAssessmentEvent,
+    ) -> RuntimeAutoApprovalReviewUpdate {
+        RuntimeAutoApprovalReviewUpdate {
+            guardian_event: Some(guardian_event),
+            ..auto_approval_review_update(status, risk_level, rationale)
         }
     }
 
@@ -20757,6 +21156,7 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                         rationale: Some("reviewing patch".to_string()),
                     },
                     action: "review".to_string(),
+                    guardian_event: None,
                 },
             );
             request.updates.auto_approval_review_completed(
@@ -20772,6 +21172,7 @@ data: {"response":{"usage":{"input_tokens":3,"output_tokens":2}}}
                         rationale: Some("patch is within policy".to_string()),
                     },
                     action: "approve".to_string(),
+                    guardian_event: None,
                 },
             );
             Ok(())

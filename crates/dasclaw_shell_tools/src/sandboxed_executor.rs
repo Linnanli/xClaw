@@ -60,7 +60,7 @@ pub struct ExecOutput {
 /// Shell launch details reusable by callers that need to spawn the same
 /// shell-wrapped command through a different process backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SandboxedShellLaunchSpec {
+pub struct ShellLaunchSpec {
     pub program: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
@@ -156,22 +156,13 @@ fn build_shell_command(command: &str) -> Command {
     c
 }
 
-/// Build the shell launch contract for sandbox-aware streaming callers.
+/// Build the plain shell launch contract for streaming callers.
 ///
-/// `DangerFullAccess` remains fail-closed here so callers cannot accidentally
-/// bypass the buffered executor's double opt-in gate.
-pub fn build_sandboxed_shell_launch_spec(
-    command: &str,
-    _cwd: &Path,
-    policy: CapPolicy,
-    env: HashMap<String, String>,
-) -> Result<SandboxedShellLaunchSpec, ShellExecError> {
-    if matches!(policy, CapPolicy::DangerFullAccess) {
-        return Err(ShellExecError::FullAccessNotPermitted);
-    }
-
+/// This does not apply a sandbox. Callers that accept sandbox overrides must
+/// route through a real sandbox backend or fail closed before reaching here.
+pub fn build_shell_launch_spec(command: &str, env: HashMap<String, String>) -> ShellLaunchSpec {
     let (program, args) = shell_program_and_args(command);
-    Ok(SandboxedShellLaunchSpec { program, args, env })
+    ShellLaunchSpec { program, args, env }
 }
 
 fn shell_program_and_args(command: &str) -> (String, Vec<String>) {

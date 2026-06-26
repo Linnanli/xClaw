@@ -18,9 +18,7 @@ use dasclaw_app_server_protocol::{
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
 use dasclaw_pty::{PtyExitStatus, PtySize, PtySpawnOptions, StreamingPty};
-use dasclaw_shell_tools::{
-    SandboxedShellExecutor, ShellExecError, build_sandboxed_shell_launch_spec,
-};
+use dasclaw_shell_tools::{SandboxedShellExecutor, ShellExecError, build_shell_launch_spec};
 use dasclaw_workspace_cap::WorkspaceCapability;
 use dasclaw_workspace_cap::policy::SandboxPolicy;
 use uuid::Uuid;
@@ -32,6 +30,8 @@ use crate::sandbox_protocol::resolve_policy_override;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_EXEC_CAPABILITY: &str = "command_exec";
+const STREAMING_SANDBOX_UNSUPPORTED_MESSAGE: &str =
+    "streaming command exec cannot enforce sandbox overrides";
 const MAX_COMPLETED_COMMANDS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,17 +349,22 @@ impl AppServerCommandExecService {
     ) -> Result<CommandExecResponse, AppServerError> {
         let process_id = Self::validate_streaming_exec_options(&params)?;
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
-        let policy = resolve_policy_override(
-            params.sandbox_policy.clone(),
-            params.permission_profile.clone(),
-            &cwd,
-            COMMAND_EXEC_CAPABILITY,
-        )?
-        .unwrap_or_else(SandboxPolicy::new_read_only_policy);
-        if matches!(policy, SandboxPolicy::DangerFullAccess) {
+        if params.sandbox_policy.is_some() || params.permission_profile.is_some() {
+            let policy = resolve_policy_override(
+                params.sandbox_policy.clone(),
+                params.permission_profile.clone(),
+                &cwd,
+                COMMAND_EXEC_CAPABILITY,
+            )?;
+            if matches!(policy, Some(SandboxPolicy::DangerFullAccess)) {
+                return Err(AppServerError::invalid_request(
+                    COMMAND_EXEC_CAPABILITY,
+                    "danger-full-access is not supported for streaming command exec",
+                ));
+            }
             return Err(AppServerError::invalid_request(
                 COMMAND_EXEC_CAPABILITY,
-                "danger-full-access is not supported for streaming command exec",
+                STREAMING_SANDBOX_UNSUPPORTED_MESSAGE,
             ));
         }
 
@@ -369,8 +374,7 @@ impl AppServerCommandExecService {
 
         let env = Self::env(params.env);
         let command = Self::command_line(&params.command)?;
-        let launch_spec = build_sandboxed_shell_launch_spec(&command, &cwd, policy, env)
-            .map_err(map_streaming_launch_error)?;
+        let launch_spec = build_shell_launch_spec(&command, env);
         let stream_stdin = params.stream_stdin.unwrap_or(params.tty.unwrap_or(false));
         let size = params
             .size
@@ -719,7 +723,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} cwd_guard=root-contained buffered_sandbox=policy-override/default-read-only streaming_sandbox=none/unsandboxed read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty-or-pipe tty=true non_tty_streaming=true",
+                    "root={} cwd_guard=root-contained buffered_sandbox=policy-override/default-read-only streaming_sandbox=unsupported_fail_closed_for_overrides read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty-or-pipe tty=true non_tty_streaming=true",
                     self.root.display()
                 ));
                 health
@@ -863,29 +867,27 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         }
 
-        if let Some(decoded) = decoded {
-            if sender.send(CommandControl::Write(decoded)).is_err() {
-                self.push_control_audit(
-                    "write",
-                    "rejected",
-                    &params.process_id,
-                    Some(tty),
-                    audit_fields,
-                );
-                return Err(command_unavailable("command process is no longer writable"));
-            }
+        if let Some(decoded) = decoded
+            && sender.send(CommandControl::Write(decoded)).is_err()
+        {
+            self.push_control_audit(
+                "write",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                audit_fields,
+            );
+            return Err(command_unavailable("command process is no longer writable"));
         }
-        if close_stdin {
-            if sender.send(CommandControl::CloseStdin).is_err() {
-                self.push_control_audit(
-                    "write",
-                    "rejected",
-                    &params.process_id,
-                    Some(tty),
-                    audit_fields,
-                );
-                return Err(command_unavailable("command process is no longer writable"));
-            }
+        if close_stdin && sender.send(CommandControl::CloseStdin).is_err() {
+            self.push_control_audit(
+                "write",
+                "rejected",
+                &params.process_id,
+                Some(tty),
+                audit_fields,
+            );
+            return Err(command_unavailable("command process is no longer writable"));
         }
         self.push_control_audit(
             "write",
@@ -1359,18 +1361,6 @@ fn map_exec_error(error: ShellExecError) -> AppServerError {
     }
 }
 
-fn map_streaming_launch_error(error: ShellExecError) -> AppServerError {
-    match error {
-        ShellExecError::FullAccessNotPermitted => AppServerError::invalid_request(
-            COMMAND_EXEC_CAPABILITY,
-            "danger-full-access is not supported for streaming command exec",
-        ),
-        ShellExecError::Timeout(_) | ShellExecError::ExecutionFailed(_) => {
-            command_unavailable(error.to_string())
-        }
-    }
-}
-
 fn command_unavailable(message: impl Into<String>) -> AppServerError {
     AppServerError::capability_unavailable(COMMAND_EXEC_CAPABILITY, message)
 }
@@ -1533,7 +1523,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn command_service_tty_streaming_accepts_read_only_sandbox_policy() {
+    fn command_service_non_tty_streaming_rejects_read_only_sandbox_policy_until_enforceable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf readonly"]);
+        params.process_id = Some("pipe_read_only_sandbox".to_string());
+        params.stream_stdout_stderr = Some(true);
+        params.sandbox_policy = Some(serde_json::json!({"type": "read-only"}));
+
+        let error = service
+            .exec(params)
+            .expect_err("non-tty streaming must fail closed until sandbox enforcement exists");
+
+        assert!(
+            error
+                .to_string()
+                .contains(STREAMING_SANDBOX_UNSUPPORTED_MESSAGE)
+        );
+        assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_tty_streaming_rejects_read_only_sandbox_policy_until_enforceable() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
         let mut params = exec_params(vec!["sh", "-c", "printf readonly"]);
@@ -1542,11 +1554,39 @@ mod tests {
         params.stream_stdout_stderr = Some(true);
         params.sandbox_policy = Some(serde_json::json!({"type": "read-only"}));
 
-        let response = service
+        let error = service
             .exec(params)
-            .expect("read-only sandboxed PTY streaming succeeds");
+            .expect_err("PTY streaming must fail closed until sandbox enforcement exists");
 
-        assert_eq!(response.exit_code, 0);
+        assert!(
+            error
+                .to_string()
+                .contains(STREAMING_SANDBOX_UNSUPPORTED_MESSAGE)
+        );
+        assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_tty_streaming_rejects_read_only_permission_profile_until_enforceable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf profile"]);
+        params.process_id = Some("pty_read_only_profile".to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.permission_profile = Some(serde_json::json!({}));
+
+        let error = service.exec(params).expect_err(
+            "permissionProfile streaming must fail closed until sandbox enforcement exists",
+        );
+
+        assert!(
+            error
+                .to_string()
+                .contains(STREAMING_SANDBOX_UNSUPPORTED_MESSAGE)
+        );
+        assert!(service.drain_output_delta_events().is_empty());
     }
 
     #[cfg(unix)]
@@ -2203,14 +2243,21 @@ mod tests {
             "writable_roots": ["/tmp/do-not-leak-sensitive-root"]
         }));
 
-        let response = service.exec(params).expect("streaming sandbox override");
+        let error = service
+            .exec(params)
+            .expect_err("streaming sandbox override must fail closed");
         let audit_text = serde_json::to_string(&service.drain_audit_entries())
             .expect("audit entries should serialize");
 
-        assert_eq!(response.exit_code, 0);
+        assert!(
+            error
+                .to_string()
+                .contains(STREAMING_SANDBOX_UNSUPPORTED_MESSAGE)
+        );
+        assert!(service.drain_output_delta_events().is_empty());
         assert!(!audit_text.contains("do-not-leak-sensitive-root"));
         assert!(audit_text.contains("\"hasSandboxPolicy\":true"));
-        assert!(audit_text.contains("\"outcome\":\"completed\""));
+        assert!(audit_text.contains("\"outcome\":\"rejected\""));
     }
 
     #[cfg(unix)]
@@ -2316,7 +2363,7 @@ mod tests {
 
         assert!(message.contains("cwd_guard=root-contained"));
         assert!(message.contains("buffered_sandbox=policy-override/default-read-only"));
-        assert!(message.contains("streaming_sandbox=none/unsandboxed"));
+        assert!(message.contains("streaming_sandbox=unsupported_fail_closed_for_overrides"));
         assert!(message.contains("read_scope=host-read-only"));
         assert!(message.contains("not_workspace_read_limited"));
     }
@@ -2445,7 +2492,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn streaming_command_accepts_read_only_sandbox_override() {
+    fn streaming_command_rejects_read_only_sandbox_override_until_enforceable() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
@@ -2455,8 +2502,15 @@ mod tests {
         params.stream_stdout_stderr = Some(true);
         params.sandbox_policy = Some(serde_json::json!({ "type": "read-only" }));
 
-        let response = service.exec(params).expect("streaming sandbox override");
-        assert_eq!(response.exit_code, 0);
+        let error = service
+            .exec(params)
+            .expect_err("streaming sandbox override must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains(STREAMING_SANDBOX_UNSUPPORTED_MESSAGE)
+        );
+        assert!(service.drain_output_delta_events().is_empty());
     }
 
     #[cfg(unix)]
