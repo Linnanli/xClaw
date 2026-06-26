@@ -184,6 +184,7 @@ pub struct SkillScanner {
 impl SkillScanner {
     pub fn new(base_url: &str, timeout_ms: u64) -> Result<Self, ScanError> {
         let client = reqwest::Client::builder()
+            .no_proxy()
             .timeout(std::time::Duration::from_millis(timeout_ms))
             .build()
             .map_err(|e| ScanError::Request(e.to_string()))?;

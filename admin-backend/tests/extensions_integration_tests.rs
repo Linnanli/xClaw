@@ -582,28 +582,20 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "unexpected upload response: {}",
-        body
-    );
-    assert_eq!(body["review_status"], "pending");
-    assert_eq!(body["scan_result"]["verdict"], "SAFE");
 
-    let skill_id = Uuid::parse_str(body["id"].as_str().unwrap_or_default())
-        .expect("response should include valid skill id");
-    client
-        .execute(
-            "DELETE FROM scan_results WHERE target_id = $1",
-            &[&skill_id],
-        )
-        .await
-        .expect("cleanup scan results");
-    client
-        .execute("DELETE FROM skills WHERE id = $1", &[&skill_id])
-        .await
-        .expect("cleanup skill");
+    if let Some(skill_id) = body["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) {
+        client
+            .execute(
+                "DELETE FROM scan_results WHERE target_id = $1",
+                &[&skill_id],
+            )
+            .await
+            .expect("cleanup scan results");
+        client
+            .execute("DELETE FROM skills WHERE id = $1", &[&skill_id])
+            .await
+            .expect("cleanup skill");
+    }
     client
         .execute(
             "DELETE FROM model_configs WHERE id = $1",
@@ -612,6 +604,15 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
         .await
         .expect("cleanup model config");
     handle.abort();
+
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected upload response: {}",
+        body
+    );
+    assert_eq!(body["review_status"], "pending");
+    assert_eq!(body["scan_result"]["verdict"], "SAFE");
 }
 
 #[tokio::test]

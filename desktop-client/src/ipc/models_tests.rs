@@ -154,37 +154,133 @@ fn test_failure_model_config_missing_required_fields() {
 }
 
 #[test]
-fn test_client_models_url_includes_backend_user_id_when_ready() {
-    let backend_user_id =
+fn test_client_models_url_includes_client_id() {
+    let client_id =
         uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440999").expect("uuid should parse");
 
-    let url = client_models_url("https://admin.example.com", Some(backend_user_id));
+    let url = client_models_url("https://admin.example.com", client_id);
 
     assert_eq!(
         url,
-        "https://admin.example.com/api/client-models?user_id=550e8400-e29b-41d4-a716-446655440999"
+        "https://admin.example.com/api/client-models?client_id=550e8400-e29b-41d4-a716-446655440999"
     );
 }
 
 #[test]
-fn test_client_models_url_omits_backend_user_id_when_missing() {
-    let url = client_models_url("https://admin.example.com", None);
+#[serial_test::serial]
+fn test_model_fetch_client_id_requires_token() {
+    let _admin_token = EnvVarGuard::unset("ADMIN_AUTH_TOKEN");
 
-    assert_eq!(url, "https://admin.example.com/api/client-models");
+    let error = model_fetch_client_id().expect_err("missing client token must fail model fetch");
+
+    assert!(error.contains("ADMIN_AUTH_TOKEN 未配置"));
 }
 
 #[test]
-fn test_model_fetch_backend_user_id_reports_poisoned_lock() {
-    let backend_user_id = std::sync::RwLock::new(Some(uuid::Uuid::nil()));
-    let _ = std::panic::catch_unwind(|| {
-        let _guard = backend_user_id.write().expect("write lock should succeed");
-        panic!("poison backend identity for model fetch");
-    });
+#[serial_test::serial]
+fn test_model_fetch_client_id_rejects_non_uuid_token() {
+    let _admin_token = EnvVarGuard::set("ADMIN_AUTH_TOKEN", "not-a-uuid".to_string());
 
-    let error = model_fetch_backend_user_id(&backend_user_id)
-        .expect_err("poisoned backend identity should fail model fetch precheck");
+    let error = model_fetch_client_id().expect_err("invalid client token must fail model fetch");
 
-    assert_eq!(error, "后台用户身份读取失败");
+    assert!(error.contains("不是有效客户端 ID"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_contract_admin_models_success_is_authoritative_even_when_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/client-models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let _admin_url = AdminBackendUrlGuard::set(server.uri());
+    let models = fetch_admin_models(uuid::Uuid::nil()).await;
+
+    assert!(
+        models
+            .expect("successful empty Admin response should parse")
+            .is_empty(),
+        "空 Admin 响应不能降级到 provider active model"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_failure_admin_models_error_is_not_masked_as_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/client-models"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let _admin_url = AdminBackendUrlGuard::set(server.uri());
+    let error = fetch_admin_models(uuid::Uuid::nil())
+        .await
+        .expect_err("Admin failure should remain visible to IPC");
+
+    assert!(
+        error.contains("HTTP 503"),
+        "Admin 失败时应返回具体错误，不能静默变成空列表"
+    );
+}
+
+struct AdminBackendUrlGuard {
+    previous_url: Option<String>,
+}
+
+impl AdminBackendUrlGuard {
+    fn set(url: String) -> Self {
+        let previous_url = std::env::var("ADMIN_BACKEND_URL").ok();
+        std::env::set_var("ADMIN_BACKEND_URL", url);
+        Self { previous_url }
+    }
+}
+
+impl Drop for AdminBackendUrlGuard {
+    fn drop(&mut self) {
+        match &self.previous_url {
+            Some(url) => std::env::set_var("ADMIN_BACKEND_URL", url),
+            None => std::env::remove_var("ADMIN_BACKEND_URL"),
+        }
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous_value: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let previous_value = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key,
+            previous_value,
+        }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let previous_value = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self {
+            key,
+            previous_value,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous_value {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
 }
 
 // ============================================================================

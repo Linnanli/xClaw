@@ -3900,7 +3900,6 @@ dependencies = [
  "dasclaw_safety",
  "dasclaw_sandbox",
  "dirs 6.0.0",
- "dotenvy",
  "ed25519-dalek",
  "mockito",
  "open",

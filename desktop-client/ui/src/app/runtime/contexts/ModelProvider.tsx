@@ -67,8 +67,8 @@ export function ModelProvider({
   }, [onModelChange]);
 
   useEffect(() => {
-    // 引擎就绪前不拉模型：fetch_admin_models / query_provider_models 都需要 engine 引用，
-    // 早调会静默降级到 builtin 兜底（GPT-4o）。等 ready 翻转后由 readyKey 触发重拉。
+    // 引擎就绪前不拉模型：get_available_models 需要 Admin client token。
+    // 等 ready 翻转后由 readyKey 触发重拉，避免无客户端身份请求 Admin。
     if (!ready) return;
     void loadModels();
   }, [loadModels, ready, readyKey]);

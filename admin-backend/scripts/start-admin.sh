@@ -110,4 +110,10 @@ if command -v open &> /dev/null; then
     open "http://localhost:5174" 2>/dev/null || true
 fi
 
-tail -f /dev/null
+if [ "${ADMIN_BACKEND_FOLLOW_LOG:-1}" = "1" ]; then
+    echo "正在跟随后端日志（设置 ADMIN_BACKEND_FOLLOW_LOG=0 可关闭）:"
+    echo ""
+    tail -f /tmp/admin-backend.log
+else
+    tail -f /dev/null
+fi

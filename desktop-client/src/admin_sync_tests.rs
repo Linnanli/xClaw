@@ -128,6 +128,29 @@ mod tests {
     }
 
     #[test]
+    fn test_inject_to_env_skips_legacy_llm_fields() {
+        std::env::remove_var("LLM_BACKEND");
+        std::env::remove_var("LLM_API_KEY");
+        std::env::remove_var("LLM_MODEL");
+        std::env::remove_var("LLM_BASE_URL");
+
+        let config = AdminClientConfig {
+            llm_backend: Some("openai_compatible".into()),
+            llm_api_key: Some("sk-masked****".into()),
+            llm_model: Some("qwen-plus-0112".into()),
+            llm_base_url: Some("https://dashscope.aliyuncs.com/compatible-mode/v1".into()),
+            ..Default::default()
+        };
+
+        config.inject_to_env();
+
+        assert!(std::env::var("LLM_BACKEND").is_err());
+        assert!(std::env::var("LLM_API_KEY").is_err());
+        assert!(std::env::var("LLM_MODEL").is_err());
+        assert!(std::env::var("LLM_BASE_URL").is_err());
+    }
+
+    #[test]
     fn test_inject_to_env_skips_none_values() {
         let config = AdminClientConfig::default();
         // 全部为 None，不应 panic

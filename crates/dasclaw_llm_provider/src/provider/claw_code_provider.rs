@@ -703,14 +703,20 @@ fn build_anthropic_client(config: &RegistryProviderConfig) -> Result<ProviderCli
 /// 仅基于模型名做静态映射，不读取环境（`EnvSnapshot::default()` 即可），
 /// 因为 ironclaw 的鉴权一律来自 `RegistryProviderConfig` 的显式配置。
 fn pick_openai_compat_config(model: &str) -> (OpenAiCompatConfig, ProviderVariant) {
-    use crate::{EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias};
+    use crate::{
+        EnvSnapshot, ProviderKind, detect_provider_kind, metadata_for_model, resolve_model_alias,
+    };
     let resolved = resolve_model_alias(model);
     match detect_provider_kind(&resolved, &EnvSnapshot::default()) {
         ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
         ProviderKind::OpenAi => {
             // 根据模型 metadata 进一步区分 DashScope vs 通用 OpenAI-compat
             // （Groq/Kimi/OpenRouter/Tinfoil 都用 openai() 预设 + 自定义 base_url）
-            (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi)
+            let compat_config = metadata_for_model(&resolved)
+                .filter(|metadata| metadata.auth_env == "DASHSCOPE_API_KEY")
+                .map(|_| OpenAiCompatConfig::dashscope())
+                .unwrap_or_else(OpenAiCompatConfig::openai);
+            (compat_config, ProviderVariant::OpenAi)
         }
         // Anthropic 不该走到这里；兜底 openai 预设以避免 panic，错误由上层抛出。
         ProviderKind::Anthropic => (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi),
@@ -1585,6 +1591,14 @@ mod tests {
         );
         let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
         assert_eq!(p.client_for_test().provider_kind(), ProviderKind::OpenAi);
+    }
+
+    #[test]
+    fn test_migrate_qwen_model_uses_dashscope_compat_preset() {
+        let (compat_config, variant) = pick_openai_compat_config("qwen-plus-0112");
+
+        assert_eq!(compat_config.provider_name, "dashscope");
+        assert!(matches!(variant, ProviderVariant::OpenAi));
     }
 
     #[test]
